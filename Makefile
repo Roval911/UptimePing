@@ -9,23 +9,11 @@ SCRIPTS_DIR = scripts
 MIGRATIONS_DIR = migrations
 
 # Цели по умолчанию
-.PHONY: help build test start stop clean migrate init-db
+.PHONY: help build test start stop clean migrate init-db proto
 
-help:
-	@echo "${PROJECT_NAME} Makefile"
-	@echo "Версия: ${VERSION}"
-	@echo ""
-	@echo "Основные команды:"
-	@echo "  make help            - Показать это сообщение"
-	@echo "  make setup           - Настроить окружение"
-	@echo "  make init            - Инициализировать базу данных"
-	@echo "  make migrate         - Применить миграции базы данных"
-	@echo "  make start           - Запустить всю платформу"
-	@echo "  make stop            - Остановить всю платформу"
-	@echo "  make restart         - Перезапустить платформу"
-	@echo "  make logs            - Показать логи"
-	@echo "  make clean           - Очистить все данные"
-	@echo ""
+proto:
+	@echo "Генерация кода из proto файлов..."
+	buf generate
 
 setup:
 	@echo "Настройка окружения..."
