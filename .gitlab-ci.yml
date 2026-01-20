@@ -1,1 +1,77 @@
+stages:
+  - build
+  - test
 
+variables:
+  CGO_ENABLED: "0"
+
+# Общие настройки для задач на Go
+.go-template: &go-template
+  image: golang:1.25
+  cache:
+    key: go-cache
+    paths:
+      - /go/pkg/mod
+  before_script:
+    - go version
+
+# Сборка всех микросервисов
+build-services:
+  <<: *go-template
+  stage: build
+  script:
+    - echo "Сборка всех микросервисов..."
+    - cd services/api-gateway && go build -o /tmp/api-gateway .
+    - cd ../auth-service && go build -o /tmp/auth-service .
+    - cd ../config-service && go build -o /tmp/config-service .
+    - cd ../core-service && go build -o /tmp/core-service .
+    - cd ../forge-service && go build -o /tmp/forge-service .
+    - cd ../incident-manager && go build -o /tmp/incident-manager .
+    - cd ../metrics-service && go build -o /tmp/metrics-service .
+    - cd ../notification-service && go build -o /tmp/notification-service .
+    - cd ../scheduler-service && go build -o /tmp/scheduler-service .
+  artifacts:
+    paths:
+      - /tmp/api-gateway
+      - /tmp/auth-service
+      - /tmp/config-service
+      - /tmp/core-service
+      - /tmp/forge-service
+      - /tmp/incident-manager
+      - /tmp/metrics-service
+      - /tmp/notification-service
+      - /tmp/scheduler-service
+
+# Сборка CLI для разных платформ
+build-cli:
+  <<: *go-template
+  stage: build
+  script:
+    - mkdir -p dist
+    - echo "Сборка CLI для разных платформ..."
+    - |
+      for GOOS in linux darwin windows; do
+        for GOARCH in amd64 arm64; do
+          echo "Сборка для $GOOS/$GOARCH"
+          env GOOS=$GOOS GOARCH=$GOARCH go build -o dist/cli-$GOOS-$GOARCH ./services/cli
+        done
+      done
+  artifacts:
+    paths:
+      - dist/
+
+# Запуск тестов для всех сервисов
+test-services:
+  <<: *go-template
+  stage: test
+  script:
+    - echo "Запуск тестов для всех сервисов..."
+    - cd services/api-gateway && go test -v ./...
+    - cd ../auth-service && go test -v ./...
+    - cd ../config-service && go test -v ./...
+    - cd ../core-service && go test -v ./...
+    - cd ../forge-service && go test -v ./...
+    - cd ../incident-manager && go test -v ./...
+    - cd ../metrics-service && go test -v ./...
+    - cd ../notification-service && go test -v ./...
+    - cd ../scheduler-service && go test -v ./...
