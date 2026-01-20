@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package uptimeping.auth.v1;
+
+//import "api/annotations.proto";
+
+option go_package = "gitlab.com/rodionov_v_al/UptimePingPlatform/proto/api/auth/v1";
+
+// AuthService предоставляет методы для аутентификации и авторизации
+service AuthService {
+  // Register создает нового пользователя и возвращает пару токенов
+  rpc Register(RegisterRequest) returns (TokenPair) {}
+  
+  // Login аутентифицирует пользователя и возвращает пару токенов
+  rpc Login(LoginRequest) returns (TokenPair) {}
+  
+  // ValidateToken проверяет валидность JWT токена
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse) {}
+  
+  // RefreshToken обновляет пару токенов по refresh токену
+  rpc RefreshToken(RefreshTokenRequest) returns (TokenPair) {}
+  
+  // Logout отзывает refresh токен
+  rpc Logout(LogoutRequest) returns (LogoutResponse) {}
+  
+  // CreateAPIKey создает новый API ключ для tenant
+  rpc CreateAPIKey(CreateAPIKeyRequest) returns (APIKeyPair) {}
+  
+  // ValidateAPIKey проверяет валидность API ключа
+  rpc ValidateAPIKey(ValidateAPIKeyRequest) returns (ValidateAPIKeyResponse) {}
+  
+  // RevokeAPIKey отзывает API ключ
+  rpc RevokeAPIKey(RevokeAPIKeyRequest) returns (RevokeAPIKeyResponse) {}
+}
+
+// RegisterRequest содержит данные для регистрации пользователя
+message RegisterRequest {
+  string email = 1;
+  string password = 2;
+  string tenant_name = 3;
+}
+
+// LoginRequest содержит данные для входа пользователя
+message LoginRequest {
+  string email = 1;
+  string password = 2;
+}
+
+// TokenPair содержит access и refresh токены
+message TokenPair {
+  string access_token = 1;
+  string refresh_token = 2;
+  int64 expires_in = 3;
+}
+
+// ValidateTokenRequest содержит JWT токен для валидации
+message ValidateTokenRequest {
+  string token = 1;
+}
+
+// ValidateTokenResponse содержит информацию о валидном токене
+message ValidateTokenResponse {
+  string user_id = 1;
+  string email = 2;
+  string tenant_id = 3;
+  bool is_valid = 4;
+}
+
+// RefreshTokenRequest содержит refresh токен
+message RefreshTokenRequest {
+  string refresh_token = 1;
+}
+
+// LogoutRequest содержит данные для выхода
+message LogoutRequest {
+  string user_id = 1;
+  string refresh_token = 2;
+}
+
+// LogoutResponse подтверждает выход
+message LogoutResponse {
+  bool success = 1;
+}
+
+// CreateAPIKeyRequest содержит данные для создания API ключа
+message CreateAPIKeyRequest {
+  string tenant_id = 1;
+  string name = 2;
+}
+
+// APIKeyPair содержит публичный ключ и секрет
+message APIKeyPair {
+  string key = 1;
+  string secret = 2;
+  string name = 3;
+  string tenant_id = 4;
+  int64 expires_at = 5;
+}
+
+// ValidateAPIKeyRequest содержит данные для валидации API ключа
+message ValidateAPIKeyRequest {
+  string key = 1;
+  string secret = 2;
+}
+
+// ValidateAPIKeyResponse содержит информацию о валидном API ключе
+message ValidateAPIKeyResponse {
+  string tenant_id = 1;
+  string key_id = 2;
+  bool is_valid = 3;
+}
+
+// RevokeAPIKeyRequest содержит ID ключа для отзыва
+message RevokeAPIKeyRequest {
+  string key_id = 1;
+}
+
+// RevokeAPIKeyResponse подтверждает отзыв ключа
+message RevokeAPIKeyResponse {
+  bool success = 1;
+}

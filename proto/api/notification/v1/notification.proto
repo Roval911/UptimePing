@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package uptimeping.notification.v1;
+
+//import "google/api/annotations.proto";
+
+option go_package = "gitlab.com/rodionov_v_al/UptimePingPlatform/proto/api/notification/v1";
+
+// NotificationService предоставляет методы для отправки уведомлений
+service NotificationService {
+  // SendNotification отправляет уведомление через указанные каналы
+  rpc SendNotification(SendNotificationRequest) returns (SendNotificationResponse) {}
+  
+  // RegisterChannel регистрирует новый канал уведомлений
+  rpc RegisterChannel(RegisterChannelRequest) returns (Channel) {}
+  
+  // UnregisterChannel удаляет канал уведомлений
+  rpc UnregisterChannel(UnregisterChannelRequest) returns (UnregisterChannelResponse) {}
+  
+  // ListChannels возвращает список каналов уведомлений
+  rpc ListChannels(ListChannelsRequest) returns (ListChannelsResponse) {}
+}
+
+// SendNotificationRequest содержит данные для отправки уведомления
+message SendNotificationRequest {
+  string tenant_id = 1;
+  string incident_id = 2;
+  NotificationSeverity severity = 3;
+  string title = 4;
+  string message = 5;
+  repeated string channel_ids = 6;
+  map<string, string> metadata = 7;
+}
+
+// SendNotificationResponse содержит результат отправки
+message SendNotificationResponse {
+  bool success = 1;
+  repeated SendResult results = 2;
+}
+
+// SendResult содержит результат отправки в конкретный канал
+message SendResult {
+  string channel_id = 1;
+  bool success = 2;
+  string error = 3;
+}
+
+// RegisterChannelRequest содержит данные для регистрации канала
+message RegisterChannelRequest {
+  string tenant_id = 1;
+  ChannelType type = 2;
+  string name = 3;
+  map<string, string> config = 4;
+}
+
+// Channel представляет канал уведомлений
+message Channel {
+  string id = 1;
+  string tenant_id = 2;
+  ChannelType type = 3;
+  string name = 4;
+  map<string, string> config = 5;
+  bool is_active = 6;
+  string created_at = 7;
+  string updated_at = 8;
+}
+
+// ChannelType определяет тип канала уведомлений
+enum ChannelType {
+  CHANNEL_TYPE_UNSPECIFIED = 0;
+  CHANNEL_TYPE_TELEGRAM = 1;
+  CHANNEL_TYPE_SLACK = 2;
+  CHANNEL_TYPE_EMAIL = 3;
+}
+
+// NotificationSeverity определяет серьезность уведомления
+enum NotificationSeverity {
+  NOTIFICATION_SEVERITY_UNSPECIFIED = 0;
+  NOTIFICATION_SEVERITY_INFO = 1;
+  NOTIFICATION_SEVERITY_WARNING = 2;
+  NOTIFICATION_SEVERITY_ERROR = 3;
+  NOTIFICATION_SEVERITY_CRITICAL = 4;
+}
+
+// UnregisterChannelRequest содержит ID канала для удаления
+message UnregisterChannelRequest {
+  string channel_id = 1;
+}
+
+// UnregisterChannelResponse подтверждает удаление канала
+message UnregisterChannelResponse {
+  bool success = 1;
+}
+
+// ListChannelsRequest содержит параметры фильтрации
+message ListChannelsRequest {
+  string tenant_id = 1;
+  ChannelType type = 2;
+}
+
+// ListChannelsResponse содержит список каналов
+message ListChannelsResponse {
+  repeated Channel channels = 1;
+}
