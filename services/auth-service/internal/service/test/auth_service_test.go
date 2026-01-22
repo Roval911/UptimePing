@@ -88,6 +88,50 @@ func (m *MockTenantRepository) Delete(ctx context.Context, id string) error {
 	return args.Error(0)
 }
 
+// MockAPIKeyRepository мок для APIKeyRepository
+type MockAPIKeyRepository struct {
+	mock.Mock
+}
+
+func (m *MockAPIKeyRepository) Create(ctx context.Context, apiKey *domain.APIKey) error {
+	args := m.Called(ctx, apiKey)
+	return args.Error(0)
+}
+
+func (m *MockAPIKeyRepository) FindByID(ctx context.Context, id string) (*domain.APIKey, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.APIKey), args.Error(1)
+}
+
+func (m *MockAPIKeyRepository) FindByKeyHash(ctx context.Context, keyHash string) (*domain.APIKey, error) {
+	args := m.Called(ctx, keyHash)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.APIKey), args.Error(1)
+}
+
+func (m *MockAPIKeyRepository) ListByTenant(ctx context.Context, tenantID string) ([]*domain.APIKey, error) {
+	args := m.Called(ctx, tenantID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.APIKey), args.Error(1)
+}
+
+func (m *MockAPIKeyRepository) Update(ctx context.Context, key *domain.APIKey) error {
+	args := m.Called(ctx, key)
+	return args.Error(0)
+}
+
+func (m *MockAPIKeyRepository) Delete(ctx context.Context, id string) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
 // MockSessionRepository мок для SessionRepository
 type MockSessionRepository struct {
 	mock.Mock
@@ -193,10 +237,12 @@ func (m *MockPasswordHasher) Validate(password string) bool {
 	return args.Bool(0)
 }
 
-func TestAuthService_Register_Success(t *testing.T) {
+// TestAuthService_CreateAPIKey тест для CreateAPIKey
+func TestAuthService_CreateAPIKey(t *testing.T) {
 	// Arrange
 	mockUserRepo := new(MockUserRepository)
 	mockTenantRepo := new(MockTenantRepository)
+	mockAPIKeyRepo := new(MockAPIKeyRepository)
 	mockSessionRepo := new(MockSessionRepository)
 	mockJWTManager := new(MockJWTManager)
 	mockPasswordHasher := new(MockPasswordHasher)
@@ -205,6 +251,57 @@ func TestAuthService_Register_Success(t *testing.T) {
 	authService := service.NewAuthService(
 		mockUserRepo,
 		mockTenantRepo,
+		mockAPIKeyRepo,
+		mockSessionRepo,
+		mockJWTManager,
+		mockPasswordHasher,
+	)
+
+	// Подготовка данных
+	ctx := context.Background()
+	tenantID := "tenant-123"
+	name := "Test API Key"
+
+	// Моки
+	mockAPIKeyRepo.On("Create", ctx, mock.MatchedBy(func(apiKey *domain.APIKey) bool {
+		return apiKey.TenantID == tenantID &&
+			apiKey.Name == name &&
+			len(apiKey.KeyHash) > 0 &&
+			len(apiKey.SecretHash) > 0 &&
+			apiKey.IsActive == true &&
+			!apiKey.ExpiresAt.IsZero() &&
+			!apiKey.CreatedAt.IsZero()
+	})).Return(nil)
+
+	// Act
+	result, err := authService.CreateAPIKey(ctx, tenantID, name)
+
+	// Assert
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.NotEmpty(t, result.Key)
+	assert.NotEmpty(t, result.Secret)
+	assert.Len(t, result.Key, 16)
+	assert.Len(t, result.Secret, 32)
+
+	// Проверяем, что все моки были вызваны
+	mockAPIKeyRepo.AssertExpectations(t)
+}
+
+func TestAuthService_Register_Success(t *testing.T) {
+	// Arrange
+	mockUserRepo := new(MockUserRepository)
+	mockTenantRepo := new(MockTenantRepository)
+	mockAPIKeyRepo := new(MockAPIKeyRepository)
+	mockSessionRepo := new(MockSessionRepository)
+	mockJWTManager := new(MockJWTManager)
+	mockPasswordHasher := new(MockPasswordHasher)
+
+	// Создаем сервис
+	authService := service.NewAuthService(
+		mockUserRepo,
+		mockTenantRepo,
+		mockAPIKeyRepo,
 		mockSessionRepo,
 		mockJWTManager,
 		mockPasswordHasher,
@@ -297,6 +394,7 @@ func TestAuthService_Register_UserExists(t *testing.T) {
 	// Arrange
 	mockUserRepo := new(MockUserRepository)
 	mockTenantRepo := new(MockTenantRepository)
+	mockAPIKeyRepo := new(MockAPIKeyRepository)
 	mockSessionRepo := new(MockSessionRepository)
 	mockJWTManager := new(MockJWTManager)
 	mockPasswordHasher := new(MockPasswordHasher)
@@ -305,6 +403,7 @@ func TestAuthService_Register_UserExists(t *testing.T) {
 	authService := service.NewAuthService(
 		mockUserRepo,
 		mockTenantRepo,
+		mockAPIKeyRepo,
 		mockSessionRepo,
 		mockJWTManager,
 		mockPasswordHasher,
@@ -354,6 +453,7 @@ func TestAuthService_Register_PasswordValidationFailed(t *testing.T) {
 	// Arrange
 	mockUserRepo := new(MockUserRepository)
 	mockTenantRepo := new(MockTenantRepository)
+	mockAPIKeyRepo := new(MockAPIKeyRepository)
 	mockSessionRepo := new(MockSessionRepository)
 	mockJWTManager := new(MockJWTManager)
 	mockPasswordHasher := new(MockPasswordHasher)
@@ -362,6 +462,7 @@ func TestAuthService_Register_PasswordValidationFailed(t *testing.T) {
 	authService := service.NewAuthService(
 		mockUserRepo,
 		mockTenantRepo,
+		mockAPIKeyRepo,
 		mockSessionRepo,
 		mockJWTManager,
 		mockPasswordHasher,
@@ -399,6 +500,7 @@ func TestAuthService_RefreshToken_Success(t *testing.T) {
 	// Arrange
 	mockUserRepo := new(MockUserRepository)
 	mockTenantRepo := new(MockTenantRepository)
+	mockAPIKeyRepo := new(MockAPIKeyRepository)
 	mockSessionRepo := new(MockSessionRepository)
 	mockJWTManager := new(MockJWTManager)
 	mockPasswordHasher := new(MockPasswordHasher)
@@ -407,6 +509,7 @@ func TestAuthService_RefreshToken_Success(t *testing.T) {
 	authService := service.NewAuthService(
 		mockUserRepo,
 		mockTenantRepo,
+		mockAPIKeyRepo,
 		mockSessionRepo,
 		mockJWTManager,
 		mockPasswordHasher,
@@ -480,6 +583,7 @@ func TestAuthService_RefreshToken_InvalidToken(t *testing.T) {
 	// Arrange
 	mockUserRepo := new(MockUserRepository)
 	mockTenantRepo := new(MockTenantRepository)
+	mockAPIKeyRepo := new(MockAPIKeyRepository)
 	mockSessionRepo := new(MockSessionRepository)
 	mockJWTManager := new(MockJWTManager)
 	mockPasswordHasher := new(MockPasswordHasher)
@@ -488,6 +592,7 @@ func TestAuthService_RefreshToken_InvalidToken(t *testing.T) {
 	authService := service.NewAuthService(
 		mockUserRepo,
 		mockTenantRepo,
+		mockAPIKeyRepo,
 		mockSessionRepo,
 		mockJWTManager,
 		mockPasswordHasher,
@@ -519,6 +624,7 @@ func TestAuthService_RefreshToken_TokenNotFound(t *testing.T) {
 	// Arrange
 	mockUserRepo := new(MockUserRepository)
 	mockTenantRepo := new(MockTenantRepository)
+	mockAPIKeyRepo := new(MockAPIKeyRepository)
 	mockSessionRepo := new(MockSessionRepository)
 	mockJWTManager := new(MockJWTManager)
 	mockPasswordHasher := new(MockPasswordHasher)
@@ -527,6 +633,7 @@ func TestAuthService_RefreshToken_TokenNotFound(t *testing.T) {
 	authService := service.NewAuthService(
 		mockUserRepo,
 		mockTenantRepo,
+		mockAPIKeyRepo,
 		mockSessionRepo,
 		mockJWTManager,
 		mockPasswordHasher,
@@ -568,6 +675,7 @@ func TestAuthService_Logout_Success(t *testing.T) {
 	// Arrange
 	mockUserRepo := new(MockUserRepository)
 	mockTenantRepo := new(MockTenantRepository)
+	mockAPIKeyRepo := new(MockAPIKeyRepository)
 	mockSessionRepo := new(MockSessionRepository)
 	mockJWTManager := new(MockJWTManager)
 	mockPasswordHasher := new(MockPasswordHasher)
@@ -576,6 +684,7 @@ func TestAuthService_Logout_Success(t *testing.T) {
 	authService := service.NewAuthService(
 		mockUserRepo,
 		mockTenantRepo,
+		mockAPIKeyRepo,
 		mockSessionRepo,
 		mockJWTManager,
 		mockPasswordHasher,
@@ -609,6 +718,7 @@ func TestAuthService_Logout_SessionNotFound(t *testing.T) {
 	// Arrange
 	mockUserRepo := new(MockUserRepository)
 	mockTenantRepo := new(MockTenantRepository)
+	mockAPIKeyRepo := new(MockAPIKeyRepository)
 	mockSessionRepo := new(MockSessionRepository)
 	mockJWTManager := new(MockJWTManager)
 	mockPasswordHasher := new(MockPasswordHasher)
@@ -617,6 +727,7 @@ func TestAuthService_Logout_SessionNotFound(t *testing.T) {
 	authService := service.NewAuthService(
 		mockUserRepo,
 		mockTenantRepo,
+		mockAPIKeyRepo,
 		mockSessionRepo,
 		mockJWTManager,
 		mockPasswordHasher,
@@ -647,6 +758,7 @@ func TestAuthService_Logout_Forbidden(t *testing.T) {
 	// Arrange
 	mockUserRepo := new(MockUserRepository)
 	mockTenantRepo := new(MockTenantRepository)
+	mockAPIKeyRepo := new(MockAPIKeyRepository)
 	mockSessionRepo := new(MockSessionRepository)
 	mockJWTManager := new(MockJWTManager)
 	mockPasswordHasher := new(MockPasswordHasher)
@@ -655,6 +767,7 @@ func TestAuthService_Logout_Forbidden(t *testing.T) {
 	authService := service.NewAuthService(
 		mockUserRepo,
 		mockTenantRepo,
+		mockAPIKeyRepo,
 		mockSessionRepo,
 		mockJWTManager,
 		mockPasswordHasher,

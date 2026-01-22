@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -32,12 +34,29 @@ type TokenPair struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
+// APIKeyPair структура для хранения пары API ключей
+// Публичный ключ (key) и секретный ключ (secret)
+type APIKeyPair struct {
+	Key    string `json:"key"`
+	Secret string `json:"secret"`
+}
+
+// Claims структура для данных, возвращаемых при валидации API ключа
+// Содержит информацию о тенанте и ключе
+type Claims struct {
+	TenantID string `json:"tenant_id"`
+	KeyID    string `json:"key_id"`
+}
+
 // AuthService интерфейс для сервиса аутентификации
 type AuthService interface {
 	Login(ctx context.Context, email, password string) (*TokenPair, error)
 	Register(ctx context.Context, email, password, tenantName string) (*TokenPair, error)
 	RefreshToken(ctx context.Context, refreshToken string) (*TokenPair, error)
 	Logout(ctx context.Context, userID, tokenID string) error
+	CreateAPIKey(ctx context.Context, tenantID, name string) (*APIKeyPair, error)
+	ValidateAPIKey(ctx context.Context, key, secret string) (*Claims, error)
+	RevokeAPIKey(ctx context.Context, keyID string) error
 }
 
 // Service реализация AuthService
@@ -45,6 +64,7 @@ type Service struct {
 	userRepository    repository.UserRepository
 	tenantRepository  repository.TenantRepository
 	sessionRepository repository.SessionRepository
+	apiKeyRepository  repository.APIKeyRepository
 	jwtManager        jwt.JWTManager
 	passwordHasher    password.Hasher
 }
@@ -53,6 +73,7 @@ type Service struct {
 func NewAuthService(
 	userRepository repository.UserRepository,
 	tenantRepository repository.TenantRepository,
+	apiKeyRepository repository.APIKeyRepository,
 	sessionRepository repository.SessionRepository,
 	jwtManager jwt.JWTManager,
 	passwordHasher password.Hasher,
@@ -60,10 +81,155 @@ func NewAuthService(
 	return &Service{
 		userRepository:    userRepository,
 		tenantRepository:  tenantRepository,
+		apiKeyRepository:  apiKeyRepository,
 		sessionRepository: sessionRepository,
 		jwtManager:        jwtManager,
 		passwordHasher:    passwordHasher,
 	}
+}
+
+// generateAPIKey генерирует случайную строку заданной длины
+func generateAPIKey(length int) string {
+	const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	key := make([]byte, length)
+	_, err := rand.Read(key)
+	if err != nil {
+		// В случае ошибки используем простую генерацию
+		for i := range key {
+			key[i] = chars[i%len(chars)]
+		}
+	} else {
+		for i := range key {
+			key[i] = chars[int(key[i])%len(chars)]
+		}
+	}
+	return string(key)
+}
+
+// hashAPIKey хеширует ключ с использованием SHA256
+func (s *Service) hashAPIKey(key string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(key)))
+}
+
+// CreateAPIKey создает новую пару API ключей
+func (s *Service) CreateAPIKey(ctx context.Context, tenantID, name string) (*APIKeyPair, error) {
+	// Валидация входных данных
+	if tenantID == "" {
+		return nil, errors.New("tenant ID is required")
+	}
+
+	if name == "" {
+		return nil, errors.New("name is required")
+	}
+
+	// Генерация публичного ключа (key)
+	key := generateAPIKey(16) // 16 символов для публичного ключа
+
+	// Генерация секретного ключа (secret)
+	secret := generateAPIKey(32) // 32 символа для секретного ключа
+
+	// Хеширование ключей
+	keyHash := s.hashAPIKey(key)
+	secretHash := s.hashAPIKey(secret)
+
+	// Убедимся, что хэши не пустые
+	if keyHash == "" || secretHash == "" {
+		return nil, errors.New("failed to hash API keys")
+	}
+	// Создание новой записи API ключа
+	apiKey := &domain.APIKey{
+		ID:         uuid.New().String(),
+		TenantID:   tenantID,
+		KeyHash:    keyHash,
+		SecretHash: secretHash,
+		Name:       name,
+		IsActive:   true,
+		ExpiresAt:  time.Now().UTC().Add(365 * 24 * time.Hour), // Срок действия 1 год
+		CreatedAt:  time.Now().UTC(),
+	}
+
+	// Сохранение в БД
+	err := s.apiKeyRepository.Create(ctx, apiKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create API key: %w", err)
+	}
+
+	// Возврат публичного и секретного ключей
+	// Секретный ключ возвращается только один раз
+	return &APIKeyPair{
+		Key:    key,
+		Secret: secret,
+	}, nil
+}
+
+// ValidateAPIKey проверяет валидность API ключа
+func (s *Service) ValidateAPIKey(ctx context.Context, key, secret string) (*Claims, error) {
+	// Валидация входных данных
+	if key == "" {
+		return nil, errors.New("key is required")
+	}
+
+	if secret == "" {
+		return nil, errors.New("secret is required")
+	}
+
+	// Хешируем ключи для поиска
+	keyHash := s.hashAPIKey(key)
+
+	// Поиск API ключа в БД по хэшу публичного ключа
+	apiKey, err := s.apiKeyRepository.FindByKeyHash(ctx, keyHash)
+	if err != nil {
+		return nil, ErrUnauthorized // ключ не найден
+	}
+
+	// Проверка активности ключа
+	if !apiKey.IsActive {
+		return nil, ErrForbidden // ключ деактивирован
+	}
+
+	// Проверка срока действия
+	if apiKey.ExpiresAt.Before(time.Now().UTC()) {
+		return nil, ErrUnauthorized // срок действия истек
+	}
+
+	// Хешируем предоставленный секретный ключ
+	secretHash := s.hashAPIKey(secret)
+
+	// Сравниваем хэши секретных ключей
+	if secretHash != apiKey.SecretHash {
+		return nil, ErrUnauthorized // неверный секретный ключ
+	}
+
+	// Возвращаем данные для авторизации
+	return &Claims{
+		TenantID: apiKey.TenantID,
+		KeyID:    apiKey.ID,
+	}, nil
+}
+
+// RevokeAPIKey деактивирует API ключ
+func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
+	// Валидация входных данных
+	if keyID == "" {
+		return errors.New("key ID is required")
+	}
+
+	// Поиск API ключа по ID
+	apiKey, err := s.apiKeyRepository.FindByID(ctx, keyID)
+	if err != nil {
+		return ErrNotFound // ключ не найден
+	}
+
+	// Деактивация ключа
+	apiKey.IsActive = false
+
+	// Обновление в БД
+	err = s.apiKeyRepository.Update(ctx, apiKey)
+	if err != nil {
+		return fmt.Errorf("failed to revoke API key: %w", err)
+	}
+
+	return nil
 }
 
 // Login реализует аутентификацию пользователя
