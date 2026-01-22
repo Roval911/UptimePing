@@ -3,8 +3,8 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"fmt"
 
+	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/services/auth-service/internal/domain"
 	"UptimePingPlatform/services/auth-service/internal/repository"
 )
@@ -35,7 +35,7 @@ func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
 		user.UpdatedAt)
 
 	if err != nil {
-		return fmt.Errorf("failed to create user: %w", err)
+		return errors.Wrap(err, errors.ErrInternal, "failed to create user")
 	}
 
 	return nil
@@ -60,9 +60,9 @@ func (r *UserRepository) FindByID(ctx context.Context, id string) (*domain.User,
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("user not found: %w", err)
+			return nil, errors.New(errors.ErrNotFound, "user not found")
 		}
-		return nil, fmt.Errorf("failed to get user by id: %w", err)
+		return nil, errors.Wrap(err, errors.ErrInternal, "failed to get user by id")
 	}
 
 	return &user, nil
@@ -87,9 +87,9 @@ func (r *UserRepository) FindByEmail(ctx context.Context, email string) (*domain
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("user not found: %w", err)
+			return nil, errors.New(errors.ErrNotFound, "user not found")
 		}
-		return nil, fmt.Errorf("failed to get user by email: %w", err)
+		return nil, errors.Wrap(err, errors.ErrInternal, "failed to get user by email")
 	}
 
 	return &user, nil
@@ -117,16 +117,16 @@ func (r *UserRepository) Update(ctx context.Context, user *domain.User) error {
 	)
 
 	if err != nil {
-		return fmt.Errorf("failed to update user: %w", err)
+		return errors.Wrap(err, errors.ErrInternal, "failed to update user")
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
+		return errors.Wrap(err, errors.ErrInternal, "failed to get rows affected")
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("user not found")
+		return errors.New(errors.ErrNotFound, "user not found")
 	}
 
 	return nil
@@ -138,16 +138,16 @@ func (r *UserRepository) Delete(ctx context.Context, id string) error {
 
 	result, err := r.db.ExecContext(ctx, query, id)
 	if err != nil {
-		return fmt.Errorf("failed to delete user: %w", err)
+		return errors.Wrap(err, errors.ErrInternal, "failed to delete user")
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
+		return errors.Wrap(err, errors.ErrInternal, "failed to get rows affected")
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("user not found")
+		return errors.New(errors.ErrNotFound, "user not found")
 	}
 
 	return nil

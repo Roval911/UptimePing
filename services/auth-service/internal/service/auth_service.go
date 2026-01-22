@@ -1,32 +1,31 @@
 package service
 
 import (
-	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"errors"
-	"fmt"
-	"strings"
-	"time"
-
+	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/services/auth-service/internal/domain"
 	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
 	"UptimePingPlatform/services/auth-service/internal/pkg/password"
 	"UptimePingPlatform/services/auth-service/internal/repository"
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"fmt"
 	"github.com/google/uuid"
+	"strings"
+	"time"
 )
 
 // ErrNotFound ошибка, когда пользователь не найден
-var ErrNotFound = errors.New("user not found")
+var ErrNotFound = errors.New(errors.ErrNotFound, "user not found")
 
 // ErrForbidden ошибка, когда пользователь не активен
-var ErrForbidden = errors.New("user is not active")
+var ErrForbidden = errors.New(errors.ErrForbidden, "user is not active")
 
 // ErrUnauthorized ошибка, когда неверный пароль
-var ErrUnauthorized = errors.New("invalid credentials")
+var ErrUnauthorized = errors.New(errors.ErrUnauthorized, "invalid credentials")
 
 // ErrConflict ошибка, когда пользователь уже существует
-var ErrConflict = errors.New("user already exists")
+var ErrConflict = errors.New(errors.ErrConflict, "user already exists")
 
 // TokenPair структура для хранения пары токенов
 type TokenPair struct {
@@ -115,11 +114,11 @@ func (s *Service) hashAPIKey(key string) string {
 func (s *Service) CreateAPIKey(ctx context.Context, tenantID, name string) (*APIKeyPair, error) {
 	// Валидация входных данных
 	if tenantID == "" {
-		return nil, errors.New("tenant ID is required")
+		return nil, errors.New(errors.ErrValidation, "tenant ID is required")
 	}
 
 	if name == "" {
-		return nil, errors.New("name is required")
+		return nil, errors.New(errors.ErrValidation, "name is required")
 	}
 
 	// Генерация публичного ключа (key)
@@ -134,7 +133,7 @@ func (s *Service) CreateAPIKey(ctx context.Context, tenantID, name string) (*API
 
 	// Убедимся, что хэши не пустые
 	if keyHash == "" || secretHash == "" {
-		return nil, errors.New("failed to hash API keys")
+		return nil, errors.New(errors.ErrInternal, "failed to hash API keys")
 	}
 	// Создание новой записи API ключа
 	apiKey := &domain.APIKey{
@@ -166,11 +165,11 @@ func (s *Service) CreateAPIKey(ctx context.Context, tenantID, name string) (*API
 func (s *Service) ValidateAPIKey(ctx context.Context, key, secret string) (*Claims, error) {
 	// Валидация входных данных
 	if key == "" {
-		return nil, errors.New("key is required")
+		return nil, errors.New(errors.ErrValidation, "key is required")
 	}
 
 	if secret == "" {
-		return nil, errors.New("secret is required")
+		return nil, errors.New(errors.ErrValidation, "secret is required")
 	}
 
 	// Хешируем ключи для поиска
@@ -189,7 +188,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key, secret string) (*Clai
 
 	// Проверка срока действия
 	if apiKey.ExpiresAt.Before(time.Now().UTC()) {
-		return nil, ErrUnauthorized // срок действия истек
+		return nil, errors.New(errors.ErrUnauthorized, "API key expired") // срок действия истек
 	}
 
 	// Хешируем предоставленный секретный ключ
@@ -211,7 +210,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key, secret string) (*Clai
 func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
 	// Валидация входных данных
 	if keyID == "" {
-		return errors.New("key ID is required")
+		return errors.New(errors.ErrValidation, "key ID is required")
 	}
 
 	// Поиск API ключа по ID
@@ -236,27 +235,27 @@ func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
 func (s *Service) Login(ctx context.Context, email, password string) (*TokenPair, error) {
 	// Валидация входных данных
 	if email == "" {
-		return nil, errors.New("email is required")
+		return nil, errors.New(errors.ErrValidation, "email is required")
 	}
 
 	if password == "" {
-		return nil, errors.New("password is required")
+		return nil, errors.New(errors.ErrValidation, "password is required")
 	}
 
 	// Поиск пользователя по email
 	user, err := s.userRepository.FindByEmail(ctx, email)
 	if err != nil {
-		return nil, ErrNotFound
+		return nil, errors.Wrap(err, errors.ErrNotFound, "user not found")
 	}
 
 	// Проверка, что пользователь активен
 	if !user.IsActive {
-		return nil, ErrForbidden
+		return nil, errors.New(errors.ErrForbidden, "user is not active")
 	}
 
 	// Проверка пароля
 	if !s.passwordHasher.Check(password, user.PasswordHash) {
-		return nil, ErrUnauthorized
+		return nil, errors.New(errors.ErrUnauthorized, "invalid credentials")
 	}
 
 	// Генерация JWT токенов
@@ -303,26 +302,26 @@ func (s *Service) Login(ctx context.Context, email, password string) (*TokenPair
 func (s *Service) Register(ctx context.Context, email, password, tenantName string) (*TokenPair, error) {
 	// Валидация email и password
 	if email == "" {
-		return nil, errors.New("email is required")
+		return nil, errors.New(errors.ErrValidation, "email is required")
 	}
 
 	if password == "" {
-		return nil, errors.New("password is required")
+		return nil, errors.New(errors.ErrValidation, "password is required")
 	}
 
 	if !s.passwordHasher.Validate(password) {
-		return nil, errors.New("password does not meet complexity requirements")
+		return nil, errors.New(errors.ErrValidation, "password does not meet complexity requirements")
 	}
 
 	// Валидация tenantName
 	if tenantName == "" {
-		return nil, errors.New("tenant name is required")
+		return nil, errors.New(errors.ErrValidation, "tenant name is required")
 	}
 
 	// Проверка существования пользователя по email
 	_, err := s.userRepository.FindByEmail(ctx, email)
 	if err == nil {
-		return nil, ErrConflict // Пользователь уже существует
+		return nil, errors.New(errors.ErrConflict, "user already exists") // Пользователь уже существует
 	}
 
 	// Создание или получение tenant по имени
@@ -411,7 +410,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 	// Парсинг refresh токена
 	claims, err := s.jwtManager.ValidateRefreshToken(refreshToken)
 	if err != nil {
-		return nil, ErrUnauthorized
+		return nil, errors.Wrap(err, errors.ErrUnauthorized, "failed to validate refresh token")
 	}
 
 	// Хешируем refresh токен для поиска в Redis
@@ -423,7 +422,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 	// Поиск токена в Redis
 	session, err := s.sessionRepository.FindByRefreshTokenHash(ctx, hashedRefreshToken)
 	if err != nil {
-		return nil, ErrUnauthorized // токен отозван или не найден
+		return nil, errors.Wrap(err, errors.ErrUnauthorized, "refresh token not found")
 	}
 
 	// Удаление старого refresh токена из Redis
@@ -477,7 +476,7 @@ func (s *Service) Logout(ctx context.Context, userID, tokenID string) error {
 	// Поиск сессии по ID
 	session, err := s.sessionRepository.FindByID(ctx, tokenID)
 	if err != nil {
-		return ErrNotFound
+		return errors.Wrap(err, errors.ErrNotFound, "session not found")
 	}
 
 	// Проверка, что сессия принадлежит пользователю

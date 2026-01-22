@@ -2,7 +2,6 @@ package test
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/services/auth-service/internal/domain"
 	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
 	"UptimePingPlatform/services/auth-service/internal/service"
@@ -326,10 +326,10 @@ func TestAuthService_Register_Success(t *testing.T) {
 	// 9. Create(session)
 
 	mockPasswordHasher.On("Validate", password).Return(true)
-	mockUserRepo.On("FindByEmail", ctx, email).Return((*domain.User)(nil), errors.New("user not found"))
+	mockUserRepo.On("FindByEmail", ctx, email).Return((*domain.User)(nil), errors.New(errors.ErrNotFound, "user not found"))
 
 	tenantSlug := "test-tenant"
-	mockTenantRepo.On("FindBySlug", ctx, tenantSlug).Return((*domain.Tenant)(nil), errors.New("tenant not found"))
+	mockTenantRepo.On("FindBySlug", ctx, tenantSlug).Return((*domain.Tenant)(nil), errors.New(errors.ErrNotFound, "tenant not found"))
 
 	mockTenantRepo.On("Create", ctx, mock.MatchedBy(func(tenant *domain.Tenant) bool {
 		return tenant.Name == tenantName &&
@@ -437,7 +437,10 @@ func TestAuthService_Register_UserExists(t *testing.T) {
 	// Assert
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, service.ErrConflict, err)
+	// Проверяем, что это ошибка CONFLICT
+	require.IsType(t, &errors.Error{}, err)
+	errTyped := err.(*errors.Error)
+	assert.Equal(t, errors.ErrConflict, errTyped.Code)
 
 	// Проверяем, что вызов FindByEmail произошел
 	mockUserRepo.AssertExpectations(t)
@@ -484,6 +487,10 @@ func TestAuthService_Register_PasswordValidationFailed(t *testing.T) {
 	// Assert
 	assert.Error(t, err)
 	assert.Nil(t, result)
+	// Проверяем, что это ошибка валидации
+	require.IsType(t, &errors.Error{}, err)
+	errTyped := err.(*errors.Error)
+	assert.Equal(t, errors.ErrValidation, errTyped.Code)
 	assert.ErrorContains(t, err, "password does not meet complexity requirements")
 
 	// Проверяем, что вызов Validate произошел
@@ -603,7 +610,7 @@ func TestAuthService_RefreshToken_InvalidToken(t *testing.T) {
 	refreshToken := "invalid_refresh_token"
 
 	// Моки
-	mockJWTManager.On("ValidateRefreshToken", refreshToken).Return((*jwt.TokenClaims)(nil), errors.New("invalid token"))
+	mockJWTManager.On("ValidateRefreshToken", refreshToken).Return((*jwt.TokenClaims)(nil), errors.New(errors.ErrUnauthorized, "invalid token"))
 
 	// Act
 	result, err := authService.RefreshToken(ctx, refreshToken)
@@ -611,7 +618,10 @@ func TestAuthService_RefreshToken_InvalidToken(t *testing.T) {
 	// Assert
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, service.ErrUnauthorized, err)
+	// Проверяем, что это ошибка UNAUTHORIZED
+	require.IsType(t, &errors.Error{}, err)
+	errTyped := err.(*errors.Error)
+	assert.Equal(t, errors.ErrUnauthorized, errTyped.Code)
 
 	// Проверяем, что ValidateRefreshToken был вызван
 	mockJWTManager.AssertExpectations(t)
@@ -655,7 +665,7 @@ func TestAuthService_RefreshToken_TokenNotFound(t *testing.T) {
 	hashedRefreshToken := "hashed_refresh_token"
 	mockPasswordHasher.On("Hash", refreshToken).Return(hashedRefreshToken, nil)
 
-	mockSessionRepo.On("FindByRefreshTokenHash", ctx, hashedRefreshToken).Return((*domain.Session)(nil), errors.New("session not found"))
+	mockSessionRepo.On("FindByRefreshTokenHash", ctx, hashedRefreshToken).Return((*domain.Session)(nil), errors.New(errors.ErrNotFound, "session not found"))
 
 	// Act
 	result, err := authService.RefreshToken(ctx, refreshToken)
@@ -663,7 +673,10 @@ func TestAuthService_RefreshToken_TokenNotFound(t *testing.T) {
 	// Assert
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, service.ErrUnauthorized, err)
+	// Проверяем, что это ошибка UNAUTHORIZED
+	require.IsType(t, &errors.Error{}, err)
+	errTyped := err.(*errors.Error)
+	assert.Equal(t, errors.ErrUnauthorized, errTyped.Code)
 
 	// Проверяем, что все моки были вызваны
 	mockJWTManager.AssertExpectations(t)
@@ -739,14 +752,17 @@ func TestAuthService_Logout_SessionNotFound(t *testing.T) {
 	tokenID := "session-123"
 
 	// Моки
-	mockSessionRepo.On("FindByID", ctx, tokenID).Return((*domain.Session)(nil), errors.New("session not found"))
+	mockSessionRepo.On("FindByID", ctx, tokenID).Return((*domain.Session)(nil), errors.New(errors.ErrNotFound, "session not found"))
 
 	// Act
 	err := authService.Logout(ctx, userID, tokenID)
 
 	// Assert
 	assert.Error(t, err)
-	assert.Equal(t, service.ErrNotFound, err)
+	// Проверяем, что это ошибка NOT_FOUND
+	require.IsType(t, &errors.Error{}, err)
+	errTyped := err.(*errors.Error)
+	assert.Equal(t, errors.ErrNotFound, errTyped.Code)
 
 	// Проверяем, что FindByID был вызван
 	mockSessionRepo.AssertExpectations(t)
@@ -790,7 +806,10 @@ func TestAuthService_Logout_Forbidden(t *testing.T) {
 
 	// Assert
 	assert.Error(t, err)
-	assert.Equal(t, service.ErrForbidden, err)
+	// Проверяем, что это ошибка FORBIDDEN
+	require.IsType(t, &errors.Error{}, err)
+	errTyped := err.(*errors.Error)
+	assert.Equal(t, errors.ErrForbidden, errTyped.Code)
 
 	// Проверяем, что FindByID был вызван
 	mockSessionRepo.AssertExpectations(t)
