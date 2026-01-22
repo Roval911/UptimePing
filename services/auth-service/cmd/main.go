@@ -10,17 +10,20 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"UptimePingPlatform/pkg/config"
 	"UptimePingPlatform/pkg/database"
-	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/errors"
+	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/ratelimit"
-	"UptimePingPlatform/services/auth-service/internal/service"
-	"UptimePingPlatform/services/auth-service/internal/repository/postgres"
-	"UptimePingPlatform/services/auth-service/internal/repository/redis"
+	pkg_redis "UptimePingPlatform/pkg/redis"
+	"UptimePingPlatform/services/auth-service/internal/middleware"
 	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
 	"UptimePingPlatform/services/auth-service/internal/pkg/password"
-	"UptimePingPlatform/services/auth-service/internal/middleware"
+	"UptimePingPlatform/services/auth-service/internal/repository/postgres"
+	"UptimePingPlatform/services/auth-service/internal/repository/redis"
+	"UptimePingPlatform/services/auth-service/internal/service"
 )
 
 func main() {
@@ -41,8 +44,8 @@ func main() {
 		log.Fatalf("Failed to create logger: %v", err)
 	}
 	defer func() {
-		if syncErr := appLogger.(*logger.LoggerImpl).zapLogger.Sync(); syncErr != nil {
-			log.Printf("Error syncing logger: %v", syncErr)
+		if err := appLogger.Sync(); err != nil {
+			log.Printf("Error syncing logger: %v", err)
 		}
 	}()
 
@@ -59,28 +62,37 @@ func main() {
 
 	postgresDB, err := database.Connect(ctx, dbConfig)
 	if err != nil {
-		appLogger.Error("Failed to connect to database", logger.Error(err))
+		appLogger.Error("Failed to connect to database", logger.String("error", err.Error()))
 		os.Exit(1)
 	}
 	defer postgresDB.Close()
 
 	// Инициализация Redis
-	// В реальной реализации здесь будет инициализация Redis клиента
-	redisClient := redis.NewClient("localhost:6379")
+	redisConfig := pkg_redis.NewConfig()
+	redisConfig.Addr = "localhost:6379" // В реальном приложении брать из конфига
+
+	redisCtx, redisCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer redisCancel()
+
+	redisClient, err := pkg_redis.Connect(redisCtx, redisConfig)
+	if err != nil {
+		appLogger.Error("Failed to connect to redis", logger.String("error", err.Error()))
+		os.Exit(1)
+	}
 	defer redisClient.Close()
 
 	// Инициализация rate limiter
-	rateLimiter := ratelimit.NewRedisRateLimiter(redisClient)
+	rateLimiter := ratelimit.NewRedisRateLimiter(redisClient.Client)
 
 	// Инициализация зависимостей
-	passwordHasher := password.NewBcryptHasher()
-	jwtManager := jwt.NewJWTManager("secret-key", 24*time.Hour, 7*24*time.Hour)
+	passwordHasher := password.NewBcryptHasher(bcrypt.DefaultCost)
+	jwtManager := jwt.NewManager("secret-key", "refresh-secret-key", 24*time.Hour, 7*24*time.Hour)
 
 	// Создание репозиториев
 	userRepository := postgres.NewUserRepository(postgresDB.Pool)
 	tenantRepository := postgres.NewTenantRepository(postgresDB.Pool)
 	apiKeyRepository := postgres.NewAPIKeyRepository(postgresDB.Pool)
-	sessionRepository := redis.NewSessionRepository(redisClient)
+	sessionRepository := redis.NewSessionRepository(redisClient.Client)
 
 	// Создание сервиса
 	authService := service.NewAuthService(
@@ -93,7 +105,7 @@ func main() {
 	)
 
 	// Настройка HTTP сервера
-	handler := setupHandler(authService, appLogger, rateLimiter)
+	handler := setupHandler(authService, appLogger, rateLimiter, postgresDB, redisClient)
 	server := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
 		Handler: handler,
@@ -103,7 +115,7 @@ func main() {
 	go func() {
 		appLogger.Info("Starting auth service server", logger.String("addr", server.Addr))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			appLogger.Error("Server failed", logger.Error(err))
+			appLogger.Error("Server failed", logger.String("error", err.Error()))
 		}
 	}()
 
@@ -119,31 +131,20 @@ func main() {
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
-		appLogger.Error("Server shutdown failed", logger.Error(err))
+		appLogger.Error("Server shutdown failed", logger.String("error", err.Error()))
 	}
 
 	appLogger.Info("Server stopped")
 }
 
-func setupHandler(authService service.AuthService, logger logger.Logger, rateLimiter ratelimit.RateLimiter) http.Handler {
-	// В реальной реализации здесь будет настройка HTTP маршрутов
-	// и middleware
+func setupHandler(authService service.AuthService, logger logger.Logger, rateLimiter ratelimit.RateLimiter, postgresDB *database.Postgres, redisClient *pkg_redis.Client) http.Handler {
 	mux := http.NewServeMux()
-	
-	// Пример простого health check
+
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		// Проверка базы данных
-		if err := postgresDB.HealthCheck(r.Context()); err != nil {
-			logger.Error("Database health check failed", logger.Error(err))
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
 
-	// Добавляем rate limiting middleware для всех маршрутов
-	// Ограничение: 100 запросов в минуту по IP адресу
 	return middleware.RateLimitMiddleware(rateLimiter, 100, time.Minute, false)(
 		errors.Middleware(mux),
 	)

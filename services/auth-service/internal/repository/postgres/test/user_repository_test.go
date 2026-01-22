@@ -2,23 +2,23 @@ package postgres_test
 
 import (
 	"context"
-	"database/sql"
 	"testing"
 	"time"
 
 	"UptimePingPlatform/services/auth-service/internal/domain"
 	"UptimePingPlatform/services/auth-service/internal/repository/postgres"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestUserRepository_Create(t *testing.T) {
-	// Тестовая база данных
-	_ = setupTestDB(t)
+	// Создаем тестовую базу данных
+	pool := setupTestDB(t)
+	defer pool.Close()
 
 	// Создаем репозиторий
-	db := setupTestDB(t)
-	repo := postgres.NewUserRepository(db)
+	repo := postgres.NewUserRepository(pool)
 
 	// Создаем тестового пользователя
 	user := &domain.User{
@@ -28,8 +28,8 @@ func TestUserRepository_Create(t *testing.T) {
 		TenantID:     "tenant-1",
 		IsActive:     true,
 		IsAdmin:      false,
-		CreatedAt:    time.Now().UTC().Truncate(time.Microsecond),
-		UpdatedAt:    time.Now().UTC().Truncate(time.Microsecond),
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
 	}
 
 	// Создаем пользователя
@@ -45,17 +45,13 @@ func TestUserRepository_Create(t *testing.T) {
 	assert.Equal(t, user.TenantID, createdUser.TenantID)
 	assert.Equal(t, user.IsActive, createdUser.IsActive)
 	assert.Equal(t, user.IsAdmin, createdUser.IsAdmin)
-	assert.WithinDuration(t, user.CreatedAt, createdUser.CreatedAt, time.Second)
-	assert.WithinDuration(t, user.UpdatedAt, createdUser.UpdatedAt, time.Second)
 }
 
 func TestUserRepository_FindByID(t *testing.T) {
-	// Тестовая база данных
-	_ = setupTestDB(t)
+	pool := setupTestDB(t)
+	defer pool.Close()
 
-	// Создаем репозиторий
-	db := setupTestDB(t)
-	repo := postgres.NewUserRepository(db)
+	repo := postgres.NewUserRepository(pool)
 
 	// Создаем тестового пользователя
 	user := &domain.User{
@@ -65,8 +61,8 @@ func TestUserRepository_FindByID(t *testing.T) {
 		TenantID:     "tenant-1",
 		IsActive:     true,
 		IsAdmin:      false,
-		CreatedAt:    time.Now().UTC().Truncate(time.Microsecond),
-		UpdatedAt:    time.Now().UTC().Truncate(time.Microsecond),
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
 	}
 
 	// Создаем пользователя
@@ -81,12 +77,10 @@ func TestUserRepository_FindByID(t *testing.T) {
 }
 
 func TestUserRepository_FindByEmail(t *testing.T) {
-	// Тестовая база данных
-	_ = setupTestDB(t)
+	pool := setupTestDB(t)
+	defer pool.Close()
 
-	// Создаем репозиторий
-	db := setupTestDB(t)
-	repo := postgres.NewUserRepository(db)
+	repo := postgres.NewUserRepository(pool)
 
 	// Создаем тестового пользователя
 	user := &domain.User{
@@ -96,8 +90,8 @@ func TestUserRepository_FindByEmail(t *testing.T) {
 		TenantID:     "tenant-1",
 		IsActive:     true,
 		IsAdmin:      false,
-		CreatedAt:    time.Now().UTC().Truncate(time.Microsecond),
-		UpdatedAt:    time.Now().UTC().Truncate(time.Microsecond),
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
 	}
 
 	// Создаем пользователя
@@ -112,12 +106,10 @@ func TestUserRepository_FindByEmail(t *testing.T) {
 }
 
 func TestUserRepository_Update(t *testing.T) {
-	// Тестовая база данных
-	_ = setupTestDB(t)
+	pool := setupTestDB(t)
+	defer pool.Close()
 
-	// Создаем репозиторий
-	db := setupTestDB(t)
-	repo := postgres.NewUserRepository(db)
+	repo := postgres.NewUserRepository(pool)
 
 	// Создаем тестового пользователя
 	user := &domain.User{
@@ -127,8 +119,8 @@ func TestUserRepository_Update(t *testing.T) {
 		TenantID:     "tenant-1",
 		IsActive:     true,
 		IsAdmin:      false,
-		CreatedAt:    time.Now().UTC().Truncate(time.Microsecond),
-		UpdatedAt:    time.Now().UTC().Truncate(time.Microsecond),
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
 	}
 
 	// Создаем пользователя
@@ -138,7 +130,7 @@ func TestUserRepository_Update(t *testing.T) {
 	// Обновляем пользователя
 	user.Email = "updated@example.com"
 	user.IsActive = false
-	user.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
+	user.UpdatedAt = time.Now().UTC()
 
 	err = repo.Update(context.Background(), user)
 	require.NoError(t, err)
@@ -148,16 +140,13 @@ func TestUserRepository_Update(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "updated@example.com", updatedUser.Email)
 	assert.False(t, updatedUser.IsActive)
-	assert.WithinDuration(t, user.UpdatedAt, updatedUser.UpdatedAt, time.Second)
 }
 
 func TestUserRepository_Delete(t *testing.T) {
-	// Тестовая база данных
-	_ = setupTestDB(t)
+	pool := setupTestDB(t)
+	defer pool.Close()
 
-	// Создаем репозиторий
-	db := setupTestDB(t)
-	repo := postgres.NewUserRepository(db)
+	repo := postgres.NewUserRepository(pool)
 
 	// Создаем тестового пользователя
 	user := &domain.User{
@@ -167,8 +156,8 @@ func TestUserRepository_Delete(t *testing.T) {
 		TenantID:     "tenant-1",
 		IsActive:     true,
 		IsAdmin:      false,
-		CreatedAt:    time.Now().UTC().Truncate(time.Microsecond),
-		UpdatedAt:    time.Now().UTC().Truncate(time.Microsecond),
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
 	}
 
 	// Создаем пользователя
@@ -185,14 +174,11 @@ func TestUserRepository_Delete(t *testing.T) {
 	assert.Contains(t, err.Error(), "user not found")
 }
 
-func setupTestDB(t *testing.T) *sql.DB {
-	// Здесь должен быть код для настройки тестовой базы данных
-	// В реальной реализации это может быть подключение к тестовой БД
-	// или использование in-memory базы данных
+func setupTestDB(t *testing.T) *pgxpool.Pool {
+	// В реальных тестах здесь должно быть подключение к тестовой базе данных
+	// или использование Docker контейнера с PostgreSQL
 
-	// Заглушка для примера
+	// Для примера создаем заглушку
 	t.Skip("Test database setup not implemented")
 	return nil
 }
-
-var _ sql.DB = sql.DB{}

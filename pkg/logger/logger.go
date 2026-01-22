@@ -15,6 +15,7 @@ type Logger interface {
 	Warn(msg string, fields ...Field)
 	Error(msg string, fields ...Field)
 	With(fields ...Field) Logger
+	Sync() error
 }
 
 // Field представляет поле лога
@@ -50,16 +51,14 @@ func NewLogger(environment, level, serviceName string, enableLoki bool) (Logger,
 		zapLevel = zap.InfoLevel
 	}
 
-	// Определяем настройки кодирования в зависимости от окружения
+	// Определяем настройки кодирования
 	var encoderConfig zapcore.EncoderConfig
 	var encoder zapcore.Encoder
-	
+
 	if environment == "dev" {
-		// Для разработки используем читаемый формат
 		encoderConfig = zap.NewDevelopmentEncoderConfig()
 		encoder = zapcore.NewConsoleEncoder(encoderConfig)
 	} else {
-		// Для продакшена используем JSON формат
 		encoderConfig = zap.NewProductionEncoderConfig()
 		encoderConfig.TimeKey = "time"
 		encoderConfig.LevelKey = "level"
@@ -82,23 +81,14 @@ func NewLogger(environment, level, serviceName string, enableLoki bool) (Logger,
 		zap.NewAtomicLevelAt(zapLevel),
 	)
 
-	// Создаем логгер
+	// Создаем логгер ОДИН раз
 	zapLogger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zap.ErrorLevel))
-	defer zapLogger.Sync()
 
 	// Добавляем поля по умолчанию
 	zapLogger = zapLogger.With(
 		zap.String("service", serviceName),
 		zap.String("environment", environment),
 	)
-
-	// Если включена интеграция с Loki, добавляем дополнительные настройки
-	// В реальной реализации здесь будет настройка отправки логов в Loki
-	if enableLoki {
-		// TODO: Добавить интеграцию с Loki
-		// Например, настройка Loki через promtail или прямое API
-		zapLogger.Info("Loki integration enabled")
-	}
 
 	return &LoggerImpl{zapLogger: zapLogger}, nil
 }
@@ -187,4 +177,8 @@ func Error(err error) Field {
 // Any создает поле с любым значением
 func Any(key string, val interface{}) Field {
 	return Field{zap.Any(key, val)}
+}
+
+func (l *LoggerImpl) Sync() error {
+	return l.zapLogger.Sync()
 }

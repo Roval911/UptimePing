@@ -1,11 +1,11 @@
 package middleware
 
 import (
-	"context"
+	//"context"
 	"net/http"
 	"time"
 
-	"UptimePingPlatform/pkg/errors"
+	//"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/ratelimit"
 	"UptimePingPlatform/services/auth-service/internal/service"
 )
