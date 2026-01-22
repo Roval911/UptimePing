@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -13,11 +14,13 @@ import (
 	"UptimePingPlatform/pkg/database"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/errors"
+	"UptimePingPlatform/pkg/ratelimit"
 	"UptimePingPlatform/services/auth-service/internal/service"
 	"UptimePingPlatform/services/auth-service/internal/repository/postgres"
 	"UptimePingPlatform/services/auth-service/internal/repository/redis"
 	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
 	"UptimePingPlatform/services/auth-service/internal/pkg/password"
+	"UptimePingPlatform/services/auth-service/internal/middleware"
 )
 
 func main() {
@@ -66,6 +69,9 @@ func main() {
 	redisClient := redis.NewClient("localhost:6379")
 	defer redisClient.Close()
 
+	// Инициализация rate limiter
+	rateLimiter := ratelimit.NewRedisRateLimiter(redisClient)
+
 	// Инициализация зависимостей
 	passwordHasher := password.NewBcryptHasher()
 	jwtManager := jwt.NewJWTManager("secret-key", 24*time.Hour, 7*24*time.Hour)
@@ -87,7 +93,7 @@ func main() {
 	)
 
 	// Настройка HTTP сервера
-	handler := setupHandler(authService, appLogger)
+	handler := setupHandler(authService, appLogger, rateLimiter)
 	server := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
 		Handler: handler,
@@ -119,7 +125,7 @@ func main() {
 	appLogger.Info("Server stopped")
 }
 
-func setupHandler(authService service.AuthService, logger logger.Logger) http.Handler {
+func setupHandler(authService service.AuthService, logger logger.Logger, rateLimiter ratelimit.RateLimiter) http.Handler {
 	// В реальной реализации здесь будет настройка HTTP маршрутов
 	// и middleware
 	mux := http.NewServeMux()
@@ -136,5 +142,9 @@ func setupHandler(authService service.AuthService, logger logger.Logger) http.Ha
 		w.Write([]byte("OK"))
 	})
 
-	return errors.Middleware(mux)
+	// Добавляем rate limiting middleware для всех маршрутов
+	// Ограничение: 100 запросов в минуту по IP адресу
+	return middleware.RateLimitMiddleware(rateLimiter, 100, time.Minute, false)(
+		errors.Middleware(mux),
+	)
 }

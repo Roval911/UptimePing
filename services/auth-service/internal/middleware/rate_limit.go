@@ -1,0 +1,73 @@
+package middleware
+
+import (
+	"context"
+	"net/http"
+	"time"
+
+	"UptimePingPlatform/pkg/errors"
+	"UptimePingPlatform/pkg/ratelimit"
+	"UptimePingPlatform/services/auth-service/internal/service"
+)
+
+// RateLimitMiddleware создает middleware для ограничения частоты запросов
+// Поддерживает лимиты по IP адресу и по пользователю
+// Использует sliding window алгоритм из pkg/ratelimit
+func RateLimitMiddleware(rateLimiter ratelimit.RateLimiter, limit int, window time.Duration, byUser bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var key string
+
+			// Определяем ключ для ограничения
+			if byUser {
+				// Получаем ID пользователя из контекста
+				if userID, ok := r.Context().Value(service.UserIDKey).(string); ok {
+					key = "user:" + userID
+				} else {
+					// Если пользователь не авторизован, используем IP
+					key = "ip:" + getIP(r)
+				}
+			} else {
+				// Используем IP адрес как ключ
+				key = "ip:" + getIP(r)
+			}
+
+			// Проверяем лимит запросов
+			limitExceeded, err := rateLimiter.CheckRateLimit(r.Context(), key, limit, window)
+			if err != nil {
+				// В случае ошибки Redis разрешаем запрос
+				http.Error(w, "Rate limit service unavailable", http.StatusInternalServerError)
+				return
+			}
+
+			// Если лимит превышен, возвращаем ошибку
+			if limitExceeded {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				w.Write([]byte(`{"error":{"code":"TOO_MANY_REQUESTS","message":"too many requests"}}`))
+				return
+			}
+
+			// Продолжаем обработку запроса
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// getIP извлекает IP адрес из запроса
+// Проверяет X-Forwarded-For и X-Real-IP заголовки
+// Возвращает REMOTE_ADDR если заголовки отсутствуют
+func getIP(r *http.Request) string {
+	// Проверяем X-Forwarded-For заголовок
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		return forwarded
+	}
+
+	// Проверяем X-Real-IP заголовок
+	if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
+		return realIP
+	}
+
+	// Возвращаем REMOTE_ADDR как последний вариант
+	return r.RemoteAddr
+}

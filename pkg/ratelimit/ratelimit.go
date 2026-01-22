@@ -16,7 +16,7 @@ type RateLimiter interface {
 }
 
 // RedisRateLimiter реализация RateLimiter с использованием Redis
-// Использует sliding window алгоритм для точного подсчета запросов
+// Использует sliding window алгоритм для точного подсчета запросов в заданном временном окне
 type RedisRateLimiter struct {
 	client *redis.Client
 }
@@ -27,6 +27,7 @@ func NewRedisRateLimiter(client *redis.Client) *RedisRateLimiter {
 }
 
 // CheckRateLimit проверяет, не превышен ли лимит запросов для заданного ключа
+// Использует sliding window алгоритм
 // Алгоритм:
 // 1. Определение ключа (IP или user_id)
 // 2. Получение текущего счетчика из Redis
