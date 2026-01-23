@@ -138,12 +138,17 @@ func (l *LoggerImpl) With(fields ...Field) Logger {
 	return &LoggerImpl{zapLogger: l.zapLogger.With(zapFields...)}
 }
 
+// Sync закрывает логгер
+func (l *LoggerImpl) Sync() error {
+	return l.zapLogger.Sync()
+}
+
 // CtxField возвращает поле с trace_id из контекста
 func CtxField(ctx context.Context) Field {
 	if traceID, ok := ctx.Value("trace_id").(string); ok {
-		return Field{zap.String("trace_id", traceID)}
+		return String("trace_id", traceID)
 	}
-	return Field{zap.String("trace_id", "unknown")}
+	return String("trace_id", "unknown")
 }
 
 // String создает поле со строковым значением
@@ -177,8 +182,4 @@ func Error(err error) Field {
 // Any создает поле с любым значением
 func Any(key string, val interface{}) Field {
 	return Field{zap.Any(key, val)}
-}
-
-func (l *LoggerImpl) Sync() error {
-	return l.zapLogger.Sync()
 }
