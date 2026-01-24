@@ -10,21 +10,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config представляет конфигурацию приложения. Структура содержит вложенные структуры для различных компонентов приложения.
+// Config представляет конфигурацию приложения
 type Config struct {
-	Server      ServerConfig   `json:"server" yaml:"server"`
-	Database    DatabaseConfig `json:"database" yaml:"database"`
-	Logger      LoggerConfig   `json:"logger" yaml:"logger"`
-	Environment string         `json:"environment" yaml:"environment"`
+	Server           ServerConfig   `json:"server" yaml:"server"`
+	Database         DatabaseConfig `json:"database" yaml:"database"`
+	Logger           LoggerConfig   `json:"logger" yaml:"logger"`
+	Environment      string         `json:"environment" yaml:"environment"`
+	AuthService      ServiceConfig  `json:"auth_service" yaml:"auth_service"`
+	ConfigService    ServiceConfig  `json:"config_service" yaml:"config_service"`
+	CoreService      ServiceConfig  `json:"core_service" yaml:"core_service"`
+	ForgeService     ServiceConfig  `json:"forge_service" yaml:"forge_service"`
+	IncidentService  ServiceConfig  `json:"incident_service" yaml:"incident_service"`
+	SchedulerService ServiceConfig  `json:"scheduler_service" yaml:"scheduler_service"`
 }
 
-// ServerConfig представляет конфигурацию сервера. Содержит настройки хоста и порта для HTTP-сервера.
+// ServerConfig представляет конфигурацию сервера
 type ServerConfig struct {
 	Host string `json:"host" yaml:"host"`
 	Port int    `json:"port" yaml:"port"`
 }
 
-// DatabaseConfig представляет конфигурацию базы данных. Содержит параметры подключения к базе данных, включая хост, порт, имя базы, пользователя и пароль.
+// DatabaseConfig представляет конфигурацию базы данных
 type DatabaseConfig struct {
 	Host     string `json:"host" yaml:"host"`
 	Port     int    `json:"port" yaml:"port"`
@@ -33,18 +39,19 @@ type DatabaseConfig struct {
 	Password string `json:"password" yaml:"password"`
 }
 
-// LoggerConfig представляет конфигурацию логгера. Определяет уровень логирования и формат вывода логов.
+// LoggerConfig представляет конфигурацию логгера
 type LoggerConfig struct {
 	Level  string `json:"level" yaml:"level"`
 	Format string `json:"format" yaml:"format"`
 }
 
-// LoadConfig загружает конфигурацию в следующем порядке приоритета:
-// 1. Загрузка значений по умолчанию
-// 2. Загрузка из файла (если указан)
-// 3. Переопределение значениями из переменных окружения
-// 4. Валидация конфигурации
-// Возвращает готовую конфигурацию или ошибку.
+// ServiceConfig представляет конфигурацию для внешних сервисов
+type ServiceConfig struct {
+	Host string `json:"host" yaml:"host"`
+	Port int    `json:"port" yaml:"port"`
+}
+
+// LoadConfig загружает конфигурацию
 func LoadConfig(configFile string) (*Config, error) {
 	// Initialize config with default values
 	config := &Config{
@@ -64,6 +71,30 @@ func LoadConfig(configFile string) (*Config, error) {
 			Format: "json",
 		},
 		Environment: "dev",
+		AuthService: ServiceConfig{
+			Host: "localhost",
+			Port: 50051,
+		},
+		ConfigService: ServiceConfig{
+			Host: "localhost",
+			Port: 50052,
+		},
+		CoreService: ServiceConfig{
+			Host: "localhost",
+			Port: 50053,
+		},
+		ForgeService: ServiceConfig{
+			Host: "localhost",
+			Port: 50054,
+		},
+		IncidentService: ServiceConfig{
+			Host: "localhost",
+			Port: 50055,
+		},
+		SchedulerService: ServiceConfig{
+			Host: "localhost",
+			Port: 50056,
+		},
 	}
 
 	// Load from file if specified
@@ -161,11 +192,71 @@ func loadConfigFromEnv(config *Config) error {
 		config.Environment = env
 	}
 
+	// Auth service config
+	if host := os.Getenv("AUTH_SERVICE_HOST"); host != "" {
+		config.AuthService.Host = host
+	}
+	if port := os.Getenv("AUTH_SERVICE_PORT"); port != "" {
+		if _, err := fmt.Sscanf(port, "%d", &config.AuthService.Port); err != nil {
+			return fmt.Errorf("invalid AUTH_SERVICE_PORT: %s", port)
+		}
+	}
+
+	// Config service config
+	if host := os.Getenv("CONFIG_SERVICE_HOST"); host != "" {
+		config.ConfigService.Host = host
+	}
+	if port := os.Getenv("CONFIG_SERVICE_PORT"); port != "" {
+		if _, err := fmt.Sscanf(port, "%d", &config.ConfigService.Port); err != nil {
+			return fmt.Errorf("invalid CONFIG_SERVICE_PORT: %s", port)
+		}
+	}
+
+	// Core service config
+	if host := os.Getenv("CORE_SERVICE_HOST"); host != "" {
+		config.CoreService.Host = host
+	}
+	if port := os.Getenv("CORE_SERVICE_PORT"); port != "" {
+		if _, err := fmt.Sscanf(port, "%d", &config.CoreService.Port); err != nil {
+			return fmt.Errorf("invalid CORE_SERVICE_PORT: %s", port)
+		}
+	}
+
+	// Forge service config
+	if host := os.Getenv("FORGE_SERVICE_HOST"); host != "" {
+		config.ForgeService.Host = host
+	}
+	if port := os.Getenv("FORGE_SERVICE_PORT"); port != "" {
+		if _, err := fmt.Sscanf(port, "%d", &config.ForgeService.Port); err != nil {
+			return fmt.Errorf("invalid FORGE_SERVICE_PORT: %s", port)
+		}
+	}
+
+	// Incident service config
+	if host := os.Getenv("INCIDENT_SERVICE_HOST"); host != "" {
+		config.IncidentService.Host = host
+	}
+	if port := os.Getenv("INCIDENT_SERVICE_PORT"); port != "" {
+		if _, err := fmt.Sscanf(port, "%d", &config.IncidentService.Port); err != nil {
+			return fmt.Errorf("invalid INCIDENT_SERVICE_PORT: %s", port)
+		}
+	}
+
+	// Scheduler service config
+	if host := os.Getenv("SCHEDULER_SERVICE_HOST"); host != "" {
+		config.SchedulerService.Host = host
+	}
+	if port := os.Getenv("SCHEDULER_SERVICE_PORT"); port != "" {
+		if _, err := fmt.Sscanf(port, "%d", &config.SchedulerService.Port); err != nil {
+			return fmt.Errorf("invalid SCHEDULER_SERVICE_PORT: %s", port)
+		}
+	}
+
 	return nil
 }
 
 func validateConfig(config *Config) error {
-	// Проверка корректности окружения. Поддерживаются только: dev, staging, prod
+	// Проверка корректности окружения
 	switch config.Environment {
 	case "dev", "staging", "prod":
 		// Valid environment
@@ -174,7 +265,6 @@ func validateConfig(config *Config) error {
 	}
 
 	// Валидация конфигурации сервера
-	// Проверяем, что хост не пустой и порт в допустимом диапазоне (1-65535)
 	if config.Server.Host == "" {
 		return fmt.Errorf("server.host is required")
 	}
@@ -183,7 +273,6 @@ func validateConfig(config *Config) error {
 	}
 
 	// Валидация конфигурации базы данных
-	// Проверяем, что все обязательные поля заполнены и порт в допустимом диапазоне
 	if config.Database.Host == "" {
 		return fmt.Errorf("database.host is required")
 	}
@@ -201,7 +290,6 @@ func validateConfig(config *Config) error {
 	}
 
 	// Валидация конфигурации логгера
-	// Проверяем, что уровень и формат логирования заданы
 	if config.Logger.Level == "" {
 		return fmt.Errorf("logger.level is required")
 	}
@@ -209,11 +297,32 @@ func validateConfig(config *Config) error {
 		return fmt.Errorf("logger.format is required")
 	}
 
+	// Валидация конфигурации сервисов
+	services := []struct {
+		name   string
+		config ServiceConfig
+	}{
+		{"auth_service", config.AuthService},
+		{"config_service", config.ConfigService},
+		{"core_service", config.CoreService},
+		{"forge_service", config.ForgeService},
+		{"incident_service", config.IncidentService},
+		{"scheduler_service", config.SchedulerService},
+	}
+
+	for _, service := range services {
+		if service.config.Host == "" {
+			return fmt.Errorf("%s.host is required", service.name)
+		}
+		if service.config.Port <= 0 || service.config.Port > 65535 {
+			return fmt.Errorf("%s.port must be between 1 and 65535", service.name)
+		}
+	}
+
 	return nil
 }
 
-// Save сохраняет конфигурацию в файл в формате YAML.
-// Автоматически создает директорию, если она не существует.
+// Save сохраняет конфигурацию в файл в формате YAML
 func (c *Config) Save(filename string) error {
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(filename)

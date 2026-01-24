@@ -161,6 +161,16 @@ func Int(key string, val int) Field {
 	return Field{zap.Int(key, val)}
 }
 
+// Int32 создает поле с целочисленным значением типа int32
+func Int32(key string, val int32) Field {
+	return Field{zap.Int32(key, val)}
+}
+
+// Int64 создает поле с целочисленным значением типа int64
+func Int64(key string, val int64) Field {
+	return Field{zap.Int64(key, val)}
+}
+
 // Float64 создает поле с значением типа float64
 func Float64(key string, val float64) Field {
 	return Field{zap.Float64(key, val)}
