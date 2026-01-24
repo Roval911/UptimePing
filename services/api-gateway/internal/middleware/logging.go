@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"net/http"
 	"time"
@@ -65,7 +66,21 @@ func (rw *responseWriter) WriteHeader(code int) {
 
 // generateTraceID генерирует уникальный идентификатор запроса
 func generateTraceID() string {
-	// В реальном приложении использовать UUID или другой механизм генерации
-	// Для упрощения возвращаем временный идентификатор
-	return "trace-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	// Генерируем UUID v4 с использованием криптографически безопасного генератора
+	// Формат: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+	b := make([]byte, 16)
+	// Заполняем случайными байтами
+	_, err := rand.Read(b)
+	if err != nil {
+		// В случае ошибки генерации возвращаем fallback вариант
+		return "trace-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+
+	// Устанавливаем версию UUID (4)
+	b[6] = (b[6] & 0x0f) | 0x40
+	// Устанавливаем variant (RFC 4122)
+	b[8] = (b[8] & 0x3f) | 0x80
+
+	// Форматируем в стандартный UUID формат
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
