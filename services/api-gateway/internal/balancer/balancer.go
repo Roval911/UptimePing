@@ -168,19 +168,6 @@ func (b *Balancer) UpdateSubConnState(sc balancer.SubConn, state balancer.SubCon
 		logger.String("old_state", oldState.String()),
 		logger.String("new_state", state.ConnectivityState.String()))
 
-	// Обновляем состояние инстанса на основе health checking
-	if addr, ok := b.scToAddr[sc]; ok {
-		if instance, ok := b.instances[addr.Addr]; ok {
-			// Если состояние изменилось на Ready и health checker здоров, помечаем как активный
-			if state.ConnectivityState == connectivity.Ready && instance.Health.IsHealthy() {
-				// Используем метод SetActive из Instance
-				instance.SetActive(true)
-			} else {
-				instance.SetActive(false)
-			}
-		}
-	}
-
 	// Обновляем picker
 	b.updatePicker()
 }
@@ -232,7 +219,7 @@ func (b *Balancer) updatePicker() {
 		if state == connectivity.Ready {
 			// Проверяем health инстанса
 			if addr, ok := b.scToAddr[sc]; ok {
-				if instance, ok := b.instances[addr.Addr]; ok && instance.IsActive() {
+				if instance, ok := b.instances[addr.Addr]; ok && instance.Health.IsHealthy() {
 					readyScs = append(readyScs, sc)
 				}
 			}
