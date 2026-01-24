@@ -12,10 +12,10 @@ import (
 
 // Error представляет кастомную ошибку с дополнительной информацией
 type Error struct {
-	Code    ErrorCode   `json:"code"`
-	Message string      `json:"message"`
-	Details string      `json:"details,omitempty"`
-	Cause   error       `json:"-"`
+	Code    ErrorCode       `json:"code"`
+	Message string          `json:"message"`
+	Details string          `json:"details,omitempty"`
+	Cause   error           `json:"-"`
 	Context context.Context `json:"-"`
 }
 
@@ -24,12 +24,22 @@ type ErrorCode string
 
 // Определение кодов ошибок
 const (
-	ErrNotFound    ErrorCode = "NOT_FOUND"
-	ErrValidation  ErrorCode = "VALIDATION_ERROR"
+	ErrNotFound     ErrorCode = "NOT_FOUND"
+	ErrValidation   ErrorCode = "VALIDATION_ERROR"
 	ErrUnauthorized ErrorCode = "UNAUTHORIZED"
-	ErrForbidden   ErrorCode = "FORBIDDEN"
-	ErrInternal    ErrorCode = "INTERNAL_ERROR"
-	ErrConflict    ErrorCode = "CONFLICT"
+	ErrForbidden    ErrorCode = "FORBIDDEN"
+	ErrInternal     ErrorCode = "INTERNAL_ERROR"
+	ErrConflict     ErrorCode = "CONFLICT"
+)
+
+// Создаем глобальные экземпляры ошибок для использования в сравнениях
+var (
+	ErrNotFoundInstance     = New(ErrNotFound, "not found")
+	ErrValidationInstance   = New(ErrValidation, "validation error")
+	ErrUnauthorizedInstance = New(ErrUnauthorized, "unauthorized")
+	ErrForbiddenInstance    = New(ErrForbidden, "forbidden")
+	ErrInternalInstance     = New(ErrInternal, "internal error")
+	ErrConflictInstance     = New(ErrConflict, "conflict")
 )
 
 // Error возвращает сообщение об ошибке
@@ -50,6 +60,36 @@ func (e *Error) Is(target error) bool {
 	if targetError, ok := target.(*Error); ok {
 		return e.Code == targetError.Code
 	}
+	return false
+}
+
+// Is - функция для сравнения ошибок
+func Is(err, target error) bool {
+	if err == nil || target == nil {
+		return err == target
+	}
+
+	// Пытаемся использовать наш метод Is для кастомных ошибок
+	if customErr, ok := err.(*Error); ok {
+		return customErr.Is(target)
+	}
+
+	// Для стандартных ошибок используем Unwrap
+	unwrapped := err
+	for {
+		if unwrapped == target {
+			return true
+		}
+		if x, ok := unwrapped.(interface{ Unwrap() error }); ok {
+			unwrapped = x.Unwrap()
+			if unwrapped == nil {
+				break
+			}
+		} else {
+			break
+		}
+	}
+
 	return false
 }
 
@@ -106,7 +146,7 @@ func (e *Error) ToGRPCErr() error {
 	if e == nil {
 		return nil
 	}
-	
+
 	// Преобразуем код ошибки в gRPC код
 	var grpcCode codes.Code
 	switch e.Code {
@@ -125,10 +165,10 @@ func (e *Error) ToGRPCErr() error {
 	default:
 		grpcCode = codes.Unknown
 	}
-	
+
 	// Создаем gRPC статус
-	status := status.New(grpcCode, e.Message)
-	
+	st := status.New(grpcCode, e.Message)
+
 	// Добавляем детали, если есть
 	// В реальной реализации нужно реализовать proper proto message handling
 	// if e.Details != "" {
@@ -139,8 +179,8 @@ func (e *Error) ToGRPCErr() error {
 	// 		status = withDetails
 	// 	}
 	// }
-	
-	return status.Err()
+
+	return st.Err()
 }
 
 // FromGRPCErr преобразует gRPC ошибку в кастомную ошибку
@@ -148,7 +188,7 @@ func FromGRPCErr(err error) *Error {
 	if err == nil {
 		return nil
 	}
-	
+
 	// Проверяем, является ли ошибка gRPC статусом
 	if grpcStatus, ok := status.FromError(err); ok {
 		// Преобразуем gRPC код в наш код ошибки
@@ -169,13 +209,13 @@ func FromGRPCErr(err error) *Error {
 		default:
 			code = ErrInternal
 		}
-		
+
 		return &Error{
 			Code:    code,
 			Message: grpcStatus.Message(),
 		}
 	}
-	
+
 	// Если это не gRPC ошибка, оборачиваем как внутреннюю ошибку
 	return Wrap(err, ErrInternal, "internal error")
 }
@@ -185,7 +225,7 @@ func (e *Error) HTTPStatus() int {
 	if e == nil {
 		return http.StatusOK
 	}
-	
+
 	switch e.Code {
 	case ErrNotFound:
 		return http.StatusNotFound
@@ -204,19 +244,13 @@ func (e *Error) HTTPStatus() int {
 	}
 }
 
-// ErrorDetails представляет детали ошибки для gRPC
-//go:generate protoc -I=. --go_out=. --go_opt=paths=source_relative error_details.proto
-type ErrorDetails struct {
-	Details string `protobuf:"bytes,1,opt,name=details,proto3" json:"details,omitempty"`
-}
-
 // GetUserMessage возвращает пользовательское сообщение об ошибке
 // В реальной реализации здесь будет интеграция с системой локализации
 func (e *Error) GetUserMessage() string {
 	if e == nil {
 		return ""
 	}
-	
+
 	// В реальном приложении здесь будет локализация сообщений
 	// Например, через сервис перевода или файлы локализации
 	switch e.Code {
@@ -242,22 +276,22 @@ func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Создаем обертку для ResponseWriter для перехвата статуса
 		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
-		
+
 		// Выполняем следующий обработчик
 		next.ServeHTTP(wrapped, r)
-		
+
 		// Если статус уже установлен ошибочный, ничего не делаем
 		if wrapped.statusCode < 400 {
 			return
 		}
-		
+
 		// Если есть ошибка в контексте, используем ее
 		if err, ok := r.Context().Value(errorContextKey{}).(*Error); ok {
 			// Отправляем JSON ответ с ошибкой
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(err.HTTPStatus())
-			
-					// Формируем ответ
+
+			// Формируем ответ
 			response := map[string]interface{}{
 				"error": map[string]interface{}{
 					"code":    err.Code,
@@ -265,7 +299,7 @@ func Middleware(next http.Handler) http.Handler {
 					"details": err.Details,
 				},
 			}
-			
+
 			// Отправляем ответ
 			jsonData, _ := json.Marshal(response)
 			w.Write(jsonData)
