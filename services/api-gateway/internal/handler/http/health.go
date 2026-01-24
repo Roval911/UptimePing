@@ -45,13 +45,37 @@ func (h *healthHandlerImpl) ReadyCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Пока возвращаем просто OK, в реальности может проверять готовность зависимостей
+	// Проверяем готовность основных зависимостей
+	status := "ready"
+	statusCode := http.StatusOK
+
+	// Можно добавить проверку подключения к базе данных, Redis и другим зависимостям
+	// В реальной реализации это будет делегировано checker.Check()
+	if h.checker != nil {
+		healthStatus := h.checker.Check()
+		if healthStatus.Status != "healthy" {
+			status = "not ready"
+			statusCode = http.StatusServiceUnavailable
+		}
+	}
+
+	// Устанавливаем заголовки
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":    "ready",
+	w.WriteHeader(statusCode)
+
+	// Формируем и отправляем ответ
+	response := map[string]interface{}{
+		"status":    status,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
-	})
+	}
+
+	if h.checker != nil {
+		response["details"] = h.checker.Check().Services
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		h.writeError(w, "Failed to encode response", http.StatusInternalServerError)
+	}
 }
 
 // LiveCheck обрабатывает live check запросы
@@ -61,13 +85,19 @@ func (h *healthHandlerImpl) LiveCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Пока возвращаем просто OK, в реальности может проверять живость сервиса
+	// Проверяем, что сервис жив
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
+
+	// Формируем и отправляем ответ
+	response := map[string]string{
 		"status":    "alive",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
-	})
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		h.writeError(w, "Failed to encode response", http.StatusInternalServerError)
+	}
 }
 
 // writeError записывает ошибку в ответ

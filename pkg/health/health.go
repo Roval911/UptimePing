@@ -48,10 +48,10 @@ func (s *SimpleHealthChecker) Check() *HealthStatus {
 func Handler(checker HealthChecker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		status := checker.Check()
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		
+
 		// Отправляем JSON ответ
 		json.NewEncoder(w).Encode(status)
 	}
@@ -59,14 +59,34 @@ func Handler(checker HealthChecker) http.HandlerFunc {
 
 // ReadyHandler создает HTTP обработчик для ready check эндпоинта
 // Возвращает 200 если сервис готов принимать трафик
-func ReadyHandler() http.HandlerFunc {
+// Использует HealthChecker для проверки готовности зависимостей
+func ReadyHandler(checker HealthChecker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		
-		response := map[string]string{
-			"status": "ready",
+		status := "ready"
+		statusCode := http.StatusOK
+
+		// Проверяем готовность через HealthChecker
+		if checker != nil {
+			healthStatus := checker.Check()
+			if healthStatus.Status != "healthy" {
+				status = "not ready"
+				statusCode = http.StatusServiceUnavailable
+			}
 		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(statusCode)
+
+		// Формируем и отправляем ответ
+		response := map[string]interface{}{
+			"status":    status,
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
+		}
+
+		if checker != nil {
+			response["details"] = checker.Check().Services
+		}
+
 		json.NewEncoder(w).Encode(response)
 	}
 }
@@ -77,9 +97,11 @@ func LiveHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		
-		response := map[string]string{
-			"status": "alive",
+
+		// Формируем и отправляем ответ
+		response := map[string]interface{}{
+			"status":    "alive",
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
 		}
 		json.NewEncoder(w).Encode(response)
 	}

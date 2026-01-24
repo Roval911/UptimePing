@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -18,6 +19,8 @@ import (
 	pkg_redis "UptimePingPlatform/pkg/redis"
 	httphandler "UptimePingPlatform/services/api-gateway/internal/handler/http"
 	"UptimePingPlatform/services/api-gateway/internal/middleware"
+
+	"github.com/go-redis/redis/v8"
 )
 
 // AuthServiceStub заглушка для AuthService
@@ -48,14 +51,78 @@ func (a *AuthServiceStub) Logout(ctx context.Context, userID, tokenID string) er
 	return nil
 }
 
-// HealthCheckerStub заглушка для HealthChecker
-// Теперь реализует интерфейс health.HealthChecker из пакета health
-type HealthCheckerStub struct{}
+// RealHealthChecker реальная реализация HealthChecker
+// Проверяет здоровье сервиса и его зависимостей
+type RealHealthChecker struct {
+	database    *sql.DB
+	redisClient *redis.Client
+	config      *config.Config
+	logger      logger.Logger
+}
 
-func (h *HealthCheckerStub) Check() *health.HealthStatus {
-	return &health.HealthStatus{
-		Status: "UP",
+// NewRealHealthChecker создает новый экземпляр RealHealthChecker
+func NewRealHealthChecker(logger logger.Logger) *RealHealthChecker {
+	return &RealHealthChecker{
+		logger: logger,
 	}
+}
+
+// Check проверяет здоровье сервиса
+func (h *RealHealthChecker) Check() *health.HealthStatus {
+	status := &health.HealthStatus{
+		Status:    "healthy",
+		Timestamp: time.Now(),
+		Services:  make(map[string]health.Status),
+	}
+
+	// Проверка базы данных (если подключена)
+	if h.database != nil {
+		if err := h.database.Ping(); err != nil {
+			status.Status = "degraded"
+			status.Services["database"] = health.Status{
+				Status:  "unhealthy",
+				Details: err.Error(),
+			}
+		} else {
+			status.Services["database"] = health.Status{
+				Status: "healthy",
+			}
+		}
+	}
+
+	// Проверка Redis
+	if h.redisClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := h.redisClient.Ping(ctx).Result(); err != nil {
+			status.Status = "degraded"
+			status.Services["redis"] = health.Status{
+				Status:  "unhealthy",
+				Details: err.Error(),
+			}
+		} else {
+			status.Services["redis"] = health.Status{
+				Status: "healthy",
+			}
+		}
+	}
+
+	// Проверка конфигурации
+	if h.config != nil {
+		status.Services["config"] = health.Status{
+			Status: "healthy",
+		}
+	}
+
+	// Если есть нездоровые сервисы, меняем общий статус
+	for _, serviceStatus := range status.Services {
+		if serviceStatus.Status != "healthy" {
+			status.Status = "degraded"
+			break
+		}
+	}
+
+	return status
 }
 
 func main() {
@@ -102,7 +169,9 @@ func main() {
 	metricCollector := metrics.NewMetrics("api_gateway")
 
 	// Создание HealthChecker и HealthHandler
-	healthChecker := &HealthCheckerStub{}
+	healthChecker := NewRealHealthChecker(appLogger)
+	healthChecker.redisClient = redisClient.Client
+	healthChecker.config = cfg
 	healthHandler := httphandler.NewHealthHandler(healthChecker)
 
 	// Создание AuthService
