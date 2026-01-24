@@ -69,25 +69,30 @@ func (s *StaticServiceDiscovery) GetInstances(ctx context.Context, serviceName s
 	return activeInstances, nil
 }
 
-// Watch не поддерживается в статическом режиме
+// Watch отслеживает изменения в списке инстансов
 func (s *StaticServiceDiscovery) Watch(ctx context.Context, serviceName string, callback func([]*Instance)) error {
-	// В статическом режиме нет изменений, поэтому просто вызываем callback один раз
-	instances, err := s.GetInstances(ctx, serviceName)
-	if err != nil {
-		return err
-	}
-	callback(instances)
-	// Имитируем постоянное наблюдение
-	ticker := time.NewTicker(30 * time.Second)
+	// В статическом режиме инстансы не изменяются динамически,
+	// но мы можем отслеживать изменения в их состоянии (например, доступность)
 	go func() {
+		ticker := time.NewTicker(10 * time.Second) // Проверяем состояние каждые 10 секунд
 		defer ticker.Stop()
+		
+		var lastActiveCount int
+		
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
 				instances, _ := s.GetInstances(ctx, serviceName)
-				callback(instances)
+				
+				// Проверяем, изменилось ли количество активных инстансов
+				// Это позволяет детектировать изменения в состоянии health check
+				activeCount := len(instances)
+				if activeCount != lastActiveCount {
+					callback(instances)
+					lastActiveCount = activeCount
+				}
 			}
 		}
 	}()
@@ -98,6 +103,8 @@ func (s *StaticServiceDiscovery) Watch(ctx context.Context, serviceName string, 
 // Пока пустая реализация, может быть расширена для работы с Consul, etcd и т.д.
 type DynamicServiceDiscovery struct {
 	// TODO: Реализовать интеграцию с реальными системами обнаружения сервисов
+	// На данный момент в проекте нет интеграции с Consul, etcd или другими системами service discovery
+	// Реализация отложена до добавления соответствующих зависимостей
 }
 
 // NewDynamicServiceDiscovery создает новый DynamicServiceDiscovery
@@ -107,13 +114,27 @@ func NewDynamicServiceDiscovery() *DynamicServiceDiscovery {
 
 // GetInstances возвращает список инстансов для сервиса
 func (d *DynamicServiceDiscovery) GetInstances(ctx context.Context, serviceName string) ([]*Instance, error) {
-	// Заглушка - в реальной реализации будет обращение к Consul, etcd и т.д.
-	return nil, nil
+	// На данный момент в проекте нет интеграции с Consul, etcd или другими системами service discovery
+	// Возвращаем пустой список, так как нет реальной реализации
+	return []*Instance{}, nil
 }
 
 // Watch отслеживает изменения в списке инстансов
 func (d *DynamicServiceDiscovery) Watch(ctx context.Context, serviceName string, callback func([]*Instance)) error {
-	// Заглушка - в реальной реализации будет подписка на изменения
+	// На данный момент в проекте нет интеграции с Consul, etcd или другими системами service discovery
+	// Имитируем постоянное наблюдение с пустым списком инстансов
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				callback([]*Instance{})
+			}
+		}
+	}()
 	return nil
 }
 
