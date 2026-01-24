@@ -11,13 +11,52 @@ import (
 	"time"
 
 	"UptimePingPlatform/pkg/config"
+	"UptimePingPlatform/pkg/health"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
 	"UptimePingPlatform/pkg/ratelimit"
 	pkg_redis "UptimePingPlatform/pkg/redis"
-	httphandler "UptimePingPlatform/services/api-gateway/internal/handler/http" // алиас для вашего пакета http
+	httphandler "UptimePingPlatform/services/api-gateway/internal/handler/http"
 	"UptimePingPlatform/services/api-gateway/internal/middleware"
 )
+
+// AuthServiceStub заглушка для AuthService
+type AuthServiceStub struct{}
+
+func (a *AuthServiceStub) Login(ctx context.Context, email, password string) (*httphandler.TokenPair, error) {
+	return &httphandler.TokenPair{
+		AccessToken:  "stub-access-token",
+		RefreshToken: "stub-refresh-token",
+	}, nil
+}
+
+func (a *AuthServiceStub) Register(ctx context.Context, email, password, tenantName string) (*httphandler.TokenPair, error) {
+	return &httphandler.TokenPair{
+		AccessToken:  "stub-access-token",
+		RefreshToken: "stub-refresh-token",
+	}, nil
+}
+
+func (a *AuthServiceStub) RefreshToken(ctx context.Context, refreshToken string) (*httphandler.TokenPair, error) {
+	return &httphandler.TokenPair{
+		AccessToken:  "new-stub-access-token",
+		RefreshToken: "new-stub-refresh-token",
+	}, nil
+}
+
+func (a *AuthServiceStub) Logout(ctx context.Context, userID, tokenID string) error {
+	return nil
+}
+
+// HealthCheckerStub заглушка для HealthChecker
+// Теперь реализует интерфейс health.HealthChecker из пакета health
+type HealthCheckerStub struct{}
+
+func (h *HealthCheckerStub) Check() *health.HealthStatus {
+	return &health.HealthStatus{
+		Status: "UP",
+	}
+}
 
 func main() {
 	// Инициализация конфигурации
@@ -62,9 +101,15 @@ func main() {
 	// Инициализация метрик
 	metricCollector := metrics.NewMetrics("api_gateway")
 
+	// Создание HealthChecker и HealthHandler
+	healthChecker := &HealthCheckerStub{}
+	healthHandler := httphandler.NewHealthHandler(healthChecker)
+
+	// Создание AuthService
+	authService := &AuthServiceStub{}
+
 	// Настройка HTTP сервера
-	// Используем алиас httphandler для вашего пакета
-	baseHandler := httphandler.NewHandler()
+	baseHandler := httphandler.NewHandler(authService, healthHandler)
 
 	// Обертываем хендлер в middleware
 	var httpHandler http.Handler = baseHandler

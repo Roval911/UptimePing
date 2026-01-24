@@ -36,6 +36,17 @@ type HealthHandler interface {
 	LiveCheck(w http.ResponseWriter, r *http.Request)
 }
 
+// HealthChecker интерфейс для проверки здоровья
+type HealthChecker interface {
+	Check() HealthStatus
+}
+
+// HealthStatus структура для статуса здоровья
+type HealthStatus struct {
+	Status string `json:"status"`
+	// Можно добавить другие поля при необходимости
+}
+
 // NewHandler создает новый экземпляр Handler
 func NewHandler(authService AuthService, healthHandler HealthHandler) *Handler {
 	h := &Handler{
