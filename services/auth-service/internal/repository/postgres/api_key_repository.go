@@ -2,24 +2,21 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
-	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/services/auth-service/internal/domain"
 	"UptimePingPlatform/services/auth-service/internal/repository"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // APIKeyRepository реализация репозитория API ключей для PostgreSQL
 type APIKeyRepository struct {
-	*BaseRepository
+	db *sql.DB
 }
 
 // NewAPIKeyRepository создает новый экземпляр APIKeyRepository
-func NewAPIKeyRepository(pool *pgxpool.Pool) repository.APIKeyRepository {
-	return &APIKeyRepository{BaseRepository: NewBaseRepository(pool)}
+func NewAPIKeyRepository(db *sql.DB) repository.APIKeyRepository {
+	return &APIKeyRepository{db: db}
 }
 
 // Create сохраняет новый API ключ в базе данных
@@ -27,7 +24,7 @@ func (r *APIKeyRepository) Create(ctx context.Context, key *domain.APIKey) error
 	query := `INSERT INTO api_keys (id, tenant_id, key_hash, secret_hash, name, is_active, expires_at, created_at) 
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 
-	_, err := r.Pool.Exec(ctx, query,
+	_, err := r.db.ExecContext(ctx, query,
 		key.ID,
 		key.TenantID,
 		key.KeyHash,
@@ -50,7 +47,7 @@ func (r *APIKeyRepository) FindByID(ctx context.Context, id string) (*domain.API
 		FROM api_keys WHERE id = $1`
 
 	var key domain.APIKey
-	err := r.Pool.QueryRow(ctx, query, id).Scan(
+	err := r.db.QueryRowContext(ctx, query, id).Scan(
 		&key.ID,
 		&key.TenantID,
 		&key.KeyHash,
@@ -62,10 +59,10 @@ func (r *APIKeyRepository) FindByID(ctx context.Context, id string) (*domain.API
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, errors.New(errors.ErrNotFound, "API key not found")
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("API key not found: %w", err)
 		}
-		return nil, errors.Wrap(err, errors.ErrInternal, "failed to get API key by id")
+		return nil, fmt.Errorf("failed to get API key by id: %w", err)
 	}
 
 	return &key, nil
@@ -77,7 +74,7 @@ func (r *APIKeyRepository) FindByKeyHash(ctx context.Context, keyHash string) (*
 		FROM api_keys WHERE key_hash = $1`
 
 	var key domain.APIKey
-	err := r.Pool.QueryRow(ctx, query, keyHash).Scan(
+	err := r.db.QueryRowContext(ctx, query, keyHash).Scan(
 		&key.ID,
 		&key.TenantID,
 		&key.KeyHash,
@@ -89,10 +86,10 @@ func (r *APIKeyRepository) FindByKeyHash(ctx context.Context, keyHash string) (*
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, errors.New(errors.ErrNotFound, "API key not found")
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("API key not found: %w", err)
 		}
-		return nil, errors.Wrap(err, errors.ErrInternal, "failed to get API key by key hash")
+		return nil, fmt.Errorf("failed to get API key by key hash: %w", err)
 	}
 
 	return &key, nil
@@ -103,7 +100,7 @@ func (r *APIKeyRepository) ListByTenant(ctx context.Context, tenantID string) ([
 	query := `SELECT id, tenant_id, key_hash, secret_hash, name, is_active, expires_at, created_at 
 		FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC`
 
-	rows, err := r.Pool.Query(ctx, query, tenantID)
+	rows, err := r.db.QueryContext(ctx, query, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list API keys: %w", err)
 	}
@@ -128,6 +125,7 @@ func (r *APIKeyRepository) ListByTenant(ctx context.Context, tenantID string) ([
 		keys = append(keys, &key)
 	}
 
+	// Проверяем ошибку итерации
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("failed to iterate API keys: %w", err)
 	}
@@ -143,7 +141,7 @@ func (r *APIKeyRepository) Update(ctx context.Context, key *domain.APIKey) error
 		expires_at = $4 
 	WHERE id = $1`
 
-	tag, err := r.Pool.Exec(ctx, query,
+	result, err := r.db.ExecContext(ctx, query,
 		key.ID,
 		key.Name,
 		key.IsActive,
@@ -154,7 +152,12 @@ func (r *APIKeyRepository) Update(ctx context.Context, key *domain.APIKey) error
 		return fmt.Errorf("failed to update API key: %w", err)
 	}
 
-	if tag.RowsAffected() == 0 {
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
 		return fmt.Errorf("API key not found")
 	}
 
@@ -165,12 +168,17 @@ func (r *APIKeyRepository) Update(ctx context.Context, key *domain.APIKey) error
 func (r *APIKeyRepository) Delete(ctx context.Context, id string) error {
 	query := `DELETE FROM api_keys WHERE id = $1`
 
-	tag, err := r.Pool.Exec(ctx, query, id)
+	result, err := r.db.ExecContext(ctx, query, id)
 	if err != nil {
 		return fmt.Errorf("failed to delete API key: %w", err)
 	}
 
-	if tag.RowsAffected() == 0 {
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
 		return fmt.Errorf("API key not found")
 	}
 
