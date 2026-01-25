@@ -23,15 +23,20 @@ func AuthMiddleware(authClient AuthClient) func(http.Handler) http.Handler {
 			}
 
 			// Определение типа аутентификации
+			var err error
+			var updatedReq *http.Request
+
 			if isBearerToken(authHeader) {
 				// Обработка Bearer токена (JWT)
-				if err := handleBearerAuth(r, authHeader, authClient); err != nil {
+				updatedReq, err = handleBearerAuth(r, authHeader, authClient)
+				if err != nil {
 					writeError(w, err)
 					return
 				}
 			} else if isAPIKey(authHeader) {
 				// Обработка APIKey
-				if err := handleAPIKeyAuth(r, authHeader, authClient); err != nil {
+				updatedReq, err = handleAPIKeyAuth(r, authHeader, authClient)
+				if err != nil {
 					writeError(w, err)
 					return
 				}
@@ -41,8 +46,8 @@ func AuthMiddleware(authClient AuthClient) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Продолжение выполнения
-			next.ServeHTTP(w, r)
+			// Продолжение выполнения с обновленным запросом
+			next.ServeHTTP(w, updatedReq)
 		})
 	}
 }
@@ -58,14 +63,14 @@ func isAPIKey(authHeader string) bool {
 }
 
 // handleBearerAuth обрабатывает аутентификацию через Bearer токен
-func handleBearerAuth(r *http.Request, authHeader string, authClient AuthClient) error {
+func handleBearerAuth(r *http.Request, authHeader string, authClient AuthClient) (*http.Request, error) {
 	// Извлечение токена
 	token := authHeader[7:] // Убираем "Bearer "
 
 	// Вызов Auth Service: ValidateToken()
 	claims, err := authClient.ValidateToken(r.Context(), token)
 	if err != nil {
-		return errors.Wrap(err, errors.ErrUnauthorized, "failed to validate token")
+		return nil, errors.Wrap(err, errors.ErrUnauthorized, "failed to validate token")
 	}
 
 	// Добавление user_id, tenant_id в контекст
@@ -75,23 +80,23 @@ func handleBearerAuth(r *http.Request, authHeader string, authClient AuthClient)
 	ctx = context.WithValue(ctx, "is_admin", claims.IsAdmin)
 
 	// Обновляем запрос с новым контекстом
-	r = r.WithContext(ctx)
+	updatedReq := r.WithContext(ctx)
 
-	return nil
+	return updatedReq, nil
 }
 
 // handleAPIKeyAuth обрабатывает аутентификацию через API ключ
-func handleAPIKeyAuth(r *http.Request, authHeader string, authClient AuthClient) error {
+func handleAPIKeyAuth(r *http.Request, authHeader string, authClient AuthClient) (*http.Request, error) {
 	// Извлечение key и secret
 	key, secret, err := extractAPIKeyCredentials(authHeader)
 	if err != nil {
-		return errors.Wrap(err, errors.ErrUnauthorized, "failed to extract API key credentials")
+		return nil, errors.Wrap(err, errors.ErrUnauthorized, "failed to extract API key credentials")
 	}
 
 	// Вызов Auth Service: ValidateAPIKey()
 	claims, err := authClient.ValidateAPIKey(r.Context(), key, secret)
 	if err != nil {
-		return errors.Wrap(err, errors.ErrUnauthorized, "failed to validate API key")
+		return nil, errors.Wrap(err, errors.ErrUnauthorized, "failed to validate API key")
 	}
 
 	// Добавление tenant_id в контекст
@@ -100,9 +105,9 @@ func handleAPIKeyAuth(r *http.Request, authHeader string, authClient AuthClient)
 	ctx = context.WithValue(ctx, "api_key_id", claims.KeyID)
 
 	// Обновляем запрос с новым контекстом
-	r = r.WithContext(ctx)
+	updatedReq := r.WithContext(ctx)
 
-	return nil
+	return updatedReq, nil
 }
 
 // extractAPIKeyCredentials извлекает key и secret из заголовка Authorization
