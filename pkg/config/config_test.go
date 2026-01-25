@@ -249,6 +249,30 @@ func TestConfig_Save(t *testing.T) {
 			Format: "json",
 		},
 		Environment: "dev",
+		AuthService: ServiceConfig{
+			Host: "localhost",
+			Port: 50051,
+		},
+		ConfigService: ServiceConfig{
+			Host: "localhost",
+			Port: 50052,
+		},
+		CoreService: ServiceConfig{
+			Host: "localhost",
+			Port: 50053,
+		},
+		ForgeService: ServiceConfig{
+			Host: "localhost",
+			Port: 50054,
+		},
+		IncidentService: ServiceConfig{
+			Host: "localhost",
+			Port: 50055,
+		},
+		SchedulerService: ServiceConfig{
+			Host: "localhost",
+			Port: 50056,
+		},
 	}
 
 	// Save to temp file
