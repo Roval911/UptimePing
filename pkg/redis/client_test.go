@@ -43,27 +43,27 @@ func TestHealthCheck(t *testing.T) {
 // TestNewConfig проверяет создание конфигурации по умолчанию
 func TestNewConfig(t *testing.T) {
 	config := NewConfig()
-	
+
 	if config.Addr != "localhost:6379" {
 		t.Errorf("Expected addr 'localhost:6379', got %s", config.Addr)
 	}
-	
+
 	if config.DB != 0 {
 		t.Errorf("Expected DB 0, got %d", config.DB)
 	}
-	
+
 	if config.PoolSize != 10 {
 		t.Errorf("Expected pool size 10, got %d", config.PoolSize)
 	}
-	
+
 	if config.MinIdleConn != 2 {
 		t.Errorf("Expected min idle conn 2, got %d", config.MinIdleConn)
 	}
-	
+
 	if config.MaxRetries != 3 {
 		t.Errorf("Expected max retries 3, got %d", config.MaxRetries)
 	}
-	
+
 	if config.RetryInterval != 1*time.Second {
 		t.Errorf("Expected retry interval 1s, got %s", config.RetryInterval)
 	}

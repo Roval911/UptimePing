@@ -76,16 +76,16 @@ func (s *StaticServiceDiscovery) Watch(ctx context.Context, serviceName string, 
 	go func() {
 		ticker := time.NewTicker(10 * time.Second) // Проверяем состояние каждые 10 секунд
 		defer ticker.Stop()
-		
+
 		var lastActiveCount int
-		
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
 				instances, _ := s.GetInstances(ctx, serviceName)
-				
+
 				// Проверяем, изменилось ли количество активных инстансов
 				// Это позволяет детектировать изменения в состоянии health check
 				activeCount := len(instances)

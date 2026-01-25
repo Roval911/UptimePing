@@ -39,7 +39,7 @@ func LoggingInterceptor(log logger.Logger) grpc.UnaryClientInterceptor {
 		if err != nil {
 			// Логируем ошибку
 			st, _ := status.FromError(err)
-			logFields = append(logFields, 
+			logFields = append(logFields,
 				logger.String("error", err.Error()),
 				logger.Int("grpc_code", int(st.Code())),
 				logger.String("grpc_message", st.Message()),
@@ -83,7 +83,7 @@ func LoggingServerInterceptor(log logger.Logger) grpc.UnaryServerInterceptor {
 		if err != nil {
 			// Логируем ошибку
 			st, _ := status.FromError(err)
-			logFields = append(logFields, 
+			logFields = append(logFields,
 				logger.String("error", err.Error()),
 				logger.Int("grpc_code", int(st.Code())),
 				logger.String("grpc_message", st.Message()),

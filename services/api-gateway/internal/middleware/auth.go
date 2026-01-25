@@ -62,7 +62,6 @@ func handleBearerAuth(r *http.Request, authHeader string, authClient AuthClient)
 	// Извлечение токена
 	token := authHeader[7:] // Убираем "Bearer "
 
-
 	// Вызов Auth Service: ValidateToken()
 	claims, err := authClient.ValidateToken(r.Context(), token)
 	if err != nil {

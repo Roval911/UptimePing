@@ -31,43 +31,43 @@ func TestConnect_Success(t *testing.T) {
 // TestNewConfig проверяет создание конфигурации по умолчанию
 func TestNewConfig(t *testing.T) {
 	config := NewConfig()
-	
+
 	if config.URL != "amqp://guest:guest@localhost:5672/" {
 		t.Errorf("Expected URL 'amqp://guest:guest@localhost:5672/', got %s", config.URL)
 	}
-	
+
 	if config.Exchange != "" {
 		t.Errorf("Expected exchange '', got %s", config.Exchange)
 	}
-	
+
 	if config.Queue != "" {
 		t.Errorf("Expected queue '', got %s", config.Queue)
 	}
-	
+
 	if config.DLX != "dlx" {
 		t.Errorf("Expected DLX 'dlx', got %s", config.DLX)
 	}
-	
+
 	if config.DLQ != "dlq" {
 		t.Errorf("Expected DLQ 'dlq', got %s", config.DLQ)
 	}
-	
+
 	if config.ReconnectInterval != 5*time.Second {
 		t.Errorf("Expected reconnect interval 5s, got %s", config.ReconnectInterval)
 	}
-	
+
 	if config.MaxRetries != 3 {
 		t.Errorf("Expected max retries 3, got %d", config.MaxRetries)
 	}
-	
+
 	if config.PrefetchCount != 1 {
 		t.Errorf("Expected prefetch count 1, got %d", config.PrefetchCount)
 	}
-	
+
 	if config.PrefetchSize != 0 {
 		t.Errorf("Expected prefetch size 0, got %d", config.PrefetchSize)
 	}
-	
+
 	if config.Global != false {
 		t.Errorf("Expected global false, got %t", config.Global)
 	}
