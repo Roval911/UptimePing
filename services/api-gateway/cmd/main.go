@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,118 +11,13 @@ import (
 	"time"
 
 	"UptimePingPlatform/pkg/config"
-	"UptimePingPlatform/pkg/health"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
 	"UptimePingPlatform/pkg/ratelimit"
 	pkg_redis "UptimePingPlatform/pkg/redis"
-	httphandler "UptimePingPlatform/services/api-gateway/internal/handler/http"
+	httphandler "UptimePingPlatform/services/api-gateway/internal/handler/http" // алиас для вашего пакета http
 	"UptimePingPlatform/services/api-gateway/internal/middleware"
-
-	"github.com/go-redis/redis/v8"
 )
-
-// AuthServiceStub заглушка для AuthService
-type AuthServiceStub struct{}
-
-func (a *AuthServiceStub) Login(ctx context.Context, email, password string) (*httphandler.TokenPair, error) {
-	return &httphandler.TokenPair{
-		AccessToken:  "stub-access-token",
-		RefreshToken: "stub-refresh-token",
-	}, nil
-}
-
-func (a *AuthServiceStub) Register(ctx context.Context, email, password, tenantName string) (*httphandler.TokenPair, error) {
-	return &httphandler.TokenPair{
-		AccessToken:  "stub-access-token",
-		RefreshToken: "stub-refresh-token",
-	}, nil
-}
-
-func (a *AuthServiceStub) RefreshToken(ctx context.Context, refreshToken string) (*httphandler.TokenPair, error) {
-	return &httphandler.TokenPair{
-		AccessToken:  "new-stub-access-token",
-		RefreshToken: "new-stub-refresh-token",
-	}, nil
-}
-
-func (a *AuthServiceStub) Logout(ctx context.Context, userID, tokenID string) error {
-	return nil
-}
-
-// RealHealthChecker реальная реализация HealthChecker
-// Проверяет здоровье сервиса и его зависимостей
-type RealHealthChecker struct {
-	database    *sql.DB
-	redisClient *redis.Client
-	config      *config.Config
-	logger      logger.Logger
-}
-
-// NewRealHealthChecker создает новый экземпляр RealHealthChecker
-func NewRealHealthChecker(logger logger.Logger) *RealHealthChecker {
-	return &RealHealthChecker{
-		logger: logger,
-	}
-}
-
-// Check проверяет здоровье сервиса
-func (h *RealHealthChecker) Check() *health.HealthStatus {
-	status := &health.HealthStatus{
-		Status:    "healthy",
-		Timestamp: time.Now(),
-		Services:  make(map[string]health.Status),
-	}
-
-	// Проверка базы данных (если подключена)
-	if h.database != nil {
-		if err := h.database.Ping(); err != nil {
-			status.Status = "degraded"
-			status.Services["database"] = health.Status{
-				Status:  "unhealthy",
-				Details: err.Error(),
-			}
-		} else {
-			status.Services["database"] = health.Status{
-				Status: "healthy",
-			}
-		}
-	}
-
-	// Проверка Redis
-	if h.redisClient != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if _, err := h.redisClient.Ping(ctx).Result(); err != nil {
-			status.Status = "degraded"
-			status.Services["redis"] = health.Status{
-				Status:  "unhealthy",
-				Details: err.Error(),
-			}
-		} else {
-			status.Services["redis"] = health.Status{
-				Status: "healthy",
-			}
-		}
-	}
-
-	// Проверка конфигурации
-	if h.config != nil {
-		status.Services["config"] = health.Status{
-			Status: "healthy",
-		}
-	}
-
-	// Если есть нездоровые сервисы, меняем общий статус
-	for _, serviceStatus := range status.Services {
-		if serviceStatus.Status != "healthy" {
-			status.Status = "degraded"
-			break
-		}
-	}
-
-	return status
-}
 
 func main() {
 	// Инициализация конфигурации
@@ -168,17 +62,9 @@ func main() {
 	// Инициализация метрик
 	metricCollector := metrics.NewMetrics("api_gateway")
 
-	// Создание HealthChecker и HealthHandler
-	healthChecker := NewRealHealthChecker(appLogger)
-	healthChecker.redisClient = redisClient.Client
-	healthChecker.config = cfg
-	healthHandler := httphandler.NewHealthHandler(healthChecker)
-
-	// Создание AuthService
-	authService := &AuthServiceStub{}
-
 	// Настройка HTTP сервера
-	baseHandler := httphandler.NewHandler(authService, healthHandler)
+	// Используем алиас httphandler для вашего пакета
+	baseHandler := httphandler.NewHandler()
 
 	// Обертываем хендлер в middleware
 	var httpHandler http.Handler = baseHandler
