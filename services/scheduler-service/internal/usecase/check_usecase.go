@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/scheduler-service/internal/domain"
 	"UptimePingPlatform/services/scheduler-service/internal/repository"
 )
@@ -15,13 +16,15 @@ import (
 type CheckUseCase struct {
 	checkRepo     repository.CheckRepository
 	schedulerRepo repository.SchedulerRepository
+	logger        logger.Logger
 }
 
 // NewCheckUseCase создает новый экземпляр CheckUseCase
-func NewCheckUseCase(checkRepo repository.CheckRepository, schedulerRepo repository.SchedulerRepository) *CheckUseCase {
+func NewCheckUseCase(checkRepo repository.CheckRepository, schedulerRepo repository.SchedulerRepository, logger logger.Logger) *CheckUseCase {
 	return &CheckUseCase{
 		checkRepo:     checkRepo,
 		schedulerRepo: schedulerRepo,
+		logger:        logger,
 	}
 }
 
@@ -58,7 +61,12 @@ func (uc *CheckUseCase) CreateCheck(ctx context.Context, tenantID string, check 
 	if check.Status == domain.CheckStatusActive {
 		if err := uc.schedulerRepo.AddCheck(ctx, check); err != nil {
 			// Логируем ошибку, но не откатываем создание проверки
-			// В реальной системе здесь нужно добавить логирование
+			uc.logger.Error("Failed to add check to scheduler",
+				logger.CtxField(ctx),
+				logger.String("check_id", checkID),
+				logger.String("tenant_id", tenantID),
+				logger.Error(err),
+			)
 			return check, fmt.Errorf("check created but failed to add to scheduler: %w", err)
 		}
 	}
@@ -101,6 +109,11 @@ func (uc *CheckUseCase) UpdateCheck(ctx context.Context, checkID string, check *
 	// Сначала удаляем старую версию
 	if err := uc.schedulerRepo.RemoveCheck(ctx, checkID); err != nil {
 		// Логируем ошибку, но продолжаем
+		uc.logger.Warn("Failed to remove check from scheduler during update",
+			logger.CtxField(ctx),
+			logger.String("check_id", checkID),
+			logger.Error(err),
+		)
 	}
 
 	// Если проверка активна, добавляем обновленную версию
@@ -125,6 +138,12 @@ func (uc *CheckUseCase) DeleteCheck(ctx context.Context, checkID string) error {
 	if check.Status == domain.CheckStatusActive {
 		if err := uc.schedulerRepo.RemoveCheck(ctx, checkID); err != nil {
 			// Логируем ошибку, но продолжаем удаление
+			uc.logger.Warn("Failed to remove check from scheduler during deletion",
+				logger.CtxField(ctx),
+				logger.String("check_id", checkID),
+				logger.String("tenant_id", check.TenantID),
+				logger.Error(err),
+			)
 		}
 	}
 

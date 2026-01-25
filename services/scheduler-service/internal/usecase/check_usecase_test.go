@@ -8,8 +8,40 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/scheduler-service/internal/domain"
 )
+
+// MockLogger - мок для logger.Logger
+type MockLogger struct {
+	mock.Mock
+}
+
+func (m *MockLogger) Debug(msg string, fields ...logger.Field) {
+	m.Called(msg, fields)
+}
+
+func (m *MockLogger) Info(msg string, fields ...logger.Field) {
+	m.Called(msg, fields)
+}
+
+func (m *MockLogger) Warn(msg string, fields ...logger.Field) {
+	m.Called(msg, fields)
+}
+
+func (m *MockLogger) Error(msg string, fields ...logger.Field) {
+	m.Called(msg, fields)
+}
+
+func (m *MockLogger) With(fields ...logger.Field) logger.Logger {
+	args := m.Called(fields)
+	return args.Get(0).(logger.Logger)
+}
+
+func (m *MockLogger) Sync() error {
+	args := m.Called()
+	return args.Error(0)
+}
 
 // MockCheckRepository - мок для CheckRepository
 type MockCheckRepository struct {
@@ -79,11 +111,12 @@ func (m *MockSchedulerRepository) GetScheduledChecks(ctx context.Context) ([]*do
 	return args.Get(0).([]*domain.Check), args.Error(1)
 }
 
-func setupTestUseCase() (*CheckUseCase, *MockCheckRepository, *MockSchedulerRepository) {
+func setupTestUseCase() (*CheckUseCase, *MockCheckRepository, *MockSchedulerRepository, *MockLogger) {
 	mockCheckRepo := &MockCheckRepository{}
 	mockSchedulerRepo := &MockSchedulerRepository{}
-	useCase := NewCheckUseCase(mockCheckRepo, mockSchedulerRepo)
-	return useCase, mockCheckRepo, mockSchedulerRepo
+	mockLogger := &MockLogger{}
+	useCase := NewCheckUseCase(mockCheckRepo, mockSchedulerRepo, mockLogger)
+	return useCase, mockCheckRepo, mockSchedulerRepo, mockLogger
 }
 
 func TestCheckUseCase_CreateCheck_Success(t *testing.T) {
@@ -102,7 +135,7 @@ func TestCheckUseCase_CreateCheck_Success(t *testing.T) {
 		Tags:     []string{"test"},
 	}
 
-	useCase, mockCheckRepo, mockSchedulerRepo := setupTestUseCase()
+	useCase, mockCheckRepo, mockSchedulerRepo, mockLogger := setupTestUseCase()
 
 	// Настройка моков
 	mockCheckRepo.On("Create", ctx, mock.AnythingOfType("*domain.Check")).Return(nil)
@@ -122,6 +155,7 @@ func TestCheckUseCase_CreateCheck_Success(t *testing.T) {
 
 	mockCheckRepo.AssertExpectations(t)
 	mockSchedulerRepo.AssertExpectations(t)
+	mockLogger.AssertExpectations(t)
 }
 
 func TestCheckUseCase_CreateCheck_ValidationError(t *testing.T) {
@@ -138,7 +172,7 @@ func TestCheckUseCase_CreateCheck_ValidationError(t *testing.T) {
 		Priority: domain.PriorityNormal,
 	}
 
-	useCase, _, _ := setupTestUseCase()
+	useCase, _, _, _ := setupTestUseCase()
 
 	// Вызов метода
 	result, err := useCase.CreateCheck(ctx, tenantID, check)
@@ -163,11 +197,12 @@ func TestCheckUseCase_CreateCheck_SchedulerError(t *testing.T) {
 		Priority: domain.PriorityNormal,
 	}
 
-	useCase, mockCheckRepo, mockSchedulerRepo := setupTestUseCase()
+	useCase, mockCheckRepo, mockSchedulerRepo, mockLogger := setupTestUseCase()
 
 	// Настройка моков
 	mockCheckRepo.On("Create", ctx, mock.AnythingOfType("*domain.Check")).Return(nil)
 	mockSchedulerRepo.On("AddCheck", ctx, mock.AnythingOfType("*domain.Check")).Return(assert.AnError)
+	mockLogger.On("Error", mock.AnythingOfType("string"), mock.Anything)
 
 	// Вызов метода
 	result, err := useCase.CreateCheck(ctx, tenantID, check)
@@ -179,6 +214,7 @@ func TestCheckUseCase_CreateCheck_SchedulerError(t *testing.T) {
 
 	mockCheckRepo.AssertExpectations(t)
 	mockSchedulerRepo.AssertExpectations(t)
+	mockLogger.AssertExpectations(t)
 }
 
 func TestCheckUseCase_UpdateCheck_Success(t *testing.T) {
@@ -209,7 +245,7 @@ func TestCheckUseCase_UpdateCheck_Success(t *testing.T) {
 		Priority: domain.PriorityHigh,
 	}
 
-	useCase, mockCheckRepo, mockSchedulerRepo := setupTestUseCase()
+	useCase, mockCheckRepo, mockSchedulerRepo, _ := setupTestUseCase()
 
 	// Настройка моков
 	mockCheckRepo.On("GetByID", ctx, checkID).Return(existingCheck, nil)
@@ -241,7 +277,7 @@ func TestCheckUseCase_UpdateCheck_NotFound(t *testing.T) {
 		Priority: domain.PriorityNormal,
 	}
 
-	useCase, mockCheckRepo, _ := setupTestUseCase()
+	useCase, mockCheckRepo, _, _ := setupTestUseCase()
 
 	// Настройка моков - возвращаем nil и ошибку
 	mockCheckRepo.On("GetByID", ctx, checkID).Return(nil, assert.AnError)
@@ -274,7 +310,7 @@ func TestCheckUseCase_DeleteCheck_Success(t *testing.T) {
 		UpdatedAt: time.Now().Add(-time.Hour),
 	}
 
-	useCase, mockCheckRepo, mockSchedulerRepo := setupTestUseCase()
+	useCase, mockCheckRepo, mockSchedulerRepo, _ := setupTestUseCase()
 
 	// Настройка моков
 	mockCheckRepo.On("GetByID", ctx, checkID).Return(existingCheck, nil)
@@ -295,7 +331,7 @@ func TestCheckUseCase_DeleteCheck_NotFound(t *testing.T) {
 	ctx := context.Background()
 	checkID := "non-existent-check"
 
-	useCase, mockCheckRepo, _ := setupTestUseCase()
+	useCase, mockCheckRepo, _, _ := setupTestUseCase()
 
 	// Настройка моков
 	mockCheckRepo.On("GetByID", ctx, checkID).Return(nil, assert.AnError)
@@ -311,7 +347,7 @@ func TestCheckUseCase_DeleteCheck_NotFound(t *testing.T) {
 }
 
 func TestCheckUseCase_validateHTTPConfig(t *testing.T) {
-	useCase, _, _ := setupTestUseCase()
+	useCase, _, _, _ := setupTestUseCase()
 
 	tests := []struct {
 		name    string
@@ -357,7 +393,7 @@ func TestCheckUseCase_validateHTTPConfig(t *testing.T) {
 }
 
 func TestCheckUseCase_validateTCPConfig(t *testing.T) {
-	useCase, _, _ := setupTestUseCase()
+	useCase, _, _, _ := setupTestUseCase()
 
 	tests := []struct {
 		name    string
