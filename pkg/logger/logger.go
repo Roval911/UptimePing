@@ -15,7 +15,6 @@ type Logger interface {
 	Warn(msg string, fields ...Field)
 	Error(msg string, fields ...Field)
 	With(fields ...Field) Logger
-	Sync() error
 }
 
 // Field представляет поле лога
@@ -51,14 +50,16 @@ func NewLogger(environment, level, serviceName string, enableLoki bool) (Logger,
 		zapLevel = zap.InfoLevel
 	}
 
-	// Определяем настройки кодирования
+	// Определяем настройки кодирования в зависимости от окружения
 	var encoderConfig zapcore.EncoderConfig
 	var encoder zapcore.Encoder
-
+	
 	if environment == "dev" {
+		// Для разработки используем читаемый формат
 		encoderConfig = zap.NewDevelopmentEncoderConfig()
 		encoder = zapcore.NewConsoleEncoder(encoderConfig)
 	} else {
+		// Для продакшена используем JSON формат
 		encoderConfig = zap.NewProductionEncoderConfig()
 		encoderConfig.TimeKey = "time"
 		encoderConfig.LevelKey = "level"
@@ -81,14 +82,23 @@ func NewLogger(environment, level, serviceName string, enableLoki bool) (Logger,
 		zap.NewAtomicLevelAt(zapLevel),
 	)
 
-	// Создаем логгер ОДИН раз
+	// Создаем логгер
 	zapLogger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zap.ErrorLevel))
+	defer zapLogger.Sync()
 
 	// Добавляем поля по умолчанию
 	zapLogger = zapLogger.With(
 		zap.String("service", serviceName),
 		zap.String("environment", environment),
 	)
+
+	// Если включена интеграция с Loki, добавляем дополнительные настройки
+	// В реальной реализации здесь будет настройка отправки логов в Loki
+	if enableLoki {
+		// TODO: Добавить интеграцию с Loki
+		// Например, настройка Loki через promtail или прямое API
+		zapLogger.Info("Loki integration enabled")
+	}
 
 	return &LoggerImpl{zapLogger: zapLogger}, nil
 }
@@ -138,17 +148,12 @@ func (l *LoggerImpl) With(fields ...Field) Logger {
 	return &LoggerImpl{zapLogger: l.zapLogger.With(zapFields...)}
 }
 
-// Sync закрывает логгер
-func (l *LoggerImpl) Sync() error {
-	return l.zapLogger.Sync()
-}
-
 // CtxField возвращает поле с trace_id из контекста
 func CtxField(ctx context.Context) Field {
 	if traceID, ok := ctx.Value("trace_id").(string); ok {
-		return String("trace_id", traceID)
+		return Field{zap.String("trace_id", traceID)}
 	}
-	return String("trace_id", "unknown")
+	return Field{zap.String("trace_id", "unknown")}
 }
 
 // String создает поле со строковым значением
@@ -159,16 +164,6 @@ func String(key, val string) Field {
 // Int создает поле с целочисленным значением
 func Int(key string, val int) Field {
 	return Field{zap.Int(key, val)}
-}
-
-// Int32 создает поле с целочисленным значением типа int32
-func Int32(key string, val int32) Field {
-	return Field{zap.Int32(key, val)}
-}
-
-// Int64 создает поле с целочисленным значением типа int64
-func Int64(key string, val int64) Field {
-	return Field{zap.Int64(key, val)}
 }
 
 // Float64 создает поле с значением типа float64
