@@ -38,7 +38,7 @@ func (p *Producer) Publish(ctx context.Context, body []byte, options ...PublishO
 	if p.conn.Channel() == nil {
 		return fmt.Errorf("rabbitmq channel is not initialized")
 	}
-
+	
 	// Включаем confirm mode для получения подтверждений
 	if err := p.conn.Channel().Confirm(false); err != nil {
 		return fmt.Errorf("failed to enable confirm mode: %w", err)

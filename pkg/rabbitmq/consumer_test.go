@@ -15,12 +15,12 @@ func TestConsumer_RegisterHandler(t *testing.T) {
 	conn := &Connection{}
 	config := NewConfig()
 	consumer := NewConsumer(conn, config)
-
+	
 	// Регистрируем обработчик
 	consumer.RegisterHandler("test-queue", func(ctx context.Context, msg amqp091.Delivery) error {
 		return nil
 	})
-
+	
 	// Проверяем, что обработчик зарегистрирован
 	if _, exists := consumer.handlers["test-queue"]; !exists {
 		t.Error("Expected handler to be registered for 'test-queue'")
@@ -34,22 +34,22 @@ func TestConsumer_Start(t *testing.T) {
 	conn := &Connection{}
 	config := NewConfig()
 	consumer := NewConsumer(conn, config)
-
+	
 	// Регистрируем обработчик
 	var handlerCalled int
 	var mu sync.Mutex
-
+	
 	consumer.RegisterHandler("test-queue", func(ctx context.Context, msg amqp091.Delivery) error {
 		mu.Lock()
 		handlerCalled++
 		mu.Unlock()
 		return nil
 	})
-
+	
 	// Создаем контекст с таймаутом
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-
+	
 	// Запускаем консьюмера в отдельной горутине
 	go func() {
 		// В реальном тесте здесь будет реальный RabbitMQ
@@ -59,16 +59,16 @@ func TestConsumer_Start(t *testing.T) {
 			t.Errorf("Unexpected error from Start: %v", err)
 		}
 	}()
-
+	
 	// Ждем немного
 	time.Sleep(50 * time.Millisecond)
-
+	
 	// Отменяем контекст
 	cancel()
-
+	
 	// Ждем завершения
 	time.Sleep(50 * time.Millisecond)
-
+	
 	// Проверяем, что обработчик был вызван (или хотя бы попытка была)
 	// В реальном тесте с моком мы могли бы проверить больше
 }
@@ -80,14 +80,14 @@ func TestConsumer_HealthCheck(t *testing.T) {
 		conn:   nil,
 		config: NewConfig(),
 	}
-
+	
 	// Проверяем health check
 	ctx := context.Background()
 	err := consumer.HealthCheck(ctx)
 	if err == nil {
 		t.Error("Expected error when connection is not initialized")
 	}
-
+	
 	// Создаем консьюмера с фейковым подключением
 	consumer = &Consumer{
 		conn: &Connection{
@@ -95,7 +95,7 @@ func TestConsumer_HealthCheck(t *testing.T) {
 		},
 		config: NewConfig(),
 	}
-
+	
 	// Проверяем health check
 	err = consumer.HealthCheck(ctx)
 	if err == nil {

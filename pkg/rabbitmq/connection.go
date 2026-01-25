@@ -16,12 +16,12 @@ type Connection struct {
 
 // Config представляет конфигурацию RabbitMQ
 type Config struct {
-	URL        string
-	Exchange   string
-	RoutingKey string
-	Queue      string
-	DLX        string // Dead Letter Exchange
-	DLQ        string // Dead Letter Queue
+	URL           string
+	Exchange      string
+	RoutingKey    string
+	Queue         string
+	DLX           string // Dead Letter Exchange
+	DLQ           string // Dead Letter Queue
 	// Connection settings
 	ReconnectInterval time.Duration
 	MaxRetries        int
