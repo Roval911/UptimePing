@@ -5,7 +5,6 @@ import (
 
 	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/logger"
-	"go.uber.org/zap"
 )
 
 // CheckServiceInterface определяет интерфейс для сервиса проверок
@@ -43,8 +42,8 @@ func NewConsumer(
 	}
 
 	consumer.logger.Info("Consumer created",
-		logger.Field{zap.String("queue", config.QueueName)},
-		logger.Field{zap.String("consumer_tag", config.ConsumerTag)},
+		logger.String("queue", config.QueueName),
+		logger.String("consumer_tag", config.ConsumerTag),
 	)
 
 	return consumer, nil
@@ -53,7 +52,7 @@ func NewConsumer(
 // Start запускает обработку сообщений (в реальной реализации это будет RabbitMQ)
 func (c *Consumer) Start(ctx context.Context) error {
 	c.logger.Info("Starting consumer",
-		logger.Field{zap.String("queue", c.queueName)},
+		logger.String("queue", c.queueName),
 	)
 
 	//todo В реальной реализации здесь будет подключение к RabbitMQ
@@ -65,14 +64,14 @@ func (c *Consumer) Start(ctx context.Context) error {
 // ProcessMessage обрабатывает одно сообщение
 func (c *Consumer) ProcessMessage(ctx context.Context, message []byte) error {
 	c.logger.Info("Processing message",
-		logger.Field{zap.Int("size", len(message))},
+		logger.Int("size", len(message)),
 	)
 
 	// Обработка сообщения через CheckService
 	err := c.checkService.ProcessTask(ctx, message)
 	if err != nil {
 		c.logger.Error("Failed to process message",
-			logger.Field{zap.Error(err)},
+			logger.Error(err),
 		)
 		return errors.Wrap(err, errors.ErrInternal, "failed to process message")
 	}

@@ -11,12 +11,17 @@ import (
 	"time"
 
 	"UptimePingPlatform/services/core-service/internal/domain"
+	"UptimePingPlatform/pkg/errors"
+	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/pkg/validation"
 )
 
 // HTTPChecker реализует Checker для HTTP проверок
 type HTTPChecker struct {
 	*BaseChecker
-	client *http.Client
+	client    *http.Client
+	logger    logger.Logger
+	validator *validation.Validator
 }
 
 // HTTPValidationRule представляет правило валидации HTTP ответа
@@ -40,7 +45,7 @@ type HTTPResponseDetails struct {
 }
 
 // NewHTTPChecker создает новый HTTP checker
-func NewHTTPChecker(timeout int64) *HTTPChecker {
+func NewHTTPChecker(timeout int64, log logger.Logger) *HTTPChecker {
 	return &HTTPChecker{
 		BaseChecker: NewBaseChecker(timeout),
 		client: &http.Client{
@@ -51,6 +56,8 @@ func NewHTTPChecker(timeout int64) *HTTPChecker {
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},
+		logger:    log,
+		validator: validation.NewValidator(),
 	}
 }
 
@@ -152,51 +159,60 @@ func (h *HTTPChecker) GetType() domain.TaskType {
 
 // ValidateConfig валидирует HTTP конфигурацию
 func (h *HTTPChecker) ValidateConfig(config map[string]interface{}) error {
-	// Проверка обязательных полей
-	if method, ok := config["method"]; !ok || method == "" {
-		return &ValidationError{Field: "method", Message: "required and cannot be empty"}
+	// Валидация обязательных полей с использованием pkg/validation
+	requiredFields := map[string]string{
+		"method": "HTTP method",
+		"url":    "URL",
 	}
 	
-	if url, ok := config["url"]; !ok || url == "" {
-		return &ValidationError{Field: "url", Message: "required and cannot be empty"}
+	if err := h.validator.ValidateRequiredFields(config, requiredFields); err != nil {
+		h.logger.Debug("HTTP config validation failed", logger.Error(err))
+		return errors.Wrap(err, errors.ErrValidation, "required fields validation failed")
 	}
 	
 	// Валидация HTTP метода
 	method := config["method"].(string)
 	validMethods := []string{"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
-	methodValid := false
-	for _, validMethod := range validMethods {
-		if strings.ToUpper(method) == validMethod {
-			methodValid = true
-			break
-		}
-	}
-	if !methodValid {
-		return &ValidationError{Field: "method", Message: fmt.Sprintf("must be one of: %s", strings.Join(validMethods, ", "))}
+	if err := h.validator.ValidateEnum(method, validMethods, "method"); err != nil {
+		h.logger.Debug("HTTP config validation failed: invalid method", 
+			logger.String("method", method),
+			logger.Error(err))
+		return errors.Wrap(err, errors.ErrValidation, "invalid HTTP method")
 	}
 	
 	// Валидация URL
 	url := config["url"].(string)
-	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		return &ValidationError{Field: "url", Message: "must start with http:// or https://"}
+	if err := h.validator.ValidateURL(url, []string{"http", "https"}); err != nil {
+		h.logger.Debug("HTTP config validation failed: invalid URL", 
+			logger.String("url", url),
+			logger.Error(err))
+		return errors.Wrap(err, errors.ErrValidation, "invalid URL format")
 	}
 	
 	// Валидация ожидаемого статус кода
 	if expectedStatus, ok := config["expected_status"]; ok {
 		if status, ok := expectedStatus.(float64); !ok || status < 100 || status > 599 {
-			return &ValidationError{Field: "expected_status", Message: "must be a valid HTTP status code (100-599)"}
+			err := fmt.Errorf("must be a valid HTTP status code (100-599)")
+			h.logger.Debug("HTTP config validation failed: invalid status code", 
+				logger.Float64("expected_status", status),
+				logger.Error(err))
+			return errors.Wrap(err, errors.ErrValidation, "invalid status code")
 		}
 	}
 	
 	// Валидация таймаута
 	if timeout, ok := config["timeout"]; ok {
 		if timeoutStr, ok := timeout.(string); ok {
-			if _, err := time.ParseDuration(timeoutStr); err != nil {
-				return &ValidationError{Field: "timeout", Message: "invalid duration format"}
+			if err := h.validator.ValidateTimeout(30, 1, 300); err != nil {
+				h.logger.Debug("HTTP config validation failed: invalid timeout", 
+					logger.String("timeout", timeoutStr),
+					logger.Error(err))
+				return errors.Wrap(err, errors.ErrValidation, "invalid timeout value")
 			}
 		}
 	}
 	
+	h.logger.Debug("HTTP config validation passed")
 	return nil
 }
 

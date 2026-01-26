@@ -8,6 +8,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	grpcBase "UptimePingPlatform/pkg/grpc"
+	"UptimePingPlatform/pkg/logger"
 	authv1 "UptimePingPlatform/gen/go/proto/api/auth/v1"
 )
 
@@ -15,29 +17,47 @@ import (
 type GRPCAuthClient struct {
 	client authv1.AuthServiceClient
 	conn   *grpc.ClientConn
+	baseHandler *grpcBase.BaseHandler
 }
 
 // NewGRPCAuthClient создает новый gRPC клиент для AuthService
-func NewGRPCAuthClient(address string, timeout time.Duration) (*GRPCAuthClient, error) {
+func NewGRPCAuthClient(address string, timeout time.Duration, logger logger.Logger) (*GRPCAuthClient, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+
+	// Инициализируем BaseHandler
+	baseHandler := grpcBase.NewBaseHandler(logger)
+
+	// Логируем начало операции
+	baseHandler.LogOperationStart(ctx, "grpc_auth_client_connect", map[string]interface{}{
+		"address": address,
+		"timeout": timeout.String(),
+	})
 
 	// Устанавливаем соединение с gRPC сервером
 	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
+		baseHandler.LogError(ctx, err, "grpc_auth_client_connect_failed", "")
 		return nil, fmt.Errorf("failed to connect to auth service: %w", err)
 	}
 
 	// Проверяем соединение
 	if !conn.WaitForStateChange(ctx, conn.GetState()) {
+		baseHandler.LogError(ctx, fmt.Errorf("timeout while establishing connection"), "grpc_auth_client_connect_timeout", "")
 		return nil, fmt.Errorf("timeout while establishing connection")
 	}
 
 	client := authv1.NewAuthServiceClient(conn)
 
+	// Логируем успешное подключение
+	baseHandler.LogOperationSuccess(ctx, "grpc_auth_client_connect", map[string]interface{}{
+		"address": address,
+	})
+
 	return &GRPCAuthClient{
-		client: client,
-		conn:   conn,
+		client:      client,
+		conn:        conn,
+		baseHandler: baseHandler,
 	}, nil
 }
 

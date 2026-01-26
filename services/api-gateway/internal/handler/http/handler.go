@@ -7,6 +7,9 @@ import (
 	"net/http"
 
 	pkgErrors "UptimePingPlatform/pkg/errors"
+	grpcBase "UptimePingPlatform/pkg/grpc"
+	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/pkg/validation"
 	"UptimePingPlatform/services/api-gateway/internal/client"
 	schedulerv1 "UptimePingPlatform/gen/go/proto/api/scheduler/v1"
 )
@@ -17,6 +20,8 @@ type Handler struct {
 	authService     AuthService
 	healthHandler   HealthHandler
 	schedulerClient *client.SchedulerClient
+	baseHandler     *grpcBase.BaseHandler
+	validator       *validation.Validator
 }
 
 // AuthService интерфейс для сервиса аутентификации
@@ -41,12 +46,14 @@ type HealthHandler interface {
 }
 
 // NewHandler создает новый экземпляр Handler
-func NewHandler(authService AuthService, healthHandler HealthHandler, schedulerClient *client.SchedulerClient) *Handler {
+func NewHandler(authService AuthService, healthHandler HealthHandler, schedulerClient *client.SchedulerClient, logger logger.Logger) *Handler {
 	h := &Handler{
 		mux:             http.NewServeMux(),
 		authService:     authService,
 		healthHandler:   healthHandler,
 		schedulerClient: schedulerClient,
+		baseHandler:     grpcBase.NewBaseHandler(logger),
+		validator:       validation.NewValidator(),
 	}
 
 	// Настройка роутинга
@@ -118,14 +125,29 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Валидация входных данных
-	if req.Email == "" {
-		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "email is required"), http.StatusBadRequest)
+	// Валидация входных данных с использованием pkg/validation
+	requiredFields := map[string]interface{}{
+		"email":    req.Email,
+		"password": req.Password,
+	}
+	
+	if err := h.validator.ValidateRequiredFields(requiredFields, map[string]string{
+		"email":    "Email address",
+		"password": "Password",
+	}); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "validation failed"), http.StatusBadRequest)
 		return
 	}
 
-	if req.Password == "" {
-		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "password is required"), http.StatusBadRequest)
+	// Валидация формата email
+	if err := h.validator.ValidateStringLength(req.Email, "email", 5, 100); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid email format"), http.StatusBadRequest)
+		return
+	}
+
+	// Валидация длины пароля
+	if err := h.validator.ValidateStringLength(req.Password, "password", 8, 128); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid password length"), http.StatusBadRequest)
 		return
 	}
 

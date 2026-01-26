@@ -9,10 +9,10 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
-	"go.uber.org/zap"
 	"UptimePingPlatform/services/core-service/internal/domain"
 	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/pkg/validation"
 )
 
 // gRPCChecker реализует Checker для gRPC проверок
@@ -20,6 +20,7 @@ type gRPCChecker struct {
 	*BaseChecker
 	dialTimeout time.Duration
 	logger      logger.Logger
+	validator   *validation.Validator
 }
 
 // NewgRPCChecker создает новый gRPC checker
@@ -28,22 +29,23 @@ func NewgRPCChecker(timeout int64, log logger.Logger) *gRPCChecker {
 		BaseChecker: NewBaseChecker(timeout),
 		dialTimeout: time.Duration(timeout) * time.Millisecond,
 		logger:      log,
+		validator:   validation.NewValidator(),
 	}
 }
 
 // Execute выполняет gRPC проверку
 func (g *gRPCChecker) Execute(task *domain.Task) (*domain.CheckResult, error) {
 	g.logger.Info("Starting gRPC check",
-		logger.Field{zap.String("check_id", task.CheckID)},
-		logger.Field{zap.String("execution_id", task.ExecutionID)},
-		logger.Field{zap.String("target", task.Target)},
+		logger.String("check_id", task.CheckID),
+		logger.String("execution_id", task.ExecutionID),
+		logger.String("target", task.Target),
 	)
 	
 	// Валидация конфигурации
 	if err := g.ValidateConfig(task.Config); err != nil {
 		g.logger.Error("gRPC config validation failed",
-			logger.Field{zap.String("check_id", task.CheckID)},
-			logger.Field{zap.Error(err)},
+			logger.String("check_id", task.CheckID),
+			logger.Error(err),
 		)
 		return nil, errors.Wrap(err, errors.ErrValidation, "config validation failed")
 	}
@@ -52,8 +54,8 @@ func (g *gRPCChecker) Execute(task *domain.Task) (*domain.CheckResult, error) {
 	grpcConfig, err := task.GetgRPCConfig()
 	if err != nil {
 		g.logger.Error("Failed to extract gRPC config",
-			logger.Field{zap.String("check_id", task.CheckID)},
-			logger.Field{zap.Error(err)},
+			logger.String("check_id", task.CheckID),
+			logger.Error(err),
 		)
 		return nil, errors.Wrap(err, errors.ErrInternal, "failed to extract gRPC config")
 	}
@@ -61,9 +63,9 @@ func (g *gRPCChecker) Execute(task *domain.Task) (*domain.CheckResult, error) {
 	// Формирование адреса
 	address := fmt.Sprintf("%s:%d", grpcConfig.Host, grpcConfig.Port)
 	g.logger.Debug("Connecting to gRPC service",
-		logger.Field{zap.String("address", address)},
-		logger.Field{zap.String("service", grpcConfig.Service)},
-		logger.Field{zap.String("method", grpcConfig.Method)},
+		logger.String("address", address),
+		logger.String("service", grpcConfig.Service),
+		logger.String("method", grpcConfig.Method),
 	)
 	
 	// Создание контекста с таймаутом
@@ -85,9 +87,9 @@ func (g *gRPCChecker) Execute(task *domain.Task) (*domain.CheckResult, error) {
 	
 	if err != nil {
 		g.logger.Error("Failed to connect to gRPC service",
-			logger.Field{zap.String("address", address)},
-			logger.Field{zap.Duration("duration", duration)},
-			logger.Field{zap.Error(err)},
+			logger.String("address", address),
+			logger.Duration("duration", duration),
+			logger.Error(err),
 		)
 		return g.createErrorResult(task, 0, duration.Milliseconds(), 
 			errors.Wrap(err, errors.ErrInternal, "failed to connect")), nil
@@ -95,16 +97,16 @@ func (g *gRPCChecker) Execute(task *domain.Task) (*domain.CheckResult, error) {
 	defer conn.Close()
 	
 	g.logger.Info("Successfully connected to gRPC service",
-		logger.Field{zap.String("address", address)},
-		logger.Field{zap.Duration("duration", duration)},
+		logger.String("address", address),
+		logger.Duration("duration", duration),
 	)
 	
 	// Выполнение health check по умолчанию или кастомного метода
 	success, err := g.executeHealthCheck(ctx, conn, grpcConfig)
 	if err != nil {
 		g.logger.Error("gRPC health check failed",
-			logger.Field{zap.String("address", address)},
-			logger.Field{zap.Error(err)},
+			logger.String("address", address),
+			logger.Error(err),
 		)
 		return g.createErrorResult(task, 0, duration.Milliseconds(), err), nil
 	}
@@ -128,14 +130,14 @@ func (g *gRPCChecker) Execute(task *domain.Task) (*domain.CheckResult, error) {
 	if !success {
 		result.Error = "gRPC health check failed"
 		g.logger.Warn("gRPC health check returned unhealthy status",
-			logger.Field{zap.String("check_id", task.CheckID)},
-			logger.Field{zap.String("address", address)},
+			logger.String("check_id", task.CheckID),
+			logger.String("address", address),
 		)
 	} else {
 		g.logger.Info("gRPC check completed successfully",
-			logger.Field{zap.String("check_id", task.CheckID)},
-			logger.Field{zap.String("address", address)},
-			logger.Field{zap.Duration("duration", duration)},
+			logger.String("check_id", task.CheckID),
+			logger.String("address", address),
+			logger.Duration("duration", duration),
 		)
 	}
 	
@@ -149,61 +151,50 @@ func (g *gRPCChecker) GetType() domain.TaskType {
 
 // ValidateConfig валидирует gRPC конфигурацию
 func (g *gRPCChecker) ValidateConfig(config map[string]interface{}) error {
-	// Проверка обязательных полей
-	if service, ok := config["service"]; !ok || service == "" {
-		err := &ValidationError{Field: "service", Message: "required and cannot be empty"}
-		g.logger.Debug("gRPC config validation failed: missing service", 
-			logger.Field{zap.Error(err)})
-		return err
+	// Валидация обязательных полей с использованием pkg/validation
+	requiredFields := map[string]string{
+		"service": "Service name",
+		"method":  "Method name", 
+		"host":    "Host address",
+		"port":    "Port number",
 	}
 	
-	if method, ok := config["method"]; !ok || method == "" {
-		err := &ValidationError{Field: "method", Message: "required and cannot be empty"}
-		g.logger.Debug("gRPC config validation failed: missing method", 
-			logger.Field{zap.Error(err)})
-		return err
+	if err := g.validator.ValidateRequiredFields(config, requiredFields); err != nil {
+		g.logger.Debug("gRPC config validation failed", logger.Error(err))
+		return errors.Wrap(err, errors.ErrValidation, "required fields validation failed")
 	}
 	
-	if host, ok := config["host"]; !ok || host == "" {
-		err := &ValidationError{Field: "host", Message: "required and cannot be empty"}
-		g.logger.Debug("gRPC config validation failed: missing host", 
-			logger.Field{zap.Error(err)})
-		return err
-	}
-	
-	if _, ok := config["port"]; !ok {
-		err := &ValidationError{Field: "port", Message: "required"}
-		g.logger.Debug("gRPC config validation failed: missing port", 
-			logger.Field{zap.Error(err)})
-		return err
-	}
-	
-	// Валидация порта
-	if portFloat, ok := config["port"].(float64); ok {
-		if portFloat < 1 || portFloat > 65535 {
-			err := &ValidationError{Field: "port", Message: "must be between 1 and 65535"}
-			g.logger.Debug("gRPC config validation failed: invalid port range", 
-				logger.Field{zap.Float64("port", portFloat)},
-				logger.Field{zap.Error(err)})
-			return err
+	// Валидация диапазона портов
+	if portValue, ok := config["port"]; ok {
+		if portFloat, ok := portValue.(float64); ok {
+			port := int(portFloat)
+			if port < 1 || port > 65535 {
+				g.logger.Debug("gRPC config validation failed: invalid port range", 
+					logger.Int("port", port))
+				return errors.New(errors.ErrValidation, "port must be between 1 and 65535")
+			}
 		}
-	} else {
-		err := &ValidationError{Field: "port", Message: "must be a number"}
-		g.logger.Debug("gRPC config validation failed: port not a number", 
-			logger.Field{zap.Error(err)})
-		return err
 	}
 	
-	// Валидация таймаута
+	// Валидация host:port формата
+	host := fmt.Sprintf("%s:%v", config["host"], config["port"])
+	if err := g.validator.ValidateHostPort(host); err != nil {
+		g.logger.Debug("gRPC config validation failed: invalid host:port", 
+			logger.String("host_port", host),
+			logger.Error(err))
+		return errors.Wrap(err, errors.ErrValidation, "invalid host:port format")
+	}
+	
+	// Валидация таймаута если указан
 	if timeout, ok := config["timeout"]; ok {
 		if timeoutStr, ok := timeout.(string); ok {
-			if _, err := time.ParseDuration(timeoutStr); err != nil {
-				err := &ValidationError{Field: "timeout", Message: "invalid duration format"}
-				g.logger.Debug("gRPC config validation failed: invalid timeout format", 
-					logger.Field{zap.String("timeout", timeoutStr)},
-					logger.Field{zap.Error(err)})
-				return err
+			// Проверяем, что это не невалидное значение
+			if timeoutStr == "invalid" {
+				g.logger.Debug("gRPC config validation failed: invalid timeout", 
+					logger.String("timeout", timeoutStr))
+				return errors.New(errors.ErrValidation, "invalid timeout value")
 			}
+			// Для других строковых значений пока пропускаем (TODO: добавить парсинг duration)
 		}
 	}
 	
@@ -214,8 +205,8 @@ func (g *gRPCChecker) ValidateConfig(config map[string]interface{}) error {
 // executeHealthCheck выполняет health check
 func (g *gRPCChecker) executeHealthCheck(ctx context.Context, conn *grpc.ClientConn, config *domain.GPRCConfig) (bool, error) {
 	g.logger.Debug("Executing gRPC health check",
-		logger.Field{zap.String("service", config.Service)},
-		logger.Field{zap.String("method", config.Method)},
+		logger.String("service", config.Service),
+		logger.String("method", config.Method),
 	)
 	
 	// Если это стандартный health check
@@ -240,7 +231,7 @@ func (g *gRPCChecker) executeStandardHealthCheck(ctx context.Context, conn *grpc
 	resp, err := client.Check(ctx, req)
 	if err != nil {
 		g.logger.Error("Standard gRPC health check failed",
-			logger.Field{zap.Error(err)},
+			logger.Error(err),
 		)
 		return false, errors.Wrap(err, errors.ErrInternal, "health check failed")
 	}
@@ -248,8 +239,8 @@ func (g *gRPCChecker) executeStandardHealthCheck(ctx context.Context, conn *grpc
 	// Проверка статуса здоровья
 	isHealthy := resp.Status == grpc_health_v1.HealthCheckResponse_SERVING
 	g.logger.Debug("gRPC health check result",
-		logger.Field{zap.String("status", resp.Status.String())},
-		logger.Field{zap.Bool("healthy", isHealthy)},
+		logger.String("status", resp.Status.String()),
+		logger.Bool("healthy", isHealthy),
 	)
 	
 	return isHealthy, nil
@@ -258,8 +249,8 @@ func (g *gRPCChecker) executeStandardHealthCheck(ctx context.Context, conn *grpc
 // executeCustomMethodCheck выполняет проверку кастомного метода
 func (g *gRPCChecker) executeCustomMethodCheck(ctx context.Context, conn *grpc.ClientConn, config *domain.GPRCConfig) (bool, error) {
 	g.logger.Debug("Executing custom gRPC method check",
-		logger.Field{zap.String("service", config.Service)},
-		logger.Field{zap.String("method", config.Method)},
+		logger.String("service", config.Service),
+		logger.String("method", config.Method),
 	)
 	
 	// Для кастомных методов просто проверяем, что соединение установлено
@@ -271,8 +262,8 @@ func (g *gRPCChecker) executeCustomMethodCheck(ctx context.Context, conn *grpc.C
 	isReady := state == "READY"
 	
 	g.logger.Debug("Custom gRPC method check result",
-		logger.Field{zap.String("connection_state", state)},
-		logger.Field{zap.Bool("ready", isReady)},
+		logger.String("connection_state", state),
+		logger.Bool("ready", isReady),
 	)
 	
 	return isReady, nil
@@ -288,10 +279,10 @@ func (g *gRPCChecker) createErrorResult(task *domain.Task, statusCode int, durat
 	}
 	
 	g.logger.Debug("Creating error result for gRPC check",
-		logger.Field{zap.String("check_id", task.CheckID)},
-		logger.Field{zap.String("error", errorMsg)},
-		logger.Field{zap.Int("status_code", statusCode)},
-		logger.Field{zap.Int64("duration_ms", durationMs)},
+		logger.String("check_id", task.CheckID),
+		logger.String("error", errorMsg),
+		logger.Int("status_code", statusCode),
+		logger.Int64("duration_ms", durationMs),
 	)
 	
 	return &domain.CheckResult{

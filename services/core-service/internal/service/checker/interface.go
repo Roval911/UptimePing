@@ -5,6 +5,9 @@ import (
 	"net/http"
 	
 	"UptimePingPlatform/services/core-service/internal/domain"
+	"UptimePingPlatform/pkg/errors"
+	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/pkg/validation"
 )
 
 // Checker определяет интерфейс для выполнения проверок
@@ -79,7 +82,9 @@ type HTTPResponse struct {
 type TCPChecker struct {
 	*BaseChecker
 	// TCP специфичные поля
-	dialer TCPDialer
+	dialer    TCPDialer
+	logger    logger.Logger
+	validator *validation.Validator
 }
 
 // TCPDialer определяет интерфейс для TCP подключения
@@ -99,32 +104,57 @@ type TCPConnection struct {
 }
 
 // NewTCPChecker создает новый TCP checker
-func NewTCPChecker(timeout int64, dialer TCPDialer) *TCPChecker {
+func NewTCPChecker(timeout int64, dialer TCPDialer, log logger.Logger) *TCPChecker {
 	return &TCPChecker{
 		BaseChecker: NewBaseChecker(timeout),
 		dialer:      dialer,
+		logger:      log,
+		validator:   validation.NewValidator(),
 	}
 }
 
 // Execute выполняет TCP проверку
 func (t *TCPChecker) Execute(task *domain.Task) (*domain.CheckResult, error) {
+	t.logger.Debug("Starting TCP check",
+		logger.String("check_id", task.CheckID),
+		logger.String("execution_id", task.ExecutionID),
+		logger.String("target", task.Target),
+	)
+	
 	// Валидация конфигурации
 	if err := t.ValidateConfig(task.Config); err != nil {
-		return nil, err
+		t.logger.Error("TCP config validation failed",
+			logger.String("check_id", task.CheckID),
+			logger.Error(err),
+		)
+		return nil, errors.Wrap(err, errors.ErrValidation, "config validation failed")
 	}
 	
 	// Извлечение TCP конфигурации
 	tcpConfig, err := task.GetTCPConfig()
 	if err != nil {
-		return nil, err
+		t.logger.Error("Failed to extract TCP config",
+			logger.String("check_id", task.CheckID),
+			logger.Error(err),
+		)
+		return nil, errors.Wrap(err, errors.ErrInternal, "failed to extract TCP config")
 	}
 	
 	// Формирование адреса
 	address := fmt.Sprintf("%s:%d", tcpConfig.Host, tcpConfig.Port)
+	t.logger.Debug("Connecting to TCP service",
+		logger.String("address", address),
+		logger.Int64("timeout_ms", tcpConfig.Timeout.Milliseconds()),
+	)
 	
 	// Установка соединения
 	conn, err := t.dialer.Dial(address, int64(tcpConfig.Timeout.Milliseconds()))
 	if err != nil {
+		t.logger.Error("Failed to connect to TCP service",
+			logger.String("address", address),
+			logger.Int64("duration_ms", conn.DurationMs),
+			logger.Error(err),
+		)
 		return domain.NewCheckResult(
 			task.CheckID,
 			task.ExecutionID,
@@ -135,6 +165,11 @@ func (t *TCPChecker) Execute(task *domain.Task) (*domain.CheckResult, error) {
 			"",
 		), nil
 	}
+	
+	t.logger.Info("Successfully connected to TCP service",
+		logger.String("address", address),
+		logger.Int64("duration_ms", conn.DurationMs),
+	)
 	
 	return domain.NewCheckResult(
 		task.CheckID,
@@ -154,13 +189,33 @@ func (t *TCPChecker) GetType() domain.TaskType {
 
 // ValidateConfig валидирует TCP конфигурацию
 func (t *TCPChecker) ValidateConfig(config map[string]interface{}) error {
-	if _, ok := config["host"]; !ok {
-		return &ValidationError{Field: "host", Message: "required"}
-	}
-	if _, ok := config["port"]; !ok {
-		return &ValidationError{Field: "port", Message: "required"}
+	// Валидация обязательных полей с использованием pkg/validation
+	requiredFields := map[string]interface{}{
+		"host": config["host"],
+		"port": config["port"],
 	}
 	
+	if err := t.validator.ValidateRequiredFields(requiredFields, map[string]string{
+		"host": "Host address",
+		"port": "Port number",
+	}); err != nil {
+		t.logger.Debug("TCP config validation failed", logger.Error(err))
+		return errors.Wrap(err, errors.ErrValidation, "required fields validation failed")
+	}
+	
+	// Валидация host:port формата
+	host := config["host"].(string)
+	port := config["port"]
+	address := fmt.Sprintf("%s:%v", host, port)
+	
+	if err := t.validator.ValidateHostPort(address); err != nil {
+		t.logger.Debug("TCP config validation failed: invalid host:port", 
+			logger.String("host_port", address),
+			logger.Error(err))
+		return errors.Wrap(err, errors.ErrValidation, "invalid host:port format")
+	}
+	
+	t.logger.Debug("TCP config validation passed")
 	return nil
 }
 

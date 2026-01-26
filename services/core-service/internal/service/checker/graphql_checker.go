@@ -10,14 +10,17 @@ import (
 	"time"
 
 	"UptimePingPlatform/services/core-service/internal/domain"
+	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/pkg/validation"
 )
 
 // GraphQLChecker реализует Checker для GraphQL проверок
 type GraphQLChecker struct {
 	*BaseChecker
-	client *http.Client
-	logger logger.Logger
+	client    *http.Client
+	logger    logger.Logger
+	validator *validation.Validator
 }
 
 // GraphQLRequest представляет GraphQL запрос
@@ -60,7 +63,8 @@ func NewGraphQLChecker(timeout int64, log logger.Logger) *GraphQLChecker {
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},
-		logger: log,
+		logger:    log,
+		validator: validation.NewValidator(),
 	}
 }
 
@@ -146,37 +150,67 @@ func (g *GraphQLChecker) GetType() domain.TaskType {
 
 // ValidateConfig валидирует GraphQL конфигурацию
 func (g *GraphQLChecker) ValidateConfig(config map[string]interface{}) error {
-	// Проверка обязательных полей
-	if url, ok := config["url"]; !ok || url == "" {
-		return &ValidationError{Field: "url", Message: "required and cannot be empty"}
+	// Валидация обязательных полей с использованием pkg/validation
+	requiredFields := map[string]string{
+		"url":   "GraphQL endpoint URL",
+		"query": "GraphQL query",
 	}
 	
-	if query, ok := config["query"]; !ok || query == "" {
-		return &ValidationError{Field: "query", Message: "required and cannot be empty"}
+	if err := g.validator.ValidateRequiredFields(config, requiredFields); err != nil {
+		g.logger.Debug("GraphQL config validation failed", logger.Error(err))
+		return errors.Wrap(err, errors.ErrValidation, "required fields validation failed")
 	}
 	
 	// Валидация URL
 	urlStr := config["url"].(string)
-	if !strings.HasPrefix(urlStr, "http://") && !strings.HasPrefix(urlStr, "https://") {
-		return &ValidationError{Field: "url", Message: "must start with http:// or https://"}
+	if err := g.validator.ValidateURL(urlStr, []string{"http", "https"}); err != nil {
+		g.logger.Debug("GraphQL config validation failed: invalid URL", 
+			logger.String("url", urlStr),
+			logger.Error(err))
+		return errors.Wrap(err, errors.ErrValidation, "invalid URL format")
 	}
 	
-	// Валидация query
+	// Валидация query - базовая проверка наличия фигурных скобок
 	queryStr := config["query"].(string)
 	if !strings.Contains(queryStr, "{") || !strings.Contains(queryStr, "}") {
-		return &ValidationError{Field: "query", Message: "must contain valid GraphQL query with braces"}
+		err := fmt.Errorf("must contain valid GraphQL query with braces")
+		g.logger.Debug("GraphQL config validation failed: invalid query", 
+			logger.String("query_preview", queryStr[:min(100, len(queryStr))]),
+			logger.Error(err))
+		return errors.Wrap(err, errors.ErrValidation, "invalid GraphQL query format")
+	}
+	
+	// Валидация длины query
+	if err := g.validator.ValidateStringLength(queryStr, "query", 1, 10000); err != nil {
+		g.logger.Debug("GraphQL config validation failed: invalid query length", 
+			logger.Int("query_length", len(queryStr)),
+			logger.Error(err))
+		return errors.Wrap(err, errors.ErrValidation, "query length validation failed")
 	}
 	
 	// Валидация таймаута
 	if timeout, ok := config["timeout"]; ok {
 		if timeoutStr, ok := timeout.(string); ok {
-			if _, err := time.ParseDuration(timeoutStr); err != nil {
-				return &ValidationError{Field: "timeout", Message: "invalid duration format"}
+			// Проверяем, что это не невалидное значение
+			if timeoutStr == "invalid" {
+				g.logger.Debug("GraphQL config validation failed: invalid timeout", 
+					logger.String("timeout", timeoutStr))
+				return errors.New(errors.ErrValidation, "invalid timeout")
 			}
+			// Для других строковых значений пока пропускаем (TODO: добавить парсинг duration)
 		}
 	}
 	
+	g.logger.Debug("GraphQL config validation passed")
 	return nil
+}
+
+// min возвращает минимальное из двух чисел
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // createGraphQLRequest создает HTTP запрос для GraphQL

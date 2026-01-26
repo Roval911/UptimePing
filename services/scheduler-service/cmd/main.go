@@ -11,12 +11,14 @@ import (
 	"time"
 
 	"UptimePingPlatform/pkg/config"
+	"UptimePingPlatform/pkg/connection"
 	"UptimePingPlatform/pkg/database"
 	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/health"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
 	pkg_redis "UptimePingPlatform/pkg/redis"
+	"UptimePingPlatform/pkg/ratelimit"
 	scheduler_http "UptimePingPlatform/services/scheduler-service/internal/handler/http"
 	"UptimePingPlatform/services/scheduler-service/internal/repository/postgres"
 	"UptimePingPlatform/services/scheduler-service/internal/repository/redis"
@@ -46,7 +48,10 @@ func main() {
 		}
 	}()
 
-	// Инициализация базы данных
+	// Инициализация retry конфигурации
+	retryConfig := connection.DefaultRetryConfig()
+	
+	// Инициализация базы данных с retry логикой
 	dbConfig := database.NewConfig()
 	dbConfig.Host = cfg.Database.Host
 	dbConfig.Port = cfg.Database.Port
@@ -54,26 +59,44 @@ func main() {
 	dbConfig.Password = cfg.Database.Password
 	dbConfig.Database = cfg.Database.Name
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	postgresDB, err := database.Connect(ctx, dbConfig)
+	var postgresDB *database.Postgres
+	err = connection.WithRetry(ctx, retryConfig, func(ctx context.Context) error {
+		var err error
+		postgresDB, err = database.Connect(ctx, dbConfig)
+		if err != nil {
+			appLogger.Error("Failed to connect to database, retrying...", logger.String("error", err.Error()))
+			return err
+		}
+		return nil
+	})
 	if err != nil {
-		appLogger.Error("Failed to connect to database", logger.String("error", err.Error()))
+		appLogger.Error("Failed to connect to database after retries", logger.String("error", err.Error()))
 		os.Exit(1)
 	}
 	defer postgresDB.Close()
 
-	// Инициализация Redis (для планировщика)
+	// Инициализация Redis с retry логикой
 	redisConfig := pkg_redis.NewConfig()
 	redisConfig.Addr = "localhost:6379" // В реальном приложении брать из конфига
 
-	redisCtx, redisCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	redisCtx, redisCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer redisCancel()
 
-	redisClient, err := pkg_redis.Connect(redisCtx, redisConfig)
+	var redisClient *pkg_redis.Client
+	err = connection.WithRetry(redisCtx, retryConfig, func(ctx context.Context) error {
+		var err error
+		redisClient, err = pkg_redis.Connect(ctx, redisConfig)
+		if err != nil {
+			appLogger.Error("Failed to connect to redis, retrying...", logger.String("error", err.Error()))
+			return err
+		}
+		return nil
+	})
 	if err != nil {
-		appLogger.Error("Failed to connect to redis", logger.String("error", err.Error()))
+		appLogger.Error("Failed to connect to redis after retries", logger.String("error", err.Error()))
 		os.Exit(1)
 	}
 	defer redisClient.Close()
@@ -90,12 +113,15 @@ func main() {
 
 	// Инициализация метрик
 	metricCollector := metrics.NewMetrics("scheduler_service")
+	
+	// Инициализация rate limiter
+	rateLimiter := ratelimit.NewRedisRateLimiter(redisClient.Client)
 
 	// Создание HealthChecker
 	healthChecker := NewRealHealthChecker(appLogger, postgresDB, redisClient)
 
 	// Настройка HTTP сервера
-	handler := setupHandler(checkUseCase, schedulerUseCase, appLogger, healthChecker, metricCollector)
+	handler := setupHandler(checkUseCase, schedulerUseCase, appLogger, healthChecker, metricCollector, rateLimiter)
 	server := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
 		Handler: handler,
@@ -194,7 +220,7 @@ func (h *RealHealthChecker) Check() *health.HealthStatus {
 	return status
 }
 
-func setupHandler(checkUseCase *usecase.CheckUseCase, schedulerUseCase *usecase.SchedulerUseCase, logger logger.Logger, healthChecker health.HealthChecker, metricCollector *metrics.Metrics) http.Handler {
+func setupHandler(checkUseCase *usecase.CheckUseCase, schedulerUseCase *usecase.SchedulerUseCase, logger logger.Logger, healthChecker health.HealthChecker, metricCollector *metrics.Metrics, rateLimiter ratelimit.RateLimiter) http.Handler {
 	mux := http.NewServeMux()
 
 	// Health endpoints

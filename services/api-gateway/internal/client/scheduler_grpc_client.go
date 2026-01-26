@@ -8,6 +8,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	grpcBase "UptimePingPlatform/pkg/grpc"
+	"UptimePingPlatform/pkg/logger"
 	schedulerv1 "UptimePingPlatform/gen/go/proto/api/scheduler/v1"
 )
 
@@ -15,29 +17,47 @@ import (
 type SchedulerClient struct {
 	client schedulerv1.SchedulerServiceClient
 	conn   *grpc.ClientConn
+	baseHandler *grpcBase.BaseHandler
 }
 
 // NewSchedulerClient создает новый gRPC клиент для SchedulerService
-func NewSchedulerClient(address string, timeout time.Duration) (*SchedulerClient, error) {
+func NewSchedulerClient(address string, timeout time.Duration, logger logger.Logger) (*SchedulerClient, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+
+	// Инициализируем BaseHandler
+	baseHandler := grpcBase.NewBaseHandler(logger)
+
+	// Логируем начало операции
+	baseHandler.LogOperationStart(ctx, "grpc_scheduler_client_connect", map[string]interface{}{
+		"address": address,
+		"timeout": timeout.String(),
+	})
 
 	// Устанавливаем соединение с gRPC сервером
 	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
+		baseHandler.LogError(ctx, err, "grpc_scheduler_client_connect_failed", "")
 		return nil, fmt.Errorf("failed to connect to scheduler service: %w", err)
 	}
 
 	// Проверяем соединение
 	if !conn.WaitForStateChange(ctx, conn.GetState()) {
+		baseHandler.LogError(ctx, fmt.Errorf("timeout while establishing connection"), "grpc_scheduler_client_connect_timeout", "")
 		return nil, fmt.Errorf("timeout while establishing connection")
 	}
 
 	client := schedulerv1.NewSchedulerServiceClient(conn)
 
+	// Логируем успешное подключение
+	baseHandler.LogOperationSuccess(ctx, "grpc_scheduler_client_connect", map[string]interface{}{
+		"address": address,
+	})
+
 	return &SchedulerClient{
-		client: client,
-		conn:   conn,
+		client:      client,
+		conn:        conn,
+		baseHandler: baseHandler,
 	}, nil
 }
 

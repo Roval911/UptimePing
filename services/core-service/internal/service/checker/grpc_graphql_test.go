@@ -118,7 +118,7 @@ func TestGRPCChecker_ValidateConfig(t *testing.T) {
 				"port":   float64(50051),
 			},
 			expectError: true,
-			errorField:  "service",
+			errorField:  "Service name",
 		},
 		{
 			name: "empty service",
@@ -129,7 +129,7 @@ func TestGRPCChecker_ValidateConfig(t *testing.T) {
 				"port":    float64(50051),
 			},
 			expectError: true,
-			errorField:  "service",
+			errorField:  "Service name",
 		},
 		{
 			name: "missing method",
@@ -139,7 +139,7 @@ func TestGRPCChecker_ValidateConfig(t *testing.T) {
 				"port":    float64(50051),
 			},
 			expectError: true,
-			errorField:  "method",
+			errorField:  "Method name",
 		},
 		{
 			name: "missing host",
@@ -149,7 +149,7 @@ func TestGRPCChecker_ValidateConfig(t *testing.T) {
 				"port":    float64(50051),
 			},
 			expectError: true,
-			errorField:  "host",
+			errorField:  "Host address",
 		},
 		{
 			name: "missing port",
@@ -159,7 +159,7 @@ func TestGRPCChecker_ValidateConfig(t *testing.T) {
 				"host":    "localhost",
 			},
 			expectError: true,
-			errorField:  "port",
+			errorField:  "Port number",
 		},
 		{
 			name: "invalid port too low",
@@ -170,7 +170,7 @@ func TestGRPCChecker_ValidateConfig(t *testing.T) {
 				"port":    float64(0),
 			},
 			expectError: true,
-			errorField:  "port",
+			errorField:  "port must be between 1 and 65535",
 		},
 		{
 			name: "invalid port too high",
@@ -181,7 +181,7 @@ func TestGRPCChecker_ValidateConfig(t *testing.T) {
 				"port":    float64(65536),
 			},
 			expectError: true,
-			errorField:  "port",
+			errorField:  "port must be between 1 and 65535",
 		},
 		{
 			name: "invalid timeout",
@@ -362,7 +362,7 @@ func TestGraphQLChecker_ValidateConfig(t *testing.T) {
 				"query": "{ status }",
 			},
 			expectError: true,
-			errorField:  "url",
+			errorField:  "GraphQL endpoint URL",
 		},
 		{
 			name: "empty url",
@@ -371,7 +371,7 @@ func TestGraphQLChecker_ValidateConfig(t *testing.T) {
 				"query": "{ status }",
 			},
 			expectError: true,
-			errorField:  "url",
+			errorField:  "GraphQL endpoint URL",
 		},
 		{
 			name: "invalid url scheme",
@@ -380,7 +380,7 @@ func TestGraphQLChecker_ValidateConfig(t *testing.T) {
 				"query": "{ status }",
 			},
 			expectError: true,
-			errorField:  "url",
+			errorField:  "URL",
 		},
 		{
 			name: "missing query",
@@ -388,7 +388,7 @@ func TestGraphQLChecker_ValidateConfig(t *testing.T) {
 				"url": "https://example.com/graphql",
 			},
 			expectError: true,
-			errorField:  "query",
+			errorField:  "GraphQL query",
 		},
 		{
 			name: "empty query",
@@ -397,7 +397,7 @@ func TestGraphQLChecker_ValidateConfig(t *testing.T) {
 				"query": "",
 			},
 			expectError: true,
-			errorField:  "query",
+			errorField:  "GraphQL query",
 		},
 		{
 			name: "invalid query no braces",
@@ -416,7 +416,7 @@ func TestGraphQLChecker_ValidateConfig(t *testing.T) {
 				"timeout": "invalid",
 			},
 			expectError: true,
-			errorField:  "timeout",
+			errorField:  "invalid timeout",
 		},
 	}
 	

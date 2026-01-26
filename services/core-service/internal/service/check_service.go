@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"go.uber.org/zap"
 	"UptimePingPlatform/services/core-service/internal/domain"
 	"UptimePingPlatform/services/core-service/internal/service/checker"
 	"UptimePingPlatform/pkg/errors"
@@ -48,23 +47,23 @@ type TaskMessage struct {
 // ProcessTask обрабатывает задачу проверки
 func (cs *CheckService) ProcessTask(ctx context.Context, message []byte) error {
 	cs.logger.Info("Starting task processing",
-		logger.Field{zap.String("message_size", fmt.Sprintf("%d", len(message)))},
+		logger.String("message_size", fmt.Sprintf("%d", len(message))),
 	)
 
 	// Десериализация сообщения из RabbitMQ
 	taskMessage, err := cs.deserializeMessage(message)
 	if err != nil {
 		cs.logger.Error("Failed to deserialize message",
-			logger.Field{zap.Error(err)},
+			logger.Error(err),
 		)
 		return errors.Wrap(err, errors.ErrValidation, "failed to deserialize message")
 	}
 
 	cs.logger.Info("Task deserialized successfully",
-		logger.Field{zap.String("check_id", taskMessage.CheckID)},
-		logger.Field{zap.String("execution_id", taskMessage.ExecutionID)},
-		logger.Field{zap.String("type", taskMessage.Type)},
-		logger.Field{zap.String("target", taskMessage.Target)},
+		logger.String("check_id", taskMessage.CheckID),
+		logger.String("execution_id", taskMessage.ExecutionID),
+		logger.String("type", taskMessage.Type),
+		logger.String("target", taskMessage.Target),
 	)
 
 	// Создание доменной модели Task
@@ -74,37 +73,37 @@ func (cs *CheckService) ProcessTask(ctx context.Context, message []byte) error {
 	checker, err := cs.checkerFactory.CreateChecker(domain.TaskType(task.Type))
 	if err != nil {
 		cs.logger.Error("Failed to create checker",
-			logger.Field{zap.String("type", task.Type)},
-			logger.Field{zap.Error(err)},
+			logger.String("type", task.Type),
+			logger.Error(err),
 		)
 		return errors.Wrap(err, errors.ErrInternal, "failed to create checker")
 	}
 
 	cs.logger.Debug("Checker created successfully",
-		logger.Field{zap.String("type", task.Type)},
+		logger.String("type", task.Type),
 	)
 
 	// Вызов соответствующего checker'а
 	result, err := cs.executeCheck(ctx, checker, task)
 	if err != nil {
 		cs.logger.Error("Check execution failed",
-			logger.Field{zap.String("check_id", task.CheckID)},
-			logger.Field{zap.Error(err)},
+			logger.String("check_id", task.CheckID),
+			logger.Error(err),
 		)
 		return errors.Wrap(err, errors.ErrInternal, "check execution failed")
 	}
 
 	cs.logger.Info("Check executed successfully",
-		logger.Field{zap.String("check_id", task.CheckID)},
-		logger.Field{zap.Bool("success", result.Success)},
-		logger.Field{zap.Int64("duration_ms", result.DurationMs)},
+		logger.String("check_id", task.CheckID),
+		logger.Bool("success", result.Success),
+		logger.Int64("duration_ms", result.DurationMs),
 	)
 
 	// Сохранение результата в БД
 	if err := cs.saveResult(ctx, result); err != nil {
 		cs.logger.Error("Failed to save result to database",
-			logger.Field{zap.String("check_id", task.CheckID)},
-			logger.Field{zap.Error(err)},
+			logger.String("check_id", task.CheckID),
+			logger.Error(err),
 		)
 		// Не прерываем обработку, так как результат важен
 	}
@@ -112,8 +111,8 @@ func (cs *CheckService) ProcessTask(ctx context.Context, message []byte) error {
 	// Кеширование результата в Redis (TTL 5 минут)
 	if err := cs.cacheResult(ctx, result); err != nil {
 		cs.logger.Warn("Failed to cache result in Redis",
-			logger.Field{zap.String("check_id", task.CheckID)},
-			logger.Field{zap.Error(err)},
+			logger.String("check_id", task.CheckID),
+			logger.Error(err),
 		)
 		// Не прерываем обработку, так как кеширование не критично
 	}
@@ -122,8 +121,8 @@ func (cs *CheckService) ProcessTask(ctx context.Context, message []byte) error {
 	if !result.Success {
 		if err := cs.sendToIncidentManager(ctx, result); err != nil {
 			cs.logger.Error("Failed to send to incident manager",
-				logger.Field{zap.String("check_id", task.CheckID)},
-				logger.Field{zap.Error(err)},
+				logger.String("check_id", task.CheckID),
+				logger.Error(err),
 			)
 			// Не прерываем обработку, так как это уведомление
 		}
@@ -131,7 +130,7 @@ func (cs *CheckService) ProcessTask(ctx context.Context, message []byte) error {
 
 	// ACK сообщения (в RabbitMQ это будет делать consumer после успешной обработки)
 	cs.logger.Info("Task processing completed successfully",
-		logger.Field{zap.String("check_id", task.CheckID)},
+		logger.String("check_id", task.CheckID),
 	)
 
 	return nil
@@ -176,16 +175,16 @@ func (cs *CheckService) createTask(message *TaskMessage) *domain.Task {
 // executeCheck выполняет проверку
 func (cs *CheckService) executeCheck(ctx context.Context, checker checker.Checker, task *domain.Task) (*domain.CheckResult, error) {
 	cs.logger.Debug("Executing check",
-		logger.Field{zap.String("check_id", task.CheckID)},
-		logger.Field{zap.String("type", task.Type)},
+		logger.String("check_id", task.CheckID),
+		logger.String("type", task.Type),
 	)
 
 	// Выполнение проверки
 	result, err := checker.Execute(task)
 	if err != nil {
 		cs.logger.Error("Check execution failed",
-			logger.Field{zap.String("check_id", task.CheckID)},
-			logger.Field{zap.Error(err)},
+			logger.String("check_id", task.CheckID),
+			logger.Error(err),
 		)
 		return nil, err
 	}
@@ -203,7 +202,7 @@ func (cs *CheckService) executeCheck(ctx context.Context, checker checker.Checke
 // saveResult сохраняет результат в БД
 func (cs *CheckService) saveResult(ctx context.Context, result *domain.CheckResult) error {
 	cs.logger.Debug("Saving result to database",
-		logger.Field{zap.String("check_id", result.CheckID)},
+		logger.String("check_id", result.CheckID),
 	)
 
 	// TODO: Реализовать сохранение в БД через repository
@@ -219,7 +218,7 @@ func (cs *CheckService) saveResult(ctx context.Context, result *domain.CheckResu
 // cacheResult кеширует результат в Redis с TTL 5 минут
 func (cs *CheckService) cacheResult(ctx context.Context, result *domain.CheckResult) error {
 	cs.logger.Debug("Caching result in Redis",
-		logger.Field{zap.String("check_id", result.CheckID)},
+		logger.String("check_id", result.CheckID),
 	)
 
 	// TODO: Реализовать кеширование в Redis
@@ -241,8 +240,8 @@ func (cs *CheckService) cacheResult(ctx context.Context, result *domain.CheckRes
 // sendToIncidentManager отправляет инцидент в Incident Manager
 func (cs *CheckService) sendToIncidentManager(ctx context.Context, result *domain.CheckResult) error {
 	cs.logger.Info("Sending incident to incident manager",
-		logger.Field{zap.String("check_id", result.CheckID)},
-		logger.Field{zap.String("error", result.Error)},
+		logger.String("check_id", result.CheckID),
+		logger.String("error", result.Error),
 	)
 
 	// TODO: Реализовать отправку в Incident Manager
@@ -266,7 +265,7 @@ func (cs *CheckService) sendToIncidentManager(ctx context.Context, result *domai
 // GetCachedResult получает кешированный результат из Redis
 func (cs *CheckService) GetCachedResult(ctx context.Context, checkID string) (*domain.CheckResult, error) {
 	cs.logger.Debug("Getting cached result from Redis",
-		logger.Field{zap.String("check_id", checkID)},
+		logger.String("check_id", checkID),
 	)
 
 	// TODO: Реализовать получение из Redis

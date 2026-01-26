@@ -19,6 +19,7 @@ type RetryConfig struct {
 	InitialDelay time.Duration
 	MaxDelay     time.Duration
 	Multiplier   float64
+	Jitter       bool
 }
 
 // DefaultRetryConfig возвращает конфигурацию по умолчанию
@@ -28,7 +29,39 @@ func DefaultRetryConfig() RetryConfig {
 		InitialDelay: 1 * time.Second,
 		MaxDelay:     30 * time.Second,
 		Multiplier:   2.0,
+		Jitter:       true,
 	}
+}
+
+// RetryFunc представляет функцию для повторной попытки
+type RetryFunc func(ctx context.Context) error
+
+// WithRetry выполняет функцию с retry логикой
+func WithRetry(ctx context.Context, config RetryConfig, operation RetryFunc) error {
+	var lastErr error
+	
+	for attempt := 1; attempt <= config.MaxAttempts; attempt++ {
+		err := operation(ctx)
+		if err == nil {
+			return nil
+		}
+		
+		lastErr = err
+		
+		if attempt < config.MaxAttempts {
+			delay := calculateDelay(attempt, config)
+			
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+				// Продолжаем следующую попытку
+			}
+			continue
+		}
+	}
+	
+	return fmt.Errorf("operation failed after %d attempts: %w", config.MaxAttempts, lastErr)
 }
 
 // ConnectWithRetry выполняет подключение с retry логикой
@@ -77,7 +110,19 @@ func calculateDelay(attempt int, config RetryConfig) time.Duration {
 		delay = config.MaxDelay
 	}
 
+	// Добавляем jitter если включен
+	if config.Jitter {
+		delay = addJitter(delay)
+	}
+
 	return delay
+}
+
+// addJitter добавляет случайную вариацию к задержке
+func addJitter(delay time.Duration) time.Duration {
+	// Добавляем случайную вариацию ±25%
+	jitter := time.Duration(float64(delay) * 0.25 * (2*float64(time.Now().UnixNano()%1000)/1000 - 0.5))
+	return delay + jitter - time.Duration(float64(jitter)*0.5)
 }
 
 // pow - простая реализация возведения в степень

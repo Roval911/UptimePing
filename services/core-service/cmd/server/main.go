@@ -2,24 +2,27 @@ package main
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"UptimePingPlatform/services/core-service/internal/client"
 	consumerRabbitMQ "UptimePingPlatform/services/core-service/internal/consumer/rabbitmq"
-	"UptimePingPlatform/services/core-service/internal/health"
 	"UptimePingPlatform/services/core-service/internal/logging"
 	"UptimePingPlatform/services/core-service/internal/metrics"
-	"UptimePingPlatform/services/core-service/internal/service/checker"
 	"UptimePingPlatform/services/core-service/internal/worker"
-	"UptimePingPlatform/services/core-service/internal/domain"
-	"UptimePingPlatform/pkg/rabbitmq"
+	"UptimePingPlatform/pkg/config"
+	"UptimePingPlatform/pkg/connection"
+	"UptimePingPlatform/pkg/database"
+	grpcBase "UptimePingPlatform/pkg/grpc"
+	"UptimePingPlatform/pkg/health"
 	"UptimePingPlatform/pkg/logger"
+	pkg_metrics "UptimePingPlatform/pkg/metrics"
+	pkg_rabbitmq "UptimePingPlatform/pkg/rabbitmq"
+	pkg_redis "UptimePingPlatform/pkg/redis"
+	"UptimePingPlatform/pkg/ratelimit"
 )
 
 const (
@@ -27,297 +30,217 @@ const (
 	serviceVersion = "v1.0.0"
 )
 
-// AppConfig конфигурация приложения
-type AppConfig struct {
-	// База данных
-	DatabaseDSN string `json:"database_dsn"`
-	
-	// RabbitMQ
-	RabbitMQURL string `json:"rabbitmq_url"`
-	RabbitMQQueue string `json:"rabbitmq_queue"`
-	
-	// Worker pool
-	WorkerPool *worker.Config `json:"worker_pool"`
-	
-	// Health checks
-	Health *health.Config `json:"health"`
-	
-	// Incident Manager
-	IncidentManagerAddress string `json:"incident_manager_address"`
-}
-
-// DefaultAppConfig возвращает конфигурацию по умолчанию
-func DefaultAppConfig() *AppConfig {
-	return &AppConfig{
-		DatabaseDSN: "postgres://user:password@localhost/uptimedb?sslmode=disable",
-		RabbitMQURL: "amqp://localhost:5672",
-		RabbitMQQueue: "uptime_checks",
-		WorkerPool: worker.DefaultConfig(),
-		Health: health.DefaultConfig(),
-		IncidentManagerAddress: "localhost:50052",
-	}
-}
-
 func main() {
-	ctx := context.Background()
-	
-	// Инициализируем логгер
-	baseLogger, err := logger.NewLogger("development", "info", serviceName, false)
+	// Инициализация конфигурации
+	cfg, err := config.LoadConfig("config/config.yaml")
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Инициализация логгера
+	appLogger, err := logger.NewLogger(cfg.Environment, cfg.Logger.Level, serviceName, false)
 	if err != nil {
 		log.Fatalf("Failed to initialize logger: %v", err)
 	}
+	defer func() {
+		if err := appLogger.Sync(); err != nil {
+			log.Printf("Error syncing logger: %v", err)
+		}
+	}()
 	
-	uptimeLogger := logging.NewUptimeLogger(baseLogger)
-	
-	// Устанавливаем глобальный логгер
-	logging.InitGlobalUptimeLogger(baseLogger)
-	
-	baseLogger.Info("Starting core service",
+	appLogger.Info("Starting core service",
 		logger.String("version", serviceVersion),
 		logger.String("service", serviceName))
 	
-	// Загружаем конфигурацию
-	appConfig := DefaultAppConfig()
+	// Инициализация BaseHandler
+	baseHandler := grpcBase.NewBaseHandler(appLogger)
+	
+	// Инициализация retry конфигурации
+	retryConfig := connection.DefaultRetryConfig()
 	
 	// Инициализируем метрики
-	metricsInstance := metrics.NewUptimeMetrics(serviceName)
+	metricsInstance := pkg_metrics.NewMetrics(serviceName)
 	
-	// Инициализируем checkers
-	checkers := initCheckers(uptimeLogger)
+	ctx := context.Background()
 	
-	// Инициализируем компоненты
-	db, rabbitProducer, incidentClient, err := initializeComponents(ctx, appConfig, uptimeLogger)
+	// Инициализируем базу данных
+	dbConfig := database.NewConfig()
+	dbConfig.Host = cfg.Database.Host
+	dbConfig.Port = cfg.Database.Port
+	dbConfig.User = cfg.Database.User
+	dbConfig.Password = cfg.Database.Password
+	dbConfig.Database = cfg.Database.Name
+	
+	// Подключение к базе данных с retry логикой
+	var db *database.Postgres
+	err = connection.WithRetry(ctx, retryConfig, func(ctx context.Context) error {
+		var err error
+		db, err = database.Connect(ctx, dbConfig)
+		if err != nil {
+			baseHandler.LogOperationStart(ctx, "database_connect", map[string]interface{}{
+				"host": dbConfig.Host,
+				"port": dbConfig.Port,
+				"database": dbConfig.Database,
+			})
+			return err
+		}
+		return nil
+	})
 	if err != nil {
-		baseLogger.Error("Failed to initialize components", logger.Error(err))
+		appLogger.Error("Failed to connect to database", logger.Error(err))
 		os.Exit(1)
 	}
-	defer cleanupComponents(db, rabbitProducer, incidentClient)
+	defer db.Close()
+	
+	baseHandler.LogOperationSuccess(ctx, "database_connect", map[string]interface{}{
+		"database": dbConfig.Database,
+	})
+	
+	// Инициализируем RabbitMQ
+	rabbitConfig := pkg_rabbitmq.NewConfig()
+	rabbitConfig.URL = "amqp://localhost:5672" // TODO: взять из конфига
+	rabbitConfig.Queue = "uptime_checks"
+	
+	rabbitConn, err := pkg_rabbitmq.Connect(ctx, rabbitConfig)
+	if err != nil {
+		appLogger.Error("Failed to connect to RabbitMQ", logger.Error(err))
+		os.Exit(1)
+	}
+	defer rabbitConn.Close()
+	
+	// Инициализируем Redis
+	redisConfig := pkg_redis.NewConfig()
+	redisConfig.Addr = "localhost:6379" // TODO: взять из конфига
+	
+	redisClient, err := pkg_redis.Connect(ctx, redisConfig)
+	if err != nil {
+		appLogger.Error("Failed to connect to Redis", logger.Error(err))
+		os.Exit(1)
+	}
+	defer redisClient.Close()
 	
 	// Инициализируем health checker
-	healthService, err := health.NewService(appConfig.Health, uptimeLogger)
-	if err != nil {
-		baseLogger.Error("Failed to initialize health service", logger.Error(err))
-		os.Exit(1)
-	}
+	healthChecker := health.NewSimpleHealthChecker(serviceVersion)
 	
-	// Запускаем health checker
-	if err := healthService.Start(ctx); err != nil {
-		baseLogger.Error("Failed to start health service", logger.Error(err))
-		os.Exit(1)
-	}
-	defer healthService.Stop(ctx)
-	
-	// Выполняем health checks при запуске
-	if err := performStartupHealthChecks(ctx, healthService); err != nil {
-		baseLogger.Error("Startup health checks failed", logger.Error(err))
-		os.Exit(1)
-	}
+	// Инициализируем rate limiter для проверок
+	rateLimiter := ratelimit.NewRedisRateLimiter(redisClient.Client)
 	
 	// Инициализируем worker pool
-	workerPool, err := worker.NewPool(appConfig.WorkerPool, uptimeLogger, metricsInstance, checkers)
+	uptimeLogger := logging.NewUptimeLogger(appLogger)
+	uptimeMetrics := metrics.NewUptimeMetrics(serviceName)
+	workerPool, err := worker.NewPool(worker.DefaultConfig(), uptimeLogger, uptimeMetrics, nil) // TODO: implement checkers
 	if err != nil {
-		baseLogger.Error("Failed to create worker pool", logger.Error(err))
+		appLogger.Error("Failed to create worker pool", logger.Error(err))
 		os.Exit(1)
 	}
 	
 	// Запускаем worker pool
 	if err := workerPool.Start(ctx); err != nil {
-		baseLogger.Error("Failed to start worker pool", logger.Error(err))
+		appLogger.Error("Failed to start worker pool", logger.Error(err))
 		os.Exit(1)
 	}
 	
 	// Инициализируем consumer
-	consumerConfig := consumerRabbitMQ.ConsumerConfig{
-		QueueName:   appConfig.RabbitMQQueue,
-		ConsumerTag: "core-service-consumer",
-	}
 	consumer, err := consumerRabbitMQ.NewConsumer(
-		consumerConfig,
-		baseLogger,
+		consumerRabbitMQ.ConsumerConfig{
+			QueueName:   rabbitConfig.Queue,
+			ConsumerTag: "core-service-consumer",
+		},
+		appLogger,
 		nil, // TODO: implement CheckServiceInterface
 	)
 	if err != nil {
-		baseLogger.Error("Failed to create consumer", logger.Error(err))
+		appLogger.Error("Failed to create consumer", logger.Error(err))
 		os.Exit(1)
 	}
 	defer consumer.Close()
 	
 	// Запускаем consumer
 	if err := consumer.Start(ctx); err != nil {
-		baseLogger.Error("Failed to start consumer", logger.Error(err))
+		appLogger.Error("Failed to start consumer", logger.Error(err))
 		os.Exit(1)
 	}
 	
-	baseLogger.Info("Core service started successfully")
+	appLogger.Info("Core service started successfully")
 	
-	// Ожидаем сигналы для graceful shutdown
-	awaitGracefulShutdown(ctx, uptimeLogger, workerPool, healthService)
-}
-
-// initCheckers инициализирует checkers
-func initCheckers(logger *logging.UptimeLogger) map[domain.TaskType]checker.Checker {
-	checkers := make(map[domain.TaskType]checker.Checker)
-	
-	// HTTP checker
-	httpChecker := checker.NewHTTPChecker(30000) // 30 секунд
-	checkers[domain.TaskTypeHTTP] = httpChecker
-	
-	// TCP checker
-	tcpChecker := checker.NewTCPChecker(10000, nil) // 10 секунд
-	checkers[domain.TaskTypeTCP] = tcpChecker
-	
-	// gRPC checker
-	grpcChecker := checker.NewgRPCChecker(15000, logger.GetBaseLogger()) // 15 секунд
-	checkers[domain.TaskTypeGRPC] = grpcChecker
-	
-	// GraphQL checker
-	graphqlChecker := checker.NewGraphQLChecker(30000, logger.GetBaseLogger()) // 30 секунд
-	checkers[domain.TaskTypeGraphQL] = graphqlChecker
-	
-	return checkers
-}
-
-// initializeComponents инициализирует все компоненты
-func initializeComponents(ctx context.Context, config *AppConfig, logger *logging.UptimeLogger) (*sql.DB, *rabbitmq.Producer, client.IncidentClient, error) {
-	logger.GetBaseLogger().Info("Initializing components")
-	
-	// Инициализируем базу данных
-	logger.GetBaseLogger().Debug("Initializing database connection")
-	db, err := sql.Open("postgres", config.DatabaseDSN)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to connect to database: %w", err)
-	}
-	
-	// Проверяем соединение
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, nil, nil, fmt.Errorf("failed to ping database: %w", err)
-	}
-	logger.GetBaseLogger().Info("Database connection established")
-	
-	// Инициализируем RabbitMQ producer
-	logger.GetBaseLogger().Debug("Initializing RabbitMQ producer")
-	rabbitConfig := rabbitmq.NewConfig()
-	rabbitConfig.URL = config.RabbitMQURL
-	rabbitConfig.Queue = config.RabbitMQQueue
-	
-	conn, err := rabbitmq.Connect(ctx, rabbitConfig)
-	if err != nil {
-		db.Close()
-		return nil, nil, nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
-	}
-	
-	rabbitProducer := rabbitmq.NewProducer(conn, rabbitConfig)
-	logger.GetBaseLogger().Info("RabbitMQ producer created")
-	
-	// Инициализируем Incident Manager client
-	logger.GetBaseLogger().Debug("Initializing Incident Manager client")
-	incidentClient, err := client.NewIncidentClient(&client.Config{
-		Address: config.IncidentManagerAddress,
-	})
-	if err != nil {
-		// RabbitMQ producer закрывается через connection
-		conn.Close()
-		db.Close()
-		return nil, nil, nil, fmt.Errorf("failed to create Incident Manager client: %w", err)
-	}
-	logger.GetBaseLogger().Info("Incident Manager client created")
-	
-	return db, rabbitProducer, incidentClient, nil
-}
-
-// cleanupComponents очищает ресурсы
-func cleanupComponents(db *sql.DB, rabbitProducer *rabbitmq.Producer, incidentClient client.IncidentClient) {
-	if incidentClient != nil {
-		incidentClient.Close()
-	}
-	if rabbitProducer != nil {
-		// RabbitMQ producer закрывается через connection
-	}
-	if db != nil {
-		db.Close()
-	}
-}
-
-// performStartupHealthChecks выполняет health checks при запуске
-func performStartupHealthChecks(ctx context.Context, healthService *health.Service) error {
-	// Используем глобальный логгер
-	globalLogger := logging.GetGlobalUptimeLogger()
-	globalLogger.GetBaseLogger().Info("Performing startup health checks")
-	
-	results := healthService.CheckAll(ctx)
-	
-	// Проверяем результаты
-	for name, result := range results {
-		if result.Status == health.StatusUnhealthy {
-			return fmt.Errorf("component %s is unhealthy: %s", name, result.Message)
+	// Запускаем HTTP сервер для health check и metrics
+	go func() {
+		mux := http.NewServeMux()
+		
+		// Rate limiting middleware
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			// Rate limiting для API запросов
+			clientIP := getClientIP(r)
+			allowed, err := rateLimiter.CheckRateLimit(r.Context(), clientIP, 100, time.Minute) // 100 запросов в минуту
+			if err != nil {
+				http.Error(w, "Rate limit check failed", http.StatusInternalServerError)
+				return
+			}
+			
+			if !allowed {
+				http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+				return
+			}
+			
+			// Простой health check
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("Core Service is running"))
+		})
+		
+		// Health endpoints
+		mux.HandleFunc("/health", health.Handler(healthChecker))
+		mux.HandleFunc("/ready", health.ReadyHandler(healthChecker))
+		mux.HandleFunc("/live", health.LiveHandler())
+		
+		// Metrics endpoint
+		mux.Handle("/metrics", metricsInstance.GetHandler())
+		
+		server := &http.Server{
+			Addr:    ":8081", // TODO: взять из конфига
+			Handler: mux,
 		}
 		
-		if result.Status == health.StatusDegraded {
-			globalLogger.GetBaseLogger().Warn("Component is degraded",
-				logger.String("component", name),
-				logger.String("message", result.Message))
-		} else {
-			globalLogger.GetBaseLogger().Info("Component is healthy",
-				logger.String("component", name))
+		appLogger.Info("HTTP server started", logger.String("port", "8081"))
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			appLogger.Error("HTTP server failed", logger.Error(err))
 		}
-	}
+	}()
 	
-	// Проверяем общий статус
-	overallStatus := healthService.GetStatus()
-	if overallStatus != health.StatusHealthy {
-		return fmt.Errorf("overall health status is %s", overallStatus)
-	}
-	
-	globalLogger.GetBaseLogger().Info("All startup health checks passed")
-	return nil
+	// Ожидаем сигналы для graceful shutdown
+	awaitGracefulShutdown(ctx, appLogger, workerPool)
 }
 
-// awaitGracefulShutdown ожидает сигналы и выполняет graceful shutdown
-func awaitGracefulShutdown(ctx context.Context, uptimeLogger *logging.UptimeLogger, workerPool *worker.Pool, healthService *health.Service) {
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	
-	// Ожидаем сигнал
-	sig := <-sigChan
-	uptimeLogger.GetBaseLogger().Info("Received shutdown signal", logger.String("signal", sig.String()))
-	
-	// Создаем контекст для graceful shutdown
-	shutdownCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+// awaitGracefulShutdown ожидает сигналы для graceful shutdown
+func awaitGracefulShutdown(ctx context.Context, logger logger.Logger, workerPool *worker.Pool) {
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	logger.Info("Shutting down server...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	
-	uptimeLogger.GetBaseLogger().Info("Starting graceful shutdown")
-	
-	// Останавливаем прием новых задач
-	uptimeLogger.GetBaseLogger().Info("Stopping task submission")
-	
-	// Останавливаем worker pool
-	uptimeLogger.GetBaseLogger().Info("Stopping worker pool")
-	if err := workerPool.Stop(shutdownCtx); err != nil {
-		uptimeLogger.GetBaseLogger().Error("Error stopping worker pool", logger.Error(err))
-	} else {
-		uptimeLogger.GetBaseLogger().Info("Worker pool stopped successfully")
+
+	// Остановка worker pool
+	if err := workerPool.Stop(ctx); err != nil {
+		logger.Error("Failed to stop worker pool")
+	}
+
+	logger.Info("Server stopped gracefully")
+}
+
+// getClientIP получает IP адрес клиента из запроса
+func getClientIP(r *http.Request) string {
+	// Проверяем X-Forwarded-For header (если за прокси)
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		return xff
 	}
 	
-	// Останавливаем health checker
-	uptimeLogger.GetBaseLogger().Info("Stopping health service")
-	if err := healthService.Stop(shutdownCtx); err != nil {
-		uptimeLogger.GetBaseLogger().Error("Error stopping health service", logger.Error(err))
-	} else {
-		uptimeLogger.GetBaseLogger().Info("Health service stopped successfully")
+	// Проверяем X-Real-IP header
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
 	}
 	
-	// Получаем финальную статистику
-	stats := workerPool.GetStats()
-	uptimeLogger.GetBaseLogger().Info("Final statistics",
-		logger.Int("tasks_received", int(stats.TasksReceived)),
-		logger.Int("tasks_completed", int(stats.TasksCompleted)),
-		logger.Int("tasks_failed", int(stats.TasksFailed)),
-		logger.Int("tasks_retried", int(stats.TasksRetried)),
-		logger.Float64("average_duration_ms", stats.AverageDuration))
-	
-	// Получаем статистику метрик
-	uptimeLogger.GetBaseLogger().Info("Service shutdown completed")
-	
-	os.Exit(0)
+	// Возвращаем RemoteAddr
+	return r.RemoteAddr
 }

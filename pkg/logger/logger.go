@@ -3,6 +3,7 @@ package logger
 import (
 	"context"
 	"os"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -193,6 +194,16 @@ func Error(err error) Field {
 		return Field{zap.String("error", "nil")}
 	}
 	return Field{zap.String("error", err.Error())}
+}
+
+// Int64 создает поле с int64 значением
+func Int64(key string, val int64) Field {
+	return Field{zap.Int64(key, val)}
+}
+
+// Duration создает поле с duration значением
+func Duration(key string, val time.Duration) Field {
+	return Field{zap.Duration(key, val)}
 }
 
 // Any создает поле с любым значением

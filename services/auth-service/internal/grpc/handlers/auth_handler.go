@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/pkg/validation"
 	"UptimePingPlatform/services/auth-service/internal/service"
 
 	grpc_auth "UptimePingPlatform/gen/go/proto/api/auth/v1"
@@ -12,28 +14,64 @@ import (
 
 // AuthHandler реализация gRPC обработчиков для AuthService
 type AuthHandler struct {
+	*grpcBase.BaseHandler
 	grpc_auth.UnimplementedAuthServiceServer
 	authService service.AuthService
-	logger      logger.Logger
+	validator   *validation.Validator
 }
 
 // NewAuthHandler создает новый экземпляр AuthHandler
 func NewAuthHandler(authService service.AuthService, logger logger.Logger) *AuthHandler {
 	return &AuthHandler{
+		BaseHandler: grpcBase.NewBaseHandler(logger),
 		authService: authService,
-		logger:      logger,
+		validator:   validation.NewValidator(),
 	}
 }
 
 // Register создает нового пользователя и возвращает пару токенов
 func (h *AuthHandler) Register(ctx context.Context, req *grpc_auth.RegisterRequest) (*grpc_auth.TokenPair, error) {
-	h.logger.Debug("Register request received", logger.String("email", req.Email))
+	h.LogOperationStart(ctx, "Register", map[string]interface{}{
+		"email":      req.Email,
+		"tenant_name": req.TenantName,
+	})
+
+	// Валидация входных данных с использованием pkg/validation
+	requiredFields := map[string]interface{}{
+		"email":       req.Email,
+		"password":    req.Password,
+		"tenant_name": req.TenantName,
+	}
+	
+	if err := h.validator.ValidateRequiredFields(requiredFields, map[string]string{
+		"email":       "Email address",
+		"password":    "Password",
+		"tenant_name": "Tenant name",
+	}); err != nil {
+		return nil, h.LogError(ctx, err, "Register", "validation failed")
+	}
+
+	// Валидация длины полей
+	if err := h.validator.ValidateStringLength(req.Email, "email", 5, 100); err != nil {
+		return nil, h.LogError(ctx, err, "Register", "invalid email length")
+	}
+
+	if err := h.validator.ValidateStringLength(req.Password, "password", 8, 128); err != nil {
+		return nil, h.LogError(ctx, err, "Register", "invalid password length")
+	}
+
+	if err := h.validator.ValidateStringLength(req.TenantName, "tenant_name", 2, 50); err != nil {
+		return nil, h.LogError(ctx, err, "Register", "invalid tenant name length")
+	}
 
 	tokenPair, err := h.authService.Register(ctx, req.Email, req.Password, req.TenantName)
 	if err != nil {
-		h.logger.Error("Register failed", logger.String("error", err.Error()))
-		return nil, h.convertError(err)
+		return nil, h.LogError(ctx, err, "Register", "")
 	}
+
+	h.LogOperationSuccess(ctx, "Register", map[string]interface{}{
+		"access_token": tokenPair.AccessToken,
+	})
 
 	return &grpc_auth.TokenPair{
 		AccessToken:  tokenPair.AccessToken,
@@ -44,13 +82,18 @@ func (h *AuthHandler) Register(ctx context.Context, req *grpc_auth.RegisterReque
 
 // Login аутентифицирует пользователя и возвращает пару токенов
 func (h *AuthHandler) Login(ctx context.Context, req *grpc_auth.LoginRequest) (*grpc_auth.TokenPair, error) {
-	h.logger.Debug("Login request received", logger.String("email", req.Email))
+	h.LogOperationStart(ctx, "Login", map[string]interface{}{
+		"email": req.Email,
+	})
 
 	tokenPair, err := h.authService.Login(ctx, req.Email, req.Password)
 	if err != nil {
-		h.logger.Error("Login failed", logger.String("error", err.Error()))
-		return nil, h.convertError(err)
+		return nil, h.LogError(ctx, err, "Login", "")
 	}
+
+	h.LogOperationSuccess(ctx, "Login", map[string]interface{}{
+		"access_token": tokenPair.AccessToken,
+	})
 
 	return &grpc_auth.TokenPair{
 		AccessToken:  tokenPair.AccessToken,
@@ -61,7 +104,9 @@ func (h *AuthHandler) Login(ctx context.Context, req *grpc_auth.LoginRequest) (*
 
 // ValidateToken проверяет валидность JWT токена
 func (h *AuthHandler) ValidateToken(ctx context.Context, req *grpc_auth.ValidateTokenRequest) (*grpc_auth.ValidateTokenResponse, error) {
-	h.logger.Debug("ValidateToken request received")
+	h.LogOperationStart(ctx, "ValidateToken", map[string]interface{}{
+		"token": req.Token,
+	})
 
 	// TODO: Реализовать валидацию токена через JWT manager
 	// Сейчас возвращаем заглушку для тестирования
@@ -75,13 +120,18 @@ func (h *AuthHandler) ValidateToken(ctx context.Context, req *grpc_auth.Validate
 
 // RefreshToken обновляет пару токенов по refresh токену
 func (h *AuthHandler) RefreshToken(ctx context.Context, req *grpc_auth.RefreshTokenRequest) (*grpc_auth.TokenPair, error) {
-	h.logger.Debug("RefreshToken request received")
+	h.LogOperationStart(ctx, "RefreshToken", map[string]interface{}{
+		"refresh_token": req.RefreshToken,
+	})
 
 	tokenPair, err := h.authService.RefreshToken(ctx, req.RefreshToken)
 	if err != nil {
-		h.logger.Error("RefreshToken failed", logger.String("error", err.Error()))
-		return nil, h.convertError(err)
+		return nil, h.LogError(ctx, err, "RefreshToken", "")
 	}
+
+	h.LogOperationSuccess(ctx, "RefreshToken", map[string]interface{}{
+		"access_token": tokenPair.AccessToken,
+	})
 
 	return &grpc_auth.TokenPair{
 		AccessToken:  tokenPair.AccessToken,
@@ -92,13 +142,19 @@ func (h *AuthHandler) RefreshToken(ctx context.Context, req *grpc_auth.RefreshTo
 
 // Logout отзывает refresh токен
 func (h *AuthHandler) Logout(ctx context.Context, req *grpc_auth.LogoutRequest) (*grpc_auth.LogoutResponse, error) {
-	h.logger.Debug("Logout request received", logger.String("user_id", req.UserId))
+	h.LogOperationStart(ctx, "Logout", map[string]interface{}{
+		"user_id": req.UserId,
+		"refresh_token": req.RefreshToken,
+	})
 
 	err := h.authService.Logout(ctx, req.UserId, req.RefreshToken)
 	if err != nil {
-		h.logger.Error("Logout failed", logger.String("error", err.Error()))
-		return nil, h.convertError(err)
+		return nil, h.LogError(ctx, err, "Logout", "")
 	}
+
+	h.LogOperationSuccess(ctx, "Logout", map[string]interface{}{
+		"user_id": req.UserId,
+	})
 
 	return &grpc_auth.LogoutResponse{
 		Success: true,
@@ -107,13 +163,20 @@ func (h *AuthHandler) Logout(ctx context.Context, req *grpc_auth.LogoutRequest) 
 
 // CreateAPIKey создает новый API ключ для tenant
 func (h *AuthHandler) CreateAPIKey(ctx context.Context, req *grpc_auth.CreateAPIKeyRequest) (*grpc_auth.APIKeyPair, error) {
-	h.logger.Debug("CreateAPIKey request received", logger.String("tenant_id", req.TenantId))
+	h.LogOperationStart(ctx, "CreateAPIKey", map[string]interface{}{
+		"tenant_id": req.TenantId,
+		"name": req.Name,
+	})
 
 	apiKeyPair, err := h.authService.CreateAPIKey(ctx, req.TenantId, req.Name)
 	if err != nil {
-		h.logger.Error("CreateAPIKey failed", logger.String("error", err.Error()))
-		return nil, h.convertError(err)
+		return nil, h.LogError(ctx, err, "CreateAPIKey", "")
 	}
+
+	h.LogOperationSuccess(ctx, "CreateAPIKey", map[string]interface{}{
+		"tenant_id": req.TenantId,
+		"key": apiKeyPair.Key,
+	})
 
 	return &grpc_auth.APIKeyPair{
 		Key:      apiKeyPair.Key,
@@ -126,13 +189,19 @@ func (h *AuthHandler) CreateAPIKey(ctx context.Context, req *grpc_auth.CreateAPI
 
 // ValidateAPIKey проверяет валидность API ключа
 func (h *AuthHandler) ValidateAPIKey(ctx context.Context, req *grpc_auth.ValidateAPIKeyRequest) (*grpc_auth.ValidateAPIKeyResponse, error) {
-	h.logger.Debug("ValidateAPIKey request received")
+	h.LogOperationStart(ctx, "ValidateAPIKey", map[string]interface{}{
+		"key": req.Key,
+	})
 
 	claims, err := h.authService.ValidateAPIKey(ctx, req.Key, req.Secret)
 	if err != nil {
-		h.logger.Error("ValidateAPIKey failed", logger.String("error", err.Error()))
-		return nil, h.convertError(err)
+		return nil, h.LogError(ctx, err, "ValidateAPIKey", "")
 	}
+
+	h.LogOperationSuccess(ctx, "ValidateAPIKey", map[string]interface{}{
+		"tenant_id": claims.TenantID,
+		"key_id": claims.KeyID,
+	})
 
 	return &grpc_auth.ValidateAPIKeyResponse{
 		TenantId: claims.TenantID,
@@ -143,13 +212,18 @@ func (h *AuthHandler) ValidateAPIKey(ctx context.Context, req *grpc_auth.Validat
 
 // RevokeAPIKey отзывает API ключ
 func (h *AuthHandler) RevokeAPIKey(ctx context.Context, req *grpc_auth.RevokeAPIKeyRequest) (*grpc_auth.RevokeAPIKeyResponse, error) {
-	h.logger.Debug("RevokeAPIKey request received", logger.String("key_id", req.KeyId))
+	h.LogOperationStart(ctx, "RevokeAPIKey", map[string]interface{}{
+		"key_id": req.KeyId,
+	})
 
 	err := h.authService.RevokeAPIKey(ctx, req.KeyId)
 	if err != nil {
-		h.logger.Error("RevokeAPIKey failed", logger.String("error", err.Error()))
-		return nil, h.convertError(err)
+		return nil, h.LogError(ctx, err, "RevokeAPIKey", "")
 	}
+
+	h.LogOperationSuccess(ctx, "RevokeAPIKey", map[string]interface{}{
+		"key_id": req.KeyId,
+	})
 
 	return &grpc_auth.RevokeAPIKeyResponse{
 		Success: true,

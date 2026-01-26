@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"UptimePingPlatform/pkg/config"
+	"UptimePingPlatform/pkg/connection"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
 	"UptimePingPlatform/pkg/ratelimit"
@@ -43,16 +44,28 @@ func main() {
 		}
 	}()
 
-	// Инициализация Redis
+	// Инициализация retry конфигурации
+	retryConfig := connection.DefaultRetryConfig()
+	
+	// Инициализация Redis с retry логикой
 	redisConfig := pkg_redis.NewConfig()
 	redisConfig.Addr = "localhost:6379" // В реальном приложении брать из конфига
 
-	redisCtx, redisCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	redisCtx, redisCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer redisCancel()
 
-	redisClient, err := pkg_redis.Connect(redisCtx, redisConfig)
+	var redisClient *pkg_redis.Client
+	err = connection.WithRetry(redisCtx, retryConfig, func(ctx context.Context) error {
+		var err error
+		redisClient, err = pkg_redis.Connect(ctx, redisConfig)
+		if err != nil {
+			appLogger.Error("Failed to connect to redis, retrying...", logger.String("error", err.Error()))
+			return err
+		}
+		return nil
+	})
 	if err != nil {
-		appLogger.Error("Failed to connect to redis", logger.String("error", err.Error()))
+		appLogger.Error("Failed to connect to redis after retries", logger.String("error", err.Error()))
 		os.Exit(1)
 	}
 	defer redisClient.Close()
@@ -64,7 +77,7 @@ func main() {
 	metricCollector := metrics.NewMetrics("api_gateway")
 
 	// Создаем реальный gRPC клиент для auth-service
-	authClient, err := client.NewGRPCAuthClient("localhost:50051", 5*time.Second)
+	authClient, err := client.NewGRPCAuthClient("localhost:50051", 5*time.Second, appLogger)
 	if err != nil {
 		appLogger.Error("Failed to connect to auth service", logger.String("error", err.Error()))
 		os.Exit(1)
@@ -72,7 +85,7 @@ func main() {
 	defer authClient.Close()
 
 	// Создаем gRPC клиент для scheduler-service
-	schedulerClient, err := client.NewSchedulerClient("localhost:50052", 5*time.Second)
+	schedulerClient, err := client.NewSchedulerClient("localhost:50052", 5*time.Second, appLogger)
 	if err != nil {
 		appLogger.Error("Failed to connect to scheduler service", logger.String("error", err.Error()))
 		os.Exit(1)
@@ -83,7 +96,7 @@ func main() {
 	// Используем алиас httphandler для вашего пакета
 	mockAuthService := httphandler.MockAuthService{}
 	mockHealthHandler := httphandler.MockHealthHandler{}
-	baseHandler := httphandler.NewHandler(&mockAuthService, &mockHealthHandler, schedulerClient)
+	baseHandler := httphandler.NewHandler(&mockAuthService, &mockHealthHandler, schedulerClient, appLogger)
 
 	// Обертываем хендлер в middleware
 	var httpHandler http.Handler = baseHandler

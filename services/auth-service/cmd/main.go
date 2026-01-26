@@ -12,9 +12,14 @@ import (
 	"time"
 
 	"UptimePingPlatform/pkg/config"
+	"UptimePingPlatform/pkg/connection"
 	"UptimePingPlatform/pkg/database"
+	"UptimePingPlatform/pkg/health"
 	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/pkg/metrics"
 	pkg_redis "UptimePingPlatform/pkg/redis"
+	"UptimePingPlatform/pkg/rabbitmq"
+	"UptimePingPlatform/pkg/ratelimit"
 	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
 	"UptimePingPlatform/services/auth-service/internal/pkg/password"
 	redis_repo "UptimePingPlatform/services/auth-service/internal/repository/redis"
@@ -40,8 +45,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize logger: %v", err)
 	}
+	
+	// Инициализация метрик
+	metricsInstance := metrics.NewMetrics("auth-service")
 
-	// Инициализация базы данных
+	// Инициализация retry конфигурации
+	retryConfig := connection.DefaultRetryConfig()
+	
+	// Инициализация базы данных с retry логикой
 	dbConfig := &database.Config{
 		Host:     cfg.Database.Host,
 		Port:     cfg.Database.Port,
@@ -51,21 +62,53 @@ func main() {
 		SSLMode:  "disable",
 	}
 	
-	postgresDB, err := database.Connect(context.Background(), dbConfig)
+	var postgresDB *database.Postgres
+	err = connection.WithRetry(context.Background(), retryConfig, func(ctx context.Context) error {
+		var err error
+		postgresDB, err = database.Connect(ctx, dbConfig)
+		if err != nil {
+			appLogger.Error("Failed to connect to database, retrying...", logger.String("error", err.Error()))
+			return err
+		}
+		return nil
+	})
 	if err != nil {
-		appLogger.Error("Failed to connect to database", logger.String("error", err.Error()))
+		appLogger.Error("Failed to connect to database after retries", logger.String("error", err.Error()))
 		os.Exit(1)
 	}
 	defer postgresDB.Pool.Close()
 
-	// Инициализация Redis
+	// Инициализация Redis с retry логикой
 	redisConfig := pkg_redis.NewConfig()
-	redisClient, err := pkg_redis.Connect(context.Background(), redisConfig)
+	var redisClient *pkg_redis.Client
+	err = connection.WithRetry(context.Background(), retryConfig, func(ctx context.Context) error {
+		var err error
+		redisClient, err = pkg_redis.Connect(ctx, redisConfig)
+		if err != nil {
+			appLogger.Error("Failed to connect to Redis, retrying...", logger.String("error", err.Error()))
+			return err
+		}
+		return nil
+	})
 	if err != nil {
-		appLogger.Error("Failed to connect to Redis", logger.String("error", err.Error()))
+		appLogger.Error("Failed to connect to Redis after retries", logger.String("error", err.Error()))
 		os.Exit(1)
 	}
 	defer redisClient.Client.Close()
+
+	// Инициализация RabbitMQ для уведомлений
+	rabbitConfig := rabbitmq.NewConfig()
+	rabbitConfig.URL = "amqp://localhost:5672" // TODO: взять из конфига
+	rabbitConfig.Queue = "auth_notifications"
+	
+	rabbitConn, err := rabbitmq.Connect(context.Background(), rabbitConfig)
+	if err != nil {
+		appLogger.Warn("Failed to connect to RabbitMQ (notifications disabled)", logger.String("error", err.Error()))
+		// Не выходим, так как это не критично для работы сервиса
+	} else {
+		defer rabbitConn.Close()
+		appLogger.Info("RabbitMQ connected for notifications")
+	}
 
 	// Инициализация компонентов
 	jwtManager := jwt.NewManager("your-access-secret", "your-refresh-secret", 24*time.Hour, 7*24*time.Hour)
@@ -115,13 +158,47 @@ func main() {
 	// Запуск HTTP сервера для health checks
 	go func() {
 		mux := http.NewServeMux()
-		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("OK"))
-		})
+		
+		// Инициализация health checker
+		healthChecker := health.NewSimpleHealthChecker("1.0.0")
+		
+		// Инициализация rate limiter
+		rateLimiter := ratelimit.NewRedisRateLimiter(redisClient.Client)
+		
+		// Rate limiting middleware
+		rateLimitMiddleware := func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				clientIP := getClientIP(r)
+				allowed, err := rateLimiter.CheckRateLimit(r.Context(), clientIP, 100, time.Minute) // 100 запросов в минуту
+				if err != nil {
+					appLogger.Error("Rate limit check failed", logger.String("error", err.Error()))
+					http.Error(w, "Rate limit check failed", http.StatusInternalServerError)
+					return
+				}
+				
+				if !allowed {
+					appLogger.Warn("Rate limit exceeded", logger.String("client_ip", clientIP))
+					http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+					return
+				}
+				
+				next.ServeHTTP(w, r)
+			})
+		}
+		
+		// Health check эндпоинты
+		mux.HandleFunc("/health", health.Handler(healthChecker))
+		mux.HandleFunc("/ready", health.ReadyHandler(healthChecker))
+		mux.HandleFunc("/live", health.LiveHandler())
+		
+		// Metrics эндпоинт
+		mux.Handle("/metrics", metricsInstance.GetHandler())
+		
+		// Применяем middleware
+		handler := metricsInstance.Middleware(rateLimitMiddleware(mux))
 
 		appLogger.Info("HTTP server starting", logger.String("address", fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)))
-		if err := http.ListenAndServe(fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port), mux); err != nil {
+		if err := http.ListenAndServe(fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port), handler); err != nil {
 			appLogger.Error("Failed to serve HTTP", logger.String("error", err.Error()))
 			os.Exit(1)
 		}
@@ -153,4 +230,20 @@ func main() {
 	}
 
 	appLogger.Info("Server shutdown complete")
+}
+
+// getClientIP получает IP адрес клиента из запроса
+func getClientIP(r *http.Request) string {
+	// Проверяем X-Forwarded-For header (если за прокси)
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		return xff
+	}
+	
+	// Проверяем X-Real-IP header
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+	
+	// Возвращаем RemoteAddr
+	return r.RemoteAddr
 }
