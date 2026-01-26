@@ -90,7 +90,7 @@ type ICMPConfig struct {
 }
 
 // gRPCConfig представляет конфигурацию gRPC проверки
-type gRPCConfig struct {
+type GPRCConfig struct {
 	Service     string            `json:"service"`
 	Method      string            `json:"method"`
 	Host        string            `json:"host"`
@@ -216,12 +216,12 @@ func (t *Task) GetICMPConfig() (*ICMPConfig, error) {
 }
 
 // GetgRPCConfig извлекает gRPC конфигурацию
-func (t *Task) GetgRPCConfig() (*gRPCConfig, error) {
+func (t *Task) GetgRPCConfig() (*GPRCConfig, error) {
 	if t.Type != string(TaskTypeGRPC) {
 		return nil, ErrInvalidTaskType
 	}
 	
-	config := &gRPCConfig{}
+	config := &GPRCConfig{}
 	if service, ok := t.Config["service"].(string); ok {
 		config.Service = service
 	}
