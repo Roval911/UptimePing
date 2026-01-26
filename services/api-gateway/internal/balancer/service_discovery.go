@@ -3,10 +3,101 @@ package balancer
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"UptimePingPlatform/pkg/logger"
 )
+
+// Instance представляет инстанс сервиса
+type Instance struct {
+	Address       string
+	Weight        int
+	HealthChecker InstanceHealthChecker
+	mu            sync.RWMutex
+	active        bool
+	connections   int64
+}
+
+// InstanceHealthChecker интерфейс для проверки здоровья инстанса
+type InstanceHealthChecker interface {
+	IsHealthy() bool
+	Address() string
+	LastSeen() time.Time
+	Close() error
+}
+
+// NewInstance создает новый инстанс
+func NewInstance(address string, healthChecker InstanceHealthChecker, weight int) *Instance {
+	return &Instance{
+		Address:       address,
+		Weight:        weight,
+		HealthChecker: healthChecker,
+		active:        true,
+	}
+}
+
+// IsActive возвращает true если инстанс активен
+func (i *Instance) IsActive() bool {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.active
+}
+
+// SetActive устанавливает активность инстанса
+func (i *Instance) SetActive(active bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.active = active
+}
+
+// GetActiveConnections возвращает количество активных соединений
+func (i *Instance) GetActiveConnections() int64 {
+	return atomic.LoadInt64(&i.connections)
+}
+
+// IncrementConnections увеличивает счетчик соединений
+func (i *Instance) IncrementConnections() {
+	atomic.AddInt64(&i.connections, 1)
+}
+
+// DecrementConnections уменьшает счетчик соединений
+func (i *Instance) DecrementConnections() {
+	atomic.AddInt64(&i.connections, -1)
+}
+
+// NewInstanceHealthChecker создает новый health checker
+func NewInstanceHealthChecker(address string, log logger.Logger) InstanceHealthChecker {
+	return &MockHealthChecker{address: address}
+}
+
+// NewGrpcHealthChecker создает новый gRPC health checker
+func NewGrpcHealthChecker(address string, log logger.Logger) InstanceHealthChecker {
+	// В реальной реализации здесь бы создавался gRPC HealthChecker
+	// Пока используем мок для совместимости
+	return &MockHealthChecker{address: address}
+}
+
+// MockHealthChecker мок для health checker (для тестов)
+type MockHealthChecker struct {
+	address string
+}
+
+func (m *MockHealthChecker) IsHealthy() bool {
+	return true
+}
+
+func (m *MockHealthChecker) Address() string {
+	return m.address
+}
+
+func (m *MockHealthChecker) LastSeen() time.Time {
+	return time.Now()
+}
+
+func (m *MockHealthChecker) Close() error {
+	return nil
+}
 
 // ServiceDiscovery представляет механизм обнаружения сервисов
 type ServiceDiscovery interface {
@@ -41,7 +132,7 @@ func (s *StaticServiceDiscovery) Register(serviceName string, addresses []string
 		if i < len(weights) {
 			weight = weights[i]
 		}
-		healthChecker := NewHealthChecker(address, nil) // Логгер будет установлен позже
+		healthChecker := NewInstanceHealthChecker(address, nil) // TODO: передать реальный логгер
 		instance := NewInstance(address, healthChecker, weight)
 		instances = append(instances, instance)
 	}
@@ -77,75 +168,17 @@ func (s *StaticServiceDiscovery) Watch(ctx context.Context, serviceName string, 
 		ticker := time.NewTicker(10 * time.Second) // Проверяем состояние каждые 10 секунд
 		defer ticker.Stop()
 
-		var lastActiveCount int
-
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				instances, _ := s.GetInstances(ctx, serviceName)
-
-				// Проверяем, изменилось ли количество активных инстансов
-				// Это позволяет детектировать изменения в состоянии health check
-				activeCount := len(instances)
-				if activeCount != lastActiveCount {
+				if instances, err := s.GetInstances(ctx, serviceName); err == nil {
 					callback(instances)
-					lastActiveCount = activeCount
 				}
 			}
 		}
 	}()
+
 	return nil
-}
-
-// DynamicServiceDiscovery реализует динамическое обнаружение сервисов
-// TODO Пока пустая реализация, может быть расширена для работы с Consul, etcd и т.д.
-type DynamicServiceDiscovery struct {
-	// TODO: Реализовать интеграцию с реальными системами обнаружения сервисов
-	// На данный момент в проекте нет интеграции с Consul, etcd или другими системами service discovery
-	// Реализация отложена до добавления соответствующих зависимостей
-}
-
-// NewDynamicServiceDiscovery создает новый DynamicServiceDiscovery
-func NewDynamicServiceDiscovery() *DynamicServiceDiscovery {
-	return &DynamicServiceDiscovery{}
-}
-
-// GetInstances возвращает список инстансов для сервиса
-func (d *DynamicServiceDiscovery) GetInstances(ctx context.Context, serviceName string) ([]*Instance, error) {
-	// На данный момент в проекте нет интеграции с Consul, etcd или другими системами service discovery
-	// Возвращаем пустой список, так как нет реальной реализации
-	return []*Instance{}, nil
-}
-
-// Watch отслеживает изменения в списке инстансов
-func (d *DynamicServiceDiscovery) Watch(ctx context.Context, serviceName string, callback func([]*Instance)) error {
-	// На данный момент в проекте нет интеграции с Consul, etcd или другими системами service discovery
-	// Имитируем постоянное наблюдение с пустым списком инстансов
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				callback([]*Instance{})
-			}
-		}
-	}()
-	return nil
-}
-
-// SetLogger устанавливает логгер для всех health checkers
-func (s *StaticServiceDiscovery) SetLogger(log logger.Logger) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	for _, instances := range s.instances {
-		for _, instance := range instances {
-			instance.Health.log = log
-		}
-	}
 }

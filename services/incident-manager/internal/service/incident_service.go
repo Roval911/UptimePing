@@ -28,11 +28,17 @@ type IncidentService interface {
 	// GetIncidents получает список инцидентов с фильтрацией
 	GetIncidents(ctx context.Context, filter *domain.IncidentFilter) ([]*domain.Incident, error)
 	
+	// UpdateIncident обновляет инцидент
+	UpdateIncident(ctx context.Context, incident *domain.Incident) error
+	
 	// AcknowledgeIncident подтверждает инцидент
 	AcknowledgeIncident(ctx context.Context, id string) error
 	
 	// ResolveIncident разрешает инцидент
 	ResolveIncident(ctx context.Context, id string) error
+	
+	// GetIncidentHistory получает историю инцидента
+	GetIncidentHistory(ctx context.Context, incidentID string) ([]*domain.IncidentEvent, error)
 	
 	// GetIncidentStats получает статистику по инцидентам
 	GetIncidentStats(ctx context.Context, tenantID string) (*domain.IncidentStats, error)
@@ -1024,6 +1030,129 @@ func normalizeErrorMessage(message string) string {
 	message = strings.TrimSpace(message)
 	
 	return message
+}
+
+// UpdateIncident обновляет инцидент
+func (s *incidentService) UpdateIncident(ctx context.Context, incident *domain.Incident) error {
+	if incident == nil {
+		return fmt.Errorf("incident cannot be nil")
+	}
+	
+	s.logger.Debug("Updating incident",
+		logger.String("incident_id", incident.ID),
+		logger.String("tenant_id", incident.TenantID))
+	
+	// Валидация
+	if err := s.validator.ValidateRequiredFields(
+		map[string]interface{}{
+			"id":        incident.ID,
+			"tenant_id": incident.TenantID,
+		},
+		map[string]string{
+			"id":        "incident ID is required",
+			"tenant_id": "tenant ID is required",
+		},
+	); err != nil {
+		s.logger.Error("Incident validation failed",
+			logger.String("incident_id", incident.ID),
+			logger.Error(err))
+		return err
+	}
+	
+	// Обновляем время изменения
+	incident.UpdatedAt = time.Now()
+	
+	// Сохраняем изменения
+	err := s.repo.Update(ctx, incident)
+	if err != nil {
+		s.logger.Error("Failed to update incident",
+			logger.String("incident_id", incident.ID),
+			logger.Error(err))
+		return fmt.Errorf("failed to update incident: %w", err)
+	}
+	
+	s.logger.Info("Incident updated successfully",
+		logger.String("incident_id", incident.ID))
+	
+	return nil
+}
+
+// GetIncidentHistory получает историю инцидента
+func (s *incidentService) GetIncidentHistory(ctx context.Context, incidentID string) ([]*domain.IncidentEvent, error) {
+	s.logger.Debug("Getting incident history",
+		logger.String("incident_id", incidentID))
+	
+	// Валидация
+	if err := s.validator.ValidateRequiredFields(
+		map[string]interface{}{
+			"incident_id": incidentID,
+		},
+		map[string]string{
+			"incident_id": "incident ID is required",
+		},
+	); err != nil {
+		s.logger.Error("Incident ID validation failed",
+			logger.String("incident_id", incidentID),
+			logger.Error(err))
+		return nil, err
+	}
+	
+	// Получаем инцидент
+	incident, err := s.repo.GetByID(ctx, incidentID)
+	if err != nil {
+		s.logger.Error("Failed to get incident for history",
+			logger.String("incident_id", incidentID),
+			logger.Error(err))
+		return nil, fmt.Errorf("failed to get incident: %w", err)
+	}
+	
+	// Создаем историю на основе метаданных
+	history := make([]*domain.IncidentEvent, 0)
+	
+	// Добавляем событие создания
+	history = append(history, &domain.IncidentEvent{
+		ID:          fmt.Sprintf("%s-created", incidentID),
+		IncidentID:  incidentID,
+		EventType:   "incident.created",
+		OldStatus:   "",
+		NewStatus:   incident.Status,
+		OldSeverity: "",
+		NewSeverity: incident.Severity,
+		Message:     "Incident created",
+		Metadata:    map[string]interface{}{},
+		CreatedAt:   incident.CreatedAt,
+	})
+	
+	// Добавляем события эскалации если есть
+	if incident.Metadata != nil {
+		if escalationHistory, ok := incident.Metadata["escalation_history"]; ok {
+			if escalations, ok := escalationHistory.([]interface{}); ok {
+				for i, esc := range escalations {
+					if escMap, ok := esc.(map[string]interface{}); ok {
+						event := &domain.IncidentEvent{
+							ID:          fmt.Sprintf("%s-escalation-%d", incidentID, i),
+							IncidentID:  incidentID,
+							EventType:   "incident.escalated",
+							OldStatus:   "",
+							NewStatus:   incident.Status,
+							OldSeverity: "",
+							NewSeverity: "",
+							Message:     fmt.Sprintf("Escalated: %v", escMap),
+							Metadata:    escMap,
+							CreatedAt:   incident.CreatedAt,
+						}
+						history = append(history, event)
+					}
+				}
+			}
+		}
+	}
+	
+	s.logger.Debug("Incident history retrieved",
+		logger.String("incident_id", incidentID),
+		logger.Int("events_count", len(history)))
+	
+	return history, nil
 }
 
 // removeTimestamps удаляет временные метки из сообщения

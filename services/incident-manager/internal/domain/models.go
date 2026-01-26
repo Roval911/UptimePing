@@ -39,6 +39,20 @@ type Incident struct {
 	UpdatedAt   time.Time          `json:"updated_at" db:"updated_at"`
 }
 
+// IncidentEvent представляет событие в жизненном цикле инцидента
+type IncidentEvent struct {
+	ID          string                 `json:"id"`
+	IncidentID  string                 `json:"incident_id"`
+	EventType   string                 `json:"event_type"`
+	OldStatus   IncidentStatus         `json:"old_status"`
+	NewStatus   IncidentStatus         `json:"new_status"`
+	OldSeverity IncidentSeverity       `json:"old_severity"`
+	NewSeverity IncidentSeverity       `json:"new_severity"`
+	Message     string                 `json:"message"`
+	Metadata    map[string]interface{} `json:"metadata"`
+	CreatedAt   time.Time              `json:"created_at"`
+}
+
 // NewIncident создает новый инцидент
 func NewIncident(checkID, tenantID string, severity IncidentSeverity, errorMessage string) *Incident {
 	now := time.Now()

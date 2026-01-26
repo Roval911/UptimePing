@@ -16,9 +16,9 @@ import (
 	"UptimePingPlatform/pkg/metrics"
 	"UptimePingPlatform/pkg/ratelimit"
 	pkg_redis "UptimePingPlatform/pkg/redis"
+	"UptimePingPlatform/services/api-gateway/internal/client"
 	httphandler "UptimePingPlatform/services/api-gateway/internal/handler/http" // алиас для вашего пакета http
 	"UptimePingPlatform/services/api-gateway/internal/middleware"
-	"UptimePingPlatform/services/api-gateway/internal/client"
 )
 
 func main() {
@@ -46,7 +46,7 @@ func main() {
 
 	// Инициализация retry конфигурации
 	retryConfig := connection.DefaultRetryConfig()
-	
+
 	// Инициализация Redis с retry логикой
 	redisConfig := pkg_redis.NewConfig()
 	redisConfig.Addr = "localhost:6379" // В реальном приложении брать из конфига
@@ -93,10 +93,10 @@ func main() {
 	defer schedulerClient.Close()
 
 	// Настройка HTTP сервера
-	// Используем алиас httphandler для вашего пакета
-	mockAuthService := httphandler.MockAuthService{}
-	mockHealthHandler := httphandler.MockHealthHandler{}
-	baseHandler := httphandler.NewHandler(&mockAuthService, &mockHealthHandler, schedulerClient, appLogger)
+	//todo Временные моки для разработки
+	mockAuthService := &httphandler.MockAuthService{}
+	mockHealthHandler := &httphandler.MockHealthHandler{}
+	baseHandler := httphandler.NewHandler(mockAuthService, mockHealthHandler, schedulerClient, appLogger)
 
 	// Обертываем хендлер в middleware
 	var httpHandler http.Handler = baseHandler

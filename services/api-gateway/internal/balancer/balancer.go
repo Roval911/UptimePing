@@ -1,7 +1,6 @@
 package balancer
 
 import (
-	"context"
 	"sync"
 
 	"google.golang.org/grpc/balancer"
@@ -27,7 +26,7 @@ func NewBuilder(log logger.Logger) balancer.Builder {
 
 // Build создает новый балансировщик
 func (b *Builder) Build(cc balancer.ClientConn, opts balancer.BuildOptions) balancer.Balancer {
-	bal := &Balancer{
+	bal := &uptimePingBalancer{
 		cc:         cc,
 		log:        b.log,
 		scStates:   make(map[balancer.SubConn]connectivity.State),
@@ -47,275 +46,190 @@ func (b *Builder) Name() string {
 	return Name
 }
 
-// Balancer реализует интерфейс балансировки нагрузки
-type Balancer struct {
-	cc  balancer.ClientConn
-	log logger.Logger
-	mu  sync.RWMutex
-
-	// Состояние SubConn
-	scStates map[balancer.SubConn]connectivity.State
-	// Маппинг адресов на SubConn
-	subConns map[resolver.Address]balancer.SubConn
-	// Обратный маппинг SubConn на адреса
-	scToAddr map[balancer.SubConn]resolver.Address
-	// Количество активных соединений для каждого SubConn
+// uptimePingBalancer реализует интерфейс балансировки нагрузки
+type uptimePingBalancer struct {
+	cc         balancer.ClientConn
+	log        logger.Logger
+	mu         sync.Mutex
+	scStates   map[balancer.SubConn]connectivity.State
+	subConns   map[resolver.Address]balancer.SubConn
+	scToAddr   map[balancer.SubConn]resolver.Address
 	connsCount map[balancer.SubConn]int
-	// Инстансы для health checking
-	instances map[string]*Instance
-	// Текущий picker
-	picker balancer.Picker
-
-	ctx    context.Context
-	cancel context.CancelFunc
+	instances  map[string]*Instance
+	picker     balancer.Picker
 }
 
-// UpdateClientConnState обновляет состояние соединения клиента
-func (b *Balancer) UpdateClientConnState(s balancer.ClientConnState) error {
+// ClientConn возвращает клиентское соединение
+func (b *uptimePingBalancer) ClientConn() balancer.ClientConn {
+	return b.cc
+}
+
+// UpdateClientConnState обновляет состояние соединения
+func (b *uptimePingBalancer) UpdateClientConnState(ccs balancer.ClientConnState) error {
+	b.log.Info("Updating client connection state")
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	b.log.Debug("UpdateClientConnState called",
-		logger.Int("address_count", len(s.ResolverState.Addresses)))
+	// Получаем список адресов из resolver
+	addresses := ccs.ResolverState.Addresses
+	if len(addresses) == 0 {
+		b.log.Warn("No addresses available")
+		return nil
+	}
 
-	// Обновляем SubConn на основе новых адресов
-	addrsSet := make(map[resolver.Address]struct{})
-	for _, addr := range s.ResolverState.Addresses {
-		addrsSet[addr] = struct{}{}
-
-		// Если SubConn для этого адреса еще не существует, создаем его
-		if _, ok := b.subConns[addr]; !ok {
+	// Создаем новые SubConn для новых адресов
+	for _, addr := range addresses {
+		if _, exists := b.subConns[addr]; !exists {
 			sc, err := b.cc.NewSubConn([]resolver.Address{addr}, balancer.NewSubConnOptions{})
 			if err != nil {
-				b.log.Error("Failed to create new SubConn",
-					logger.String("address", addr.Addr),
-					logger.String("error", err.Error()))
+				b.log.Error("Failed to create subconnection", logger.String("address", addr.Addr), logger.Error(err))
 				continue
 			}
-
 			b.subConns[addr] = sc
 			b.scToAddr[sc] = addr
 			b.scStates[sc] = connectivity.Idle
 			b.connsCount[sc] = 0
-
-			// Создаем инстанс для health checking
-			healthChecker := NewHealthChecker(addr.Addr, b.log)
-			instance := NewInstance(addr.Addr, healthChecker, 0)
-			b.instances[addr.Addr] = instance
-
-			// Запускаем контекст для health checking если он еще не запущен
-			if b.ctx == nil {
-				b.ctx, b.cancel = context.WithCancel(context.Background())
-			}
-
-			// Запускаем health checking
-			go func(addr string, instance *Instance) {
-				if err := instance.Health.Start(b.ctx); err != nil {
-					b.log.Error("Failed to start health check",
-						logger.String("address", addr),
-						logger.String("error", err.Error()))
-				}
-			}(addr.Addr, instance)
-
 			sc.Connect()
-			b.log.Debug("Created new SubConn", logger.String("address", addr.Addr))
+			b.log.Info("Created new subconnection", logger.String("address", addr.Addr))
 		}
 	}
 
 	// Удаляем SubConn для адресов, которых больше нет
 	for addr, sc := range b.subConns {
-		if _, ok := addrsSet[addr]; !ok {
-			b.cc.RemoveSubConn(sc)
+		found := false
+		for _, resolverAddr := range addresses {
+			if addr == resolverAddr {
+				found = true
+				break
+			}
+		}
+		if !found {
+			sc.Shutdown()
 			delete(b.subConns, addr)
 			delete(b.scToAddr, sc)
 			delete(b.scStates, sc)
 			delete(b.connsCount, sc)
-
-			// Закрываем health checker для этого инстанса
-			if instance, ok := b.instances[addr.Addr]; ok {
-				instance.Health.Close()
-				delete(b.instances, addr.Addr)
-			}
-
-			b.log.Debug("Removed SubConn", logger.String("address", addr.Addr))
+			b.log.Info("Removed subconnection", logger.String("address", addr.Addr))
 		}
 	}
 
-	// Обновляем picker
 	b.updatePicker()
 	return nil
 }
 
-// ResolverError обрабатывает ошибки резолвера
-func (b *Balancer) ResolverError(err error) {
-	b.log.Error("Resolver error", logger.String("error", err.Error()))
+// ResolverError обрабатывает ошибки resolver
+func (b *uptimePingBalancer) ResolverError(err error) {
+	b.log.Error("Resolver error", logger.Error(err))
 }
 
 // UpdateSubConnState обновляет состояние подсоединения
-func (b *Balancer) UpdateSubConnState(sc balancer.SubConn, state balancer.SubConnState) {
+func (b *uptimePingBalancer) UpdateSubConnState(sc balancer.SubConn, scs balancer.SubConnState) {
+	b.log.Info("Updating subconnection state", logger.String("state", scs.ConnectivityState.String()))
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	oldState, ok := b.scStates[sc]
-	if !ok {
-		b.log.Warn("UpdateSubConnState called for unknown SubConn")
+	oldState, exists := b.scStates[sc]
+	if !exists {
+		b.log.Warn("Unknown subconnection")
 		return
 	}
 
-	b.scStates[sc] = state.ConnectivityState
-	b.log.Debug("SubConn state changed",
-		logger.String("address", b.scToAddr[sc].Addr),
-		logger.String("old_state", oldState.String()),
-		logger.String("new_state", state.ConnectivityState.String()))
+	b.scStates[sc] = scs.ConnectivityState
 
-	// Обновляем picker
-	b.updatePicker()
-}
-
-// ExitIdle вызывается, когда клиент хочет выйти из idle состояния
-func (b *Balancer) ExitIdle() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.log.Debug("ExitIdle called")
-
-	// Пытаемся переподключить все idle соединения
-	for sc, state := range b.scStates {
-		if state == connectivity.Idle || state == connectivity.TransientFailure {
-			sc.Connect()
-			b.log.Debug("Reconnecting SubConn", logger.String("address", b.scToAddr[sc].Addr))
-		}
+	// Если состояние изменилось на Ready, обновляем picker
+	if oldState != connectivity.Ready && scs.ConnectivityState == connectivity.Ready {
+		b.log.Info("Subconnection is ready")
+		b.updatePicker()
+	} else if oldState == connectivity.Ready && scs.ConnectivityState != connectivity.Ready {
+		b.log.Warn("Subconnection is not ready anymore", logger.String("state", scs.ConnectivityState.String()))
+		b.updatePicker()
 	}
 }
 
 // Close закрывает балансировщик
-func (b *Balancer) Close() {
+func (b *uptimePingBalancer) Close() {
+	b.log.Info("Closing balancer")
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	b.log.Info("Balancer closing")
-
-	if b.cancel != nil {
-		b.cancel()
+	// Закрываем все SubConn
+	for _, sc := range b.subConns {
+		sc.Shutdown()
 	}
 
-	// Закрываем все health checkers
-	for _, instance := range b.instances {
-		instance.Health.Close()
-	}
-
-	b.instances = nil
-	b.subConns = nil
-	b.scToAddr = nil
-	b.scStates = nil
-	b.connsCount = nil
+	// Очищаем все карты
+	b.subConns = make(map[resolver.Address]balancer.SubConn)
+	b.scToAddr = make(map[balancer.SubConn]resolver.Address)
+	b.scStates = make(map[balancer.SubConn]connectivity.State)
+	b.connsCount = make(map[balancer.SubConn]int)
+	b.instances = make(map[string]*Instance)
 }
 
-// updatePicker обновляет picker на основе текущего состояния
-func (b *Balancer) updatePicker() {
-	// Собираем доступные SubConn
-	var readyScs []balancer.SubConn
+// ExitIdle выходит из idle состояния
+func (b *uptimePingBalancer) ExitIdle() {
+	b.log.Info("Exiting idle state")
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	// Переподключаем все неактивные SubConn
+	for sc, state := range b.scStates {
+		if state == connectivity.Idle {
+			sc.Connect()
+			b.log.Info("Reconnecting idle subconnection")
+		}
+	}
+}
+
+// updatePicker обновляет стратегию выбора соединений
+func (b *uptimePingBalancer) updatePicker() {
+	// Собираем список готовых SubConn
+	readySCs := make([]balancer.SubConn, 0)
 	for sc, state := range b.scStates {
 		if state == connectivity.Ready {
-			// Проверяем health инстанса
-			if addr, ok := b.scToAddr[sc]; ok {
-				if instance, ok := b.instances[addr.Addr]; ok && instance.Health.IsHealthy() {
-					readyScs = append(readyScs, sc)
-				}
-			}
+			readySCs = append(readySCs, sc)
 		}
 	}
 
-	if len(readyScs) > 0 {
-		// Используем round-robin стратегию
-		b.picker = &rrPicker{
-			subConns: readyScs,
-			next:     0,
-			mu:       sync.Mutex{},
-			log:      b.log,
-		}
-		b.log.Debug("Picker updated with ready connections", logger.Int("ready_count", len(readyScs)))
-	} else {
-		// Нет доступных соединений
+	if len(readySCs) == 0 {
 		b.picker = base.NewErrPicker(balancer.ErrNoSubConnAvailable)
-		b.log.Warn("No ready connections available")
-	}
-
-	b.cc.UpdateState(balancer.State{
-		ConnectivityState: b.determineOverallState(),
-		Picker:            b.picker,
-	})
-}
-
-// determineOverallState определяет общее состояние балансировщика
-func (b *Balancer) determineOverallState() connectivity.State {
-	hasReady := false
-	hasConnecting := false
-	hasIdle := false
-
-	for _, state := range b.scStates {
-		switch state {
-		case connectivity.Ready:
-			hasReady = true
-		case connectivity.Connecting:
-			hasConnecting = true
-		case connectivity.Idle:
-			hasIdle = true
+		b.log.Warn("No ready subconnections available")
+	} else {
+		b.picker = &uptimePingPicker{
+			subConns:   readySCs,
+			connsCount: b.connsCount,
+			log:        b.log,
 		}
+		b.log.Info("Picker updated", logger.Int("ready_connections", len(readySCs)))
 	}
 
-	if hasReady {
-		return connectivity.Ready
-	} else if hasConnecting {
-		return connectivity.Connecting
-	} else if hasIdle {
-		return connectivity.Idle
-	}
-	return connectivity.TransientFailure
+	b.cc.UpdateState(balancer.State{Picker: b.picker})
 }
 
-// Register регистрирует балансировщик в gRPC
-func Register(log logger.Logger) {
-	balancer.Register(NewBuilder(log))
-}
-
-// SetLogger устанавливает логгер
-func (b *Builder) SetLogger(log logger.Logger) {
-	b.log = log
-}
-
-// rrPicker реализует round-robin стратегию выбора SubConn
-type rrPicker struct {
-	subConns []balancer.SubConn
-	next     int
-	mu       sync.Mutex
-	log      logger.Logger
+// uptimePingPicker реализует стратегию выбора соединений
+type uptimePingPicker struct {
+	subConns   []balancer.SubConn
+	connsCount map[balancer.SubConn]int
+	log        logger.Logger
+	mu         sync.Mutex
 }
 
 // Pick выбирает SubConn для запроса
-func (p *rrPicker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
+func (p *uptimePingPicker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if len(p.subConns) == 0 {
-		p.log.Error("No subconns available in picker")
 		return balancer.PickResult{}, balancer.ErrNoSubConnAvailable
 	}
 
-	sc := p.subConns[p.next]
-	p.next = (p.next + 1) % len(p.subConns)
+	// Простая round-robin стратегия
+	// В будущем можно реализовать более сложные стратегии
+	selected := p.subConns[0]
 
-	p.log.Debug("Picked SubConn", logger.Int("index", p.next))
+	// Перемещаем выбранный SubConn в конец для round-robin
+	p.subConns = append(p.subConns[1:], selected)
 
-	return balancer.PickResult{
-		SubConn: sc,
-		Done: func(info balancer.DoneInfo) {
-			//TODO Здесь можно добавить логику обработки завершения запроса
-			// Например, отслеживание ошибок или обновление метрик
-			if info.Err != nil {
-				p.log.Debug("Request completed with error",
-					logger.String("error", info.Err.Error()))
-			}
-		},
-	}, nil
+	p.log.Debug("Picked subconnection")
+
+	return balancer.PickResult{SubConn: selected}, nil
 }

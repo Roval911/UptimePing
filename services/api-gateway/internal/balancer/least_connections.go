@@ -6,15 +6,12 @@ import (
 
 // LeastConnections реализует стратегию least-connections балансировки нагрузки
 type LeastConnections struct {
-	connections map[*Instance]int
-	mu          sync.RWMutex
+	mu sync.Mutex
 }
 
 // NewLeastConnections создает новый LeastConnections балансировщик
 func NewLeastConnections() *LeastConnections {
-	return &LeastConnections{
-		connections: make(map[*Instance]int),
-	}
+	return &LeastConnections{}
 }
 
 // Select выбирает инстанс с наименьшим количеством активных соединений
@@ -23,83 +20,21 @@ func (l *LeastConnections) Select(instances []*Instance) *Instance {
 		return nil
 	}
 
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	var selected *Instance
-	minConnections := -1
+	minConnections := int64(^uint64(0) >> 1) // Максимальное значение int64
 
-	// Проходим по всем доступным инстансам
 	for _, instance := range instances {
-		// Пропускаем нездоровые инстансы
-		if !instance.IsActive() {
-			continue
-		}
-
-		// Получаем количество активных соединений
-		connections := l.connections[instance]
-
-		// Выбираем инстанс с наименьшим количеством соединений
-		if selected == nil || connections < minConnections {
-			selected = instance
-			minConnections = connections
+		if instance.IsActive() {
+			connections := instance.GetActiveConnections()
+			if connections < minConnections {
+				minConnections = connections
+				selected = instance
+			}
 		}
 	}
 
 	return selected
-}
-
-// Increment увеличивает количество соединений для инстанса
-func (l *LeastConnections) Increment(instance *Instance) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.connections[instance]++
-	instance.UpdateLastActive()
-}
-
-// Decrement уменьшает количество соединений для инстанса
-func (l *LeastConnections) Decrement(instance *Instance) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.connections[instance] > 0 {
-		l.connections[instance]--
-	}
-}
-
-// GetConnections возвращает количество активных соединений для инстанса
-func (l *LeastConnections) GetConnections(instance *Instance) int {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	return l.connections[instance]
-}
-
-// GetStats возвращает статистику по всем инстансам
-func (l *LeastConnections) GetStats() map[string]int {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-
-	stats := make(map[string]int)
-	for instance, connections := range l.connections {
-		stats[instance.Address] = connections
-	}
-	return stats
-}
-
-// Cleanup удаляет записи для инстансов, которые больше не в списке
-func (l *LeastConnections) Cleanup(activeInstances []*Instance) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	// Создаем множество активных инстансов
-	activeSet := make(map[*Instance]bool)
-	for _, instance := range activeInstances {
-		activeSet[instance] = true
-	}
-
-	// Удаляем записи для неактивных инстансов
-	for instance := range l.connections {
-		if !activeSet[instance] {
-			delete(l.connections, instance)
-		}
-	}
 }
