@@ -3,9 +3,9 @@ package rabbitmq
 import (
 	"context"
 
-	"go.uber.org/zap"
 	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // CheckServiceInterface определяет интерфейс для сервиса проверок
@@ -56,7 +56,7 @@ func (c *Consumer) Start(ctx context.Context) error {
 		logger.Field{zap.String("queue", c.queueName)},
 	)
 
-	// В реальной реализации здесь будет подключение к RabbitMQ
+	//todo В реальной реализации здесь будет подключение к RabbitMQ
 	// и запуск обработки сообщений
 	// Для демонстрации просто возвращаем успех
 	return nil
@@ -97,7 +97,7 @@ func (c *Consumer) GetStats() map[string]interface{} {
 	stats := make(map[string]interface{})
 	stats["queue_name"] = c.queueName
 	stats["consumer_tag"] = c.consumerTag
-	
+
 	// Проверяем закрыт ли канал без блокировки
 	select {
 	case <-c.done:
@@ -107,6 +107,6 @@ func (c *Consumer) GetStats() map[string]interface{} {
 		stats["closed"] = false
 		stats["status"] = "running"
 	}
-	
+
 	return stats
 }
