@@ -26,10 +26,10 @@ type TaskResult struct {
 
 // LockInfo представляет информацию о блокировке
 type LockInfo struct {
-	CheckID    string    `json:"check_id"`
-	WorkerID   string    `json:"worker_id"`
-	LockedAt   time.Time `json:"locked_at"`
-	ExpiresAt  time.Time `json:"expires_at"`
+	CheckID   string    `json:"check_id"`
+	WorkerID  string    `json:"worker_id"`
+	LockedAt  time.Time `json:"locked_at"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // NewTaskForExecution создает новую задачу для выполнения

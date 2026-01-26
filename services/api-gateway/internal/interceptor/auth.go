@@ -31,7 +31,7 @@ func AuthInterceptor(log logger.Logger) grpc.UnaryClientInterceptor {
 		log.Debug("gRPC call started", logFields...)
 
 		// Извлекаем JWT токен из контекста
-		// В реальном приложении токен может извлекаться из разных источников
+		//TODO В реальном приложении токен может извлекаться из разных источников
 		// Например, из контекста HTTP запроса, который был передан в gRPC контекст
 		token, ok := ctx.Value("jwt_token").(string)
 		if !ok {

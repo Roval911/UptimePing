@@ -12,10 +12,10 @@ import (
 
 // Error представляет кастомную ошибку с дополнительной информацией
 type Error struct {
-	Code    ErrorCode   `json:"code"`
-	Message string      `json:"message"`
-	Details string      `json:"details,omitempty"`
-	Cause   error       `json:"-"`
+	Code    ErrorCode       `json:"code"`
+	Message string          `json:"message"`
+	Details string          `json:"details,omitempty"`
+	Cause   error           `json:"-"`
 	Context context.Context `json:"-"`
 }
 
@@ -24,12 +24,12 @@ type ErrorCode string
 
 // Определение кодов ошибок
 const (
-	ErrNotFound    ErrorCode = "NOT_FOUND"
-	ErrValidation  ErrorCode = "VALIDATION_ERROR"
+	ErrNotFound     ErrorCode = "NOT_FOUND"
+	ErrValidation   ErrorCode = "VALIDATION_ERROR"
 	ErrUnauthorized ErrorCode = "UNAUTHORIZED"
-	ErrForbidden   ErrorCode = "FORBIDDEN"
-	ErrInternal    ErrorCode = "INTERNAL_ERROR"
-	ErrConflict    ErrorCode = "CONFLICT"
+	ErrForbidden    ErrorCode = "FORBIDDEN"
+	ErrInternal     ErrorCode = "INTERNAL_ERROR"
+	ErrConflict     ErrorCode = "CONFLICT"
 )
 
 // Error возвращает сообщение об ошибке
@@ -106,7 +106,7 @@ func (e *Error) ToGRPCErr() error {
 	if e == nil {
 		return nil
 	}
-	
+
 	// Преобразуем код ошибки в gRPC код
 	var grpcCode codes.Code
 	switch e.Code {
@@ -125,12 +125,12 @@ func (e *Error) ToGRPCErr() error {
 	default:
 		grpcCode = codes.Unknown
 	}
-	
+
 	// Создаем gRPC статус
 	status := status.New(grpcCode, e.Message)
-	
+
 	// Добавляем детали, если есть
-	// В реальной реализации нужно реализовать proper proto message handling
+	//TODO В реальной реализации нужно реализовать proper proto message handling
 	// if e.Details != "" {
 	// 	withDetails, err := status.WithDetails(&ErrorDetails{
 	// 		Details: e.Details,
@@ -139,7 +139,7 @@ func (e *Error) ToGRPCErr() error {
 	// 		status = withDetails
 	// 	}
 	// }
-	
+
 	return status.Err()
 }
 
@@ -148,7 +148,7 @@ func FromGRPCErr(err error) *Error {
 	if err == nil {
 		return nil
 	}
-	
+
 	// Проверяем, является ли ошибка gRPC статусом
 	if grpcStatus, ok := status.FromError(err); ok {
 		// Преобразуем gRPC код в наш код ошибки
@@ -169,13 +169,13 @@ func FromGRPCErr(err error) *Error {
 		default:
 			code = ErrInternal
 		}
-		
+
 		return &Error{
 			Code:    code,
 			Message: grpcStatus.Message(),
 		}
 	}
-	
+
 	// Если это не gRPC ошибка, оборачиваем как внутреннюю ошибку
 	return Wrap(err, ErrInternal, "internal error")
 }
@@ -185,7 +185,7 @@ func (e *Error) HTTPStatus() int {
 	if e == nil {
 		return http.StatusOK
 	}
-	
+
 	switch e.Code {
 	case ErrNotFound:
 		return http.StatusNotFound
@@ -205,6 +205,7 @@ func (e *Error) HTTPStatus() int {
 }
 
 // ErrorDetails представляет детали ошибки для gRPC
+//
 //go:generate protoc -I=. --go_out=. --go_opt=paths=source_relative error_details.proto
 type ErrorDetails struct {
 	Details string `protobuf:"bytes,1,opt,name=details,proto3" json:"details,omitempty"`
@@ -216,7 +217,7 @@ func (e *Error) GetUserMessage() string {
 	if e == nil {
 		return ""
 	}
-	
+
 	// В реальном приложении здесь будет локализация сообщений
 	// Например, через сервис перевода или файлы локализации
 	switch e.Code {
@@ -242,22 +243,22 @@ func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Создаем обертку для ResponseWriter для перехвата статуса
 		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
-		
+
 		// Выполняем следующий обработчик
 		next.ServeHTTP(wrapped, r)
-		
+
 		// Если статус уже установлен ошибочный, ничего не делаем
 		if wrapped.statusCode < 400 {
 			return
 		}
-		
+
 		// Если есть ошибка в контексте, используем ее
 		if err, ok := r.Context().Value(errorContextKey{}).(*Error); ok {
 			// Отправляем JSON ответ с ошибкой
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(err.HTTPStatus())
-			
-					// Формируем ответ
+
+			// Формируем ответ
 			response := map[string]interface{}{
 				"error": map[string]interface{}{
 					"code":    err.Code,
@@ -265,7 +266,7 @@ func Middleware(next http.Handler) http.Handler {
 					"details": err.Details,
 				},
 			}
-			
+
 			// Отправляем ответ
 			jsonData, _ := json.Marshal(response)
 			w.Write(jsonData)

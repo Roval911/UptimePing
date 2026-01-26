@@ -19,26 +19,37 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	SchedulerService_CreateCheck_FullMethodName     = "/uptimeping.scheduler.v1.SchedulerService/CreateCheck"
+	SchedulerService_UpdateCheck_FullMethodName     = "/uptimeping.scheduler.v1.SchedulerService/UpdateCheck"
+	SchedulerService_DeleteCheck_FullMethodName     = "/uptimeping.scheduler.v1.SchedulerService/DeleteCheck"
+	SchedulerService_GetCheck_FullMethodName        = "/uptimeping.scheduler.v1.SchedulerService/GetCheck"
+	SchedulerService_ListChecks_FullMethodName      = "/uptimeping.scheduler.v1.SchedulerService/ListChecks"
 	SchedulerService_ScheduleCheck_FullMethodName   = "/uptimeping.scheduler.v1.SchedulerService/ScheduleCheck"
 	SchedulerService_UnscheduleCheck_FullMethodName = "/uptimeping.scheduler.v1.SchedulerService/UnscheduleCheck"
 	SchedulerService_GetSchedule_FullMethodName     = "/uptimeping.scheduler.v1.SchedulerService/GetSchedule"
 	SchedulerService_ListSchedules_FullMethodName   = "/uptimeping.scheduler.v1.SchedulerService/ListSchedules"
+	SchedulerService_HealthCheck_FullMethodName     = "/uptimeping.scheduler.v1.SchedulerService/HealthCheck"
 )
 
 // SchedulerServiceClient is the client API for SchedulerService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// SchedulerService предоставляет методы для планирования проверок
+// SchedulerService предоставляет методы для управления проверками и их планирования
 type SchedulerServiceClient interface {
-	// ScheduleCheck планирует выполнение проверки
+	// Методы управления проверками
+	CreateCheck(ctx context.Context, in *CreateCheckRequest, opts ...grpc.CallOption) (*Check, error)
+	UpdateCheck(ctx context.Context, in *UpdateCheckRequest, opts ...grpc.CallOption) (*Check, error)
+	DeleteCheck(ctx context.Context, in *DeleteCheckRequest, opts ...grpc.CallOption) (*DeleteCheckResponse, error)
+	GetCheck(ctx context.Context, in *GetCheckRequest, opts ...grpc.CallOption) (*Check, error)
+	ListChecks(ctx context.Context, in *ListChecksRequest, opts ...grpc.CallOption) (*ListChecksResponse, error)
+	// Методы управления расписаниями
 	ScheduleCheck(ctx context.Context, in *ScheduleCheckRequest, opts ...grpc.CallOption) (*Schedule, error)
-	// UnscheduleCheck отменяет планирование проверки
 	UnscheduleCheck(ctx context.Context, in *UnscheduleCheckRequest, opts ...grpc.CallOption) (*UnscheduleCheckResponse, error)
-	// GetSchedule возвращает информацию о расписании проверки
 	GetSchedule(ctx context.Context, in *GetScheduleRequest, opts ...grpc.CallOption) (*Schedule, error)
-	// ListSchedules возвращает список расписаний с пагинацией
 	ListSchedules(ctx context.Context, in *ListSchedulesRequest, opts ...grpc.CallOption) (*ListSchedulesResponse, error)
+	// Health check
+	HealthCheck(ctx context.Context, in *HealthCheckRequest, opts ...grpc.CallOption) (*HealthCheckResponse, error)
 }
 
 type schedulerServiceClient struct {
@@ -47,6 +58,56 @@ type schedulerServiceClient struct {
 
 func NewSchedulerServiceClient(cc grpc.ClientConnInterface) SchedulerServiceClient {
 	return &schedulerServiceClient{cc}
+}
+
+func (c *schedulerServiceClient) CreateCheck(ctx context.Context, in *CreateCheckRequest, opts ...grpc.CallOption) (*Check, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Check)
+	err := c.cc.Invoke(ctx, SchedulerService_CreateCheck_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) UpdateCheck(ctx context.Context, in *UpdateCheckRequest, opts ...grpc.CallOption) (*Check, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Check)
+	err := c.cc.Invoke(ctx, SchedulerService_UpdateCheck_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) DeleteCheck(ctx context.Context, in *DeleteCheckRequest, opts ...grpc.CallOption) (*DeleteCheckResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteCheckResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_DeleteCheck_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) GetCheck(ctx context.Context, in *GetCheckRequest, opts ...grpc.CallOption) (*Check, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Check)
+	err := c.cc.Invoke(ctx, SchedulerService_GetCheck_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) ListChecks(ctx context.Context, in *ListChecksRequest, opts ...grpc.CallOption) (*ListChecksResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListChecksResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_ListChecks_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *schedulerServiceClient) ScheduleCheck(ctx context.Context, in *ScheduleCheckRequest, opts ...grpc.CallOption) (*Schedule, error) {
@@ -89,20 +150,35 @@ func (c *schedulerServiceClient) ListSchedules(ctx context.Context, in *ListSche
 	return out, nil
 }
 
+func (c *schedulerServiceClient) HealthCheck(ctx context.Context, in *HealthCheckRequest, opts ...grpc.CallOption) (*HealthCheckResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HealthCheckResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_HealthCheck_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SchedulerServiceServer is the server API for SchedulerService service.
 // All implementations should embed UnimplementedSchedulerServiceServer
 // for forward compatibility.
 //
-// SchedulerService предоставляет методы для планирования проверок
+// SchedulerService предоставляет методы для управления проверками и их планирования
 type SchedulerServiceServer interface {
-	// ScheduleCheck планирует выполнение проверки
+	// Методы управления проверками
+	CreateCheck(context.Context, *CreateCheckRequest) (*Check, error)
+	UpdateCheck(context.Context, *UpdateCheckRequest) (*Check, error)
+	DeleteCheck(context.Context, *DeleteCheckRequest) (*DeleteCheckResponse, error)
+	GetCheck(context.Context, *GetCheckRequest) (*Check, error)
+	ListChecks(context.Context, *ListChecksRequest) (*ListChecksResponse, error)
+	// Методы управления расписаниями
 	ScheduleCheck(context.Context, *ScheduleCheckRequest) (*Schedule, error)
-	// UnscheduleCheck отменяет планирование проверки
 	UnscheduleCheck(context.Context, *UnscheduleCheckRequest) (*UnscheduleCheckResponse, error)
-	// GetSchedule возвращает информацию о расписании проверки
 	GetSchedule(context.Context, *GetScheduleRequest) (*Schedule, error)
-	// ListSchedules возвращает список расписаний с пагинацией
 	ListSchedules(context.Context, *ListSchedulesRequest) (*ListSchedulesResponse, error)
+	// Health check
+	HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error)
 }
 
 // UnimplementedSchedulerServiceServer should be embedded to have
@@ -112,6 +188,21 @@ type SchedulerServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedSchedulerServiceServer struct{}
 
+func (UnimplementedSchedulerServiceServer) CreateCheck(context.Context, *CreateCheckRequest) (*Check, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateCheck not implemented")
+}
+func (UnimplementedSchedulerServiceServer) UpdateCheck(context.Context, *UpdateCheckRequest) (*Check, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateCheck not implemented")
+}
+func (UnimplementedSchedulerServiceServer) DeleteCheck(context.Context, *DeleteCheckRequest) (*DeleteCheckResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteCheck not implemented")
+}
+func (UnimplementedSchedulerServiceServer) GetCheck(context.Context, *GetCheckRequest) (*Check, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCheck not implemented")
+}
+func (UnimplementedSchedulerServiceServer) ListChecks(context.Context, *ListChecksRequest) (*ListChecksResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListChecks not implemented")
+}
 func (UnimplementedSchedulerServiceServer) ScheduleCheck(context.Context, *ScheduleCheckRequest) (*Schedule, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ScheduleCheck not implemented")
 }
@@ -123,6 +214,9 @@ func (UnimplementedSchedulerServiceServer) GetSchedule(context.Context, *GetSche
 }
 func (UnimplementedSchedulerServiceServer) ListSchedules(context.Context, *ListSchedulesRequest) (*ListSchedulesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListSchedules not implemented")
+}
+func (UnimplementedSchedulerServiceServer) HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HealthCheck not implemented")
 }
 func (UnimplementedSchedulerServiceServer) testEmbeddedByValue() {}
 
@@ -142,6 +236,96 @@ func RegisterSchedulerServiceServer(s grpc.ServiceRegistrar, srv SchedulerServic
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&SchedulerService_ServiceDesc, srv)
+}
+
+func _SchedulerService_CreateCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateCheckRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).CreateCheck(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_CreateCheck_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).CreateCheck(ctx, req.(*CreateCheckRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_UpdateCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateCheckRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).UpdateCheck(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_UpdateCheck_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).UpdateCheck(ctx, req.(*UpdateCheckRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_DeleteCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteCheckRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).DeleteCheck(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_DeleteCheck_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).DeleteCheck(ctx, req.(*DeleteCheckRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_GetCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCheckRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).GetCheck(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_GetCheck_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).GetCheck(ctx, req.(*GetCheckRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_ListChecks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListChecksRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).ListChecks(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_ListChecks_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).ListChecks(ctx, req.(*ListChecksRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _SchedulerService_ScheduleCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -216,6 +400,24 @@ func _SchedulerService_ListSchedules_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SchedulerService_HealthCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HealthCheckRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).HealthCheck(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_HealthCheck_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).HealthCheck(ctx, req.(*HealthCheckRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SchedulerService_ServiceDesc is the grpc.ServiceDesc for SchedulerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -223,6 +425,26 @@ var SchedulerService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "uptimeping.scheduler.v1.SchedulerService",
 	HandlerType: (*SchedulerServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateCheck",
+			Handler:    _SchedulerService_CreateCheck_Handler,
+		},
+		{
+			MethodName: "UpdateCheck",
+			Handler:    _SchedulerService_UpdateCheck_Handler,
+		},
+		{
+			MethodName: "DeleteCheck",
+			Handler:    _SchedulerService_DeleteCheck_Handler,
+		},
+		{
+			MethodName: "GetCheck",
+			Handler:    _SchedulerService_GetCheck_Handler,
+		},
+		{
+			MethodName: "ListChecks",
+			Handler:    _SchedulerService_ListChecks_Handler,
+		},
 		{
 			MethodName: "ScheduleCheck",
 			Handler:    _SchedulerService_ScheduleCheck_Handler,
@@ -238,6 +460,10 @@ var SchedulerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListSchedules",
 			Handler:    _SchedulerService_ListSchedules_Handler,
+		},
+		{
+			MethodName: "HealthCheck",
+			Handler:    _SchedulerService_HealthCheck_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

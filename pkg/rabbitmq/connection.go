@@ -16,12 +16,12 @@ type Connection struct {
 
 // Config представляет конфигурацию RabbitMQ
 type Config struct {
-	URL           string
-	Exchange      string
-	RoutingKey    string
-	Queue         string
-	DLX           string // Dead Letter Exchange
-	DLQ           string // Dead Letter Queue
+	URL        string
+	Exchange   string
+	RoutingKey string
+	Queue      string
+	DLX        string // Dead Letter Exchange
+	DLQ        string // Dead Letter Queue
 	// Connection settings
 	ReconnectInterval time.Duration
 	MaxRetries        int
@@ -162,7 +162,7 @@ func (c *Connection) Channel() *amqp091.Channel {
 }
 
 // GetConfig возвращает конфигурацию из переменных окружения
-// В реальном приложении здесь будет интеграция с системой конфигурации
+// TODO В реальном приложении здесь будет интеграция с системой конфигурации
 func GetConfig() *Config {
 	// TODO: Реализовать загрузку из переменных окружения
 	return NewConfig()

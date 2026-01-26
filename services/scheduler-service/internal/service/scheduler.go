@@ -12,10 +12,10 @@ import (
 
 // Scheduler отвечает за планирование и выполнение проверок
 type Scheduler struct {
-	taskService   TaskServiceInterface
-	cron          *cron.Cron
-	logger        logger.Logger
-	isRunning     bool
+	taskService TaskServiceInterface
+	cron        *cron.Cron
+	logger      logger.Logger
+	isRunning   bool
 }
 
 // NewScheduler создает новый экземпляр Scheduler
@@ -94,7 +94,7 @@ func (s *Scheduler) AddCheck(ctx context.Context, checkID string, nextRun time.T
 
 	// Создаем cron выражение для конкретного времени
 	cronExpr := s.formatTimeToCron(nextRun)
-	
+
 	// Добавляем задачу в cron
 	_, err := s.cron.AddFunc(cronExpr, func() {
 		s.taskService.ExecuteCronTask(ctx, checkID)
@@ -137,7 +137,7 @@ func (s *Scheduler) RemoveCheck(ctx context.Context, checkID string) error {
 func (s *Scheduler) UpdateCheck(ctx context.Context, checkID string, nextRun time.Time) error {
 	// Сначала удаляем старую задачу (если возможно)
 	s.RemoveCheck(ctx, checkID)
-	
+
 	// Затем добавляем новую
 	return s.AddCheck(ctx, checkID, nextRun)
 }
@@ -168,7 +168,7 @@ func (s *Scheduler) GetTaskService() TaskServiceInterface {
 // GetStats возвращает статистику планировщика
 func (s *Scheduler) GetStats() map[string]interface{} {
 	return map[string]interface{}{
-		"is_running": s.isRunning,
+		"is_running":   s.isRunning,
 		"cron_entries": s.cron.Entries(),
 	}
 }

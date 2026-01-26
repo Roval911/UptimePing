@@ -310,7 +310,7 @@ func (p *rrPicker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 	return balancer.PickResult{
 		SubConn: sc,
 		Done: func(info balancer.DoneInfo) {
-			// Здесь можно добавить логику обработки завершения запроса
+			//TODO Здесь можно добавить логику обработки завершения запроса
 			// Например, отслеживание ошибок или обновление метрик
 			if info.Err != nil {
 				p.log.Debug("Request completed with error",

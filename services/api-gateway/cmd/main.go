@@ -17,6 +17,7 @@ import (
 	pkg_redis "UptimePingPlatform/pkg/redis"
 	httphandler "UptimePingPlatform/services/api-gateway/internal/handler/http" // алиас для вашего пакета http
 	"UptimePingPlatform/services/api-gateway/internal/middleware"
+	"UptimePingPlatform/services/api-gateway/internal/client"
 )
 
 func main() {
@@ -62,9 +63,27 @@ func main() {
 	// Инициализация метрик
 	metricCollector := metrics.NewMetrics("api_gateway")
 
+	// Создаем реальный gRPC клиент для auth-service
+	authClient, err := client.NewGRPCAuthClient("localhost:50051", 5*time.Second)
+	if err != nil {
+		appLogger.Error("Failed to connect to auth service", logger.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer authClient.Close()
+
+	// Создаем gRPC клиент для scheduler-service
+	schedulerClient, err := client.NewSchedulerClient("localhost:50052", 5*time.Second)
+	if err != nil {
+		appLogger.Error("Failed to connect to scheduler service", logger.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer schedulerClient.Close()
+
 	// Настройка HTTP сервера
 	// Используем алиас httphandler для вашего пакета
-	baseHandler := httphandler.NewHandler()
+	mockAuthService := httphandler.MockAuthService{}
+	mockHealthHandler := httphandler.MockHealthHandler{}
+	baseHandler := httphandler.NewHandler(&mockAuthService, &mockHealthHandler, schedulerClient)
 
 	// Обертываем хендлер в middleware
 	var httpHandler http.Handler = baseHandler
@@ -72,7 +91,7 @@ func main() {
 	httpHandler = middleware.RecoveryMiddleware()(httpHandler)
 	httpHandler = middleware.CORSMiddleware([]string{"*"})(httpHandler)
 	httpHandler = middleware.RateLimitMiddleware(rateLimiter, 100, time.Minute)(httpHandler)
-	// middleware.AuthMiddleware будет добавлено позже, когда будет реализован клиент auth-service
+	httpHandler = middleware.AuthMiddleware(authClient)(httpHandler)
 
 	// Добавляем эндпоинт для метрик
 	metricsMux := http.NewServeMux()

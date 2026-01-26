@@ -3,16 +3,20 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
-	"UptimePingPlatform/pkg/errors"
+	pkgErrors "UptimePingPlatform/pkg/errors"
+	"UptimePingPlatform/services/api-gateway/internal/client"
+	schedulerv1 "UptimePingPlatform/gen/go/proto/api/scheduler/v1"
 )
 
 // Handler структура для управления HTTP обработчиками
 type Handler struct {
-	mux           *http.ServeMux
-	authService   AuthService
-	healthHandler HealthHandler
+	mux             *http.ServeMux
+	authService     AuthService
+	healthHandler   HealthHandler
+	schedulerClient *client.SchedulerClient
 }
 
 // AuthService интерфейс для сервиса аутентификации
@@ -37,11 +41,12 @@ type HealthHandler interface {
 }
 
 // NewHandler создает новый экземпляр Handler
-func NewHandler(authService AuthService, healthHandler HealthHandler) *Handler {
+func NewHandler(authService AuthService, healthHandler HealthHandler, schedulerClient *client.SchedulerClient) *Handler {
 	h := &Handler{
-		mux:           http.NewServeMux(),
-		authService:   authService,
-		healthHandler: healthHandler,
+		mux:             http.NewServeMux(),
+		authService:     authService,
+		healthHandler:   healthHandler,
+		schedulerClient: schedulerClient,
 	}
 
 	// Настройка роутинга
@@ -80,7 +85,7 @@ func (h *Handler) handleProtected(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Проверка аутентификации
 		if !h.isAuthenticated(r) {
-			h.writeError(w, errors.New(errors.ErrUnauthorized, "unauthorized"), http.StatusUnauthorized)
+			h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "unauthorized"), http.StatusUnauthorized)
 			return
 		}
 		next(w, r)
@@ -98,7 +103,7 @@ func (h *Handler) isAuthenticated(r *http.Request) bool {
 // handleLogin обрабатывает запросы на аутентификацию
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		h.writeError(w, errors.New(errors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -109,18 +114,18 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, errors.New(errors.ErrValidation, "invalid request body"), http.StatusBadRequest)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
 		return
 	}
 
 	// Валидация входных данных
 	if req.Email == "" {
-		h.writeError(w, errors.New(errors.ErrValidation, "email is required"), http.StatusBadRequest)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "email is required"), http.StatusBadRequest)
 		return
 	}
 
 	if req.Password == "" {
-		h.writeError(w, errors.New(errors.ErrValidation, "password is required"), http.StatusBadRequest)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "password is required"), http.StatusBadRequest)
 		return
 	}
 
@@ -146,7 +151,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 // handleRegister обрабатывает запросы на регистрацию
 func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		h.writeError(w, errors.New(errors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -158,23 +163,23 @@ func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, errors.New(errors.ErrValidation, "invalid request body"), http.StatusBadRequest)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
 		return
 	}
 
 	// Валидация входных данных
 	if req.Email == "" {
-		h.writeError(w, errors.New(errors.ErrValidation, "email is required"), http.StatusBadRequest)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "email is required"), http.StatusBadRequest)
 		return
 	}
 
 	if req.Password == "" {
-		h.writeError(w, errors.New(errors.ErrValidation, "password is required"), http.StatusBadRequest)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "password is required"), http.StatusBadRequest)
 		return
 	}
 
 	if req.TenantName == "" {
-		h.writeError(w, errors.New(errors.ErrValidation, "tenant name is required"), http.StatusBadRequest)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "tenant name is required"), http.StatusBadRequest)
 		return
 	}
 
@@ -200,7 +205,7 @@ func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 // handleRefreshToken обрабатывает запросы на обновление токена
 func (h *Handler) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		h.writeError(w, errors.New(errors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -210,13 +215,13 @@ func (h *Handler) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, errors.New(errors.ErrValidation, "invalid request body"), http.StatusBadRequest)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
 		return
 	}
 
 	// Валидация
 	if req.RefreshToken == "" {
-		h.writeError(w, errors.New(errors.ErrValidation, "refresh token is required"), http.StatusBadRequest)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "refresh token is required"), http.StatusBadRequest)
 		return
 	}
 
@@ -242,7 +247,7 @@ func (h *Handler) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 // handleLogout обрабатывает запросы на выход из системы
 func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		h.writeError(w, errors.New(errors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -253,18 +258,18 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, errors.New(errors.ErrValidation, "invalid request body"), http.StatusBadRequest)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
 		return
 	}
 
 	// Валидация
 	if req.UserID == "" {
-		h.writeError(w, errors.New(errors.ErrValidation, "user_id is required"), http.StatusBadRequest)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "user_id is required"), http.StatusBadRequest)
 		return
 	}
 
 	if req.TokenID == "" {
-		h.writeError(w, errors.New(errors.ErrValidation, "token_id is required"), http.StatusBadRequest)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "token_id is required"), http.StatusBadRequest)
 		return
 	}
 
@@ -290,30 +295,59 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleChecksProxy(w http.ResponseWriter, r *http.Request) {
 	// Проверка метода
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
-		h.writeError(w, errors.New(errors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Здесь будет реализация прокси к Scheduler Service
-	// Пока возвращаем заглушку
+	// Получаем tenant_id из контекста (установлен в AuthMiddleware)
+	tenantID, ok := r.Context().Value("tenant_id").(string)
+	if !ok {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant not found"), http.StatusUnauthorized)
+		return
+	}
+
 	if r.Method == http.MethodGet {
 		// GET /api/v1/checks - получение списка проверок
-		response := map[string]interface{}{
-			"checks": []interface{}{},
-			"total":  0,
+		req := &schedulerv1.ListChecksRequest{
+			TenantId: tenantID,
 		}
+
+		resp, err := h.schedulerClient.ListChecks(r.Context(), req)
+		if err != nil {
+			h.handleError(w, err)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"checks": resp.Checks,
+			"total":  len(resp.Checks),
+		})
 	} else {
 		// POST /api/v1/checks - создание новой проверки
-		response := map[string]interface{}{
-			"success": true,
-			"message": "Check created",
+		var createReq schedulerv1.CreateCheckRequest
+		if err := json.NewDecoder(r.Body).Decode(&createReq); err != nil {
+			h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
+			return
 		}
+
+		// Устанавливаем tenant_id из контекста
+		createReq.TenantId = tenantID
+
+		check, err := h.schedulerClient.CreateCheck(r.Context(), &createReq)
+		if err != nil {
+			h.handleError(w, err)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(response)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "Check created",
+			"check":   check,
+		})
 	}
 }
 
@@ -321,17 +355,17 @@ func (h *Handler) handleChecksProxy(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleForgeProxy(w http.ResponseWriter, r *http.Request) {
 	// Проверка метода
 	if r.Method != http.MethodPost {
-		h.writeError(w, errors.New(errors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
 		return
 	}
 
 	// Проверка аутентификации
 	if !h.isAuthenticated(r) {
-		h.writeError(w, errors.New(errors.ErrUnauthorized, "unauthorized"), http.StatusUnauthorized)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "unauthorized"), http.StatusUnauthorized)
 		return
 	}
 
-	// Прокси запроса к Forge Service
+	//TODO Прокси запроса к Forge Service
 	// Пока возвращаем заглушку
 	response := map[string]interface{}{
 		"success": true,
@@ -362,15 +396,15 @@ func (h *Handler) writeError(w http.ResponseWriter, err error, status int) {
 func (h *Handler) handleError(w http.ResponseWriter, err error) {
 	// Используем глобальные экземпляры ошибок для сравнения
 	switch {
-	case errors.Is(err, errors.ErrValidationInstance):
+	case errors.Is(err, pkgErrors.New(pkgErrors.ErrValidation, "")):
 		h.writeError(w, err, http.StatusBadRequest)
-	case errors.Is(err, errors.ErrUnauthorizedInstance):
+	case errors.Is(err, pkgErrors.New(pkgErrors.ErrUnauthorized, "")):
 		h.writeError(w, err, http.StatusUnauthorized)
-	case errors.Is(err, errors.ErrForbiddenInstance):
+	case errors.Is(err, pkgErrors.New(pkgErrors.ErrForbidden, "")):
 		h.writeError(w, err, http.StatusForbidden)
-	case errors.Is(err, errors.ErrNotFoundInstance):
+	case errors.Is(err, pkgErrors.New(pkgErrors.ErrNotFound, "")):
 		h.writeError(w, err, http.StatusNotFound)
-	case errors.Is(err, errors.ErrConflictInstance):
+	case errors.Is(err, pkgErrors.New(pkgErrors.ErrConflict, "")):
 		h.writeError(w, err, http.StatusConflict)
 	default:
 		h.writeError(w, err, http.StatusInternalServerError)

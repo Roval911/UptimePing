@@ -24,7 +24,7 @@ func NewSchedulerUseCase(
 ) *SchedulerUseCase {
 	// Создаем TaskService
 	taskService := service.NewTaskService(checkRepo, taskRepo, lockRepo, schedulerRepo, nil, logger)
-	
+
 	// Создаем Scheduler
 	scheduler := service.NewScheduler(taskService, logger)
 
@@ -37,14 +37,14 @@ func NewSchedulerUseCase(
 // Start запускает планировщик
 func (uc *SchedulerUseCase) Start(ctx context.Context) error {
 	uc.logger.Info("Starting scheduler use case", logger.CtxField(ctx))
-	
+
 	return uc.scheduler.Start(ctx)
 }
 
 // Stop останавливает планировщик
 func (uc *SchedulerUseCase) Stop(ctx context.Context) error {
 	uc.logger.Info("Stopping scheduler use case", logger.CtxField(ctx))
-	
+
 	return uc.scheduler.Stop(ctx)
 }
 
@@ -54,10 +54,10 @@ func (uc *SchedulerUseCase) ExecuteTask(ctx context.Context, checkID string) err
 		logger.String("check_id", checkID),
 		logger.CtxField(ctx),
 	)
-	
+
 	// Получаем TaskService из планировщика
 	taskService := uc.scheduler.GetTaskService()
-	
+
 	return taskService.ExecuteCronTask(ctx, checkID)
 }
 

@@ -63,7 +63,7 @@ func (c *Consumer) consume(ctx context.Context, queueName string, handler Messag
 	if c.conn.Channel() == nil {
 		return fmt.Errorf("rabbitmq channel is not initialized")
 	}
-	
+
 	// Объявляем очередь
 	_, err := c.conn.Channel().QueueDeclare(
 		queueName,
@@ -99,7 +99,7 @@ func (c *Consumer) consume(ctx context.Context, queueName string, handler Messag
 	if c.conn.Channel() == nil {
 		return fmt.Errorf("rabbitmq channel is not initialized")
 	}
-	
+
 	// Получаем сообщения
 	msgs, err := c.conn.Channel().Consume(
 		queueName,
@@ -118,10 +118,10 @@ func (c *Consumer) consume(ctx context.Context, queueName string, handler Messag
 	for msg := range msgs {
 		// Создаем контекст для обработки сообщения
 		msgCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		
+
 		// Обрабатываем сообщение
 		err := handler(msgCtx, msg)
-		
+
 		// Отправляем ack/nack в зависимости от результата
 		if err == nil {
 			// Успешная обработка - отправляем ack
@@ -130,9 +130,9 @@ func (c *Consumer) consume(ctx context.Context, queueName string, handler Messag
 			}
 		} else {
 			// Ошибка при обработке - отправляем nack с requeue
-			// В реальном приложении здесь может быть логика retry с задержкой
+			//TODO В реальном приложении здесь может быть логика retry с задержкой
 			// или отправка в DLQ после определенного количества попыток
-			
+
 			// Проверяем количество попыток
 			retryCount := 0
 			if xDeath, ok := msg.Headers["x-death"]; ok {
@@ -140,7 +140,7 @@ func (c *Consumer) consume(ctx context.Context, queueName string, handler Messag
 					retryCount = len(deaths)
 				}
 			}
-			
+
 			// Если попыток меньше 3, пробуем снова
 			if retryCount < 3 {
 				if err := msg.Nack(false, true); err != nil {
@@ -153,11 +153,11 @@ func (c *Consumer) consume(ctx context.Context, queueName string, handler Messag
 				}
 			}
 		}
-		
+
 		// Завершаем контекст
 		cancel()
 	}
-	
+
 	// Если канал закрыт, возвращаем ошибку
 	select {
 	case _, ok := <-msgs:
@@ -167,7 +167,7 @@ func (c *Consumer) consume(ctx context.Context, queueName string, handler Messag
 	default:
 		// Канал все еще открыт
 	}
-	
+
 	return nil
 }
 
@@ -176,7 +176,7 @@ func (c *Consumer) HealthCheck(ctx context.Context) error {
 	if c.conn == nil || c.conn.conn == nil {
 		return fmt.Errorf("rabbitmq connection is not initialized")
 	}
-	
+
 	// Пытаемся выполнить простой запрос
 	channel, err := c.conn.conn.Channel()
 	if err != nil {

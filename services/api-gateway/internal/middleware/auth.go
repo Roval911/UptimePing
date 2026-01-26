@@ -2,17 +2,17 @@ package middleware
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 
 	"UptimePingPlatform/pkg/errors"
+	"UptimePingPlatform/services/api-gateway/internal/client"
 )
 
 // AuthMiddleware проверяет аутентификацию запроса
 // Поддерживает два типа аутентификации:
 // 1. Bearer токены (JWT) - для пользователей
 // 2. APIKey - для сервисов
-func AuthMiddleware(authClient AuthClient) func(http.Handler) http.Handler {
+func AuthMiddleware(authClient *client.GRPCAuthClient) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Проверка наличия заголовка Authorization
@@ -26,13 +26,13 @@ func AuthMiddleware(authClient AuthClient) func(http.Handler) http.Handler {
 			if isBearerToken(authHeader) {
 				// Обработка Bearer токена (JWT)
 				if err := handleBearerAuth(r, authHeader, authClient); err != nil {
-					writeError(w, err)
+					http.Error(w, "Authentication failed", http.StatusUnauthorized)
 					return
 				}
 			} else if isAPIKey(authHeader) {
 				// Обработка APIKey
 				if err := handleAPIKeyAuth(r, authHeader, authClient); err != nil {
-					writeError(w, err)
+					http.Error(w, "Authentication failed", http.StatusUnauthorized)
 					return
 				}
 			} else {
@@ -58,10 +58,9 @@ func isAPIKey(authHeader string) bool {
 }
 
 // handleBearerAuth обрабатывает аутентификацию через Bearer токен
-func handleBearerAuth(r *http.Request, authHeader string, authClient AuthClient) error {
+func handleBearerAuth(r *http.Request, authHeader string, authClient *client.GRPCAuthClient) error {
 	// Извлечение токена
 	token := authHeader[7:] // Убираем "Bearer "
-
 
 	// Вызов Auth Service: ValidateToken()
 	claims, err := authClient.ValidateToken(r.Context(), token)
@@ -82,7 +81,7 @@ func handleBearerAuth(r *http.Request, authHeader string, authClient AuthClient)
 }
 
 // handleAPIKeyAuth обрабатывает аутентификацию через API ключ
-func handleAPIKeyAuth(r *http.Request, authHeader string, authClient AuthClient) error {
+func handleAPIKeyAuth(r *http.Request, authHeader string, authClient *client.GRPCAuthClient) error {
 	// Извлечение key и secret
 	key, secret, err := extractAPIKeyCredentials(authHeader)
 	if err != nil {
@@ -132,41 +131,4 @@ func extractAPIKeyCredentials(authHeader string) (string, string, error) {
 	}
 
 	return key, secret, nil
-}
-
-// writeError записывает ошибку в ответ
-func writeError(w http.ResponseWriter, err error) {
-	if customErr, ok := err.(*errors.Error); ok {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(customErr.HTTPStatus())
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error": map[string]interface{}{
-				"code":    customErr.Code,
-				"message": customErr.GetUserMessage(),
-				"details": customErr.Details,
-			},
-		})
-	} else {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-	}
-}
-
-// AuthClient интерфейс для клиента аутентификации
-// В реальной реализации будет gRPC клиент для auth-service
-type AuthClient interface {
-	ValidateToken(ctx context.Context, token string) (*TokenClaims, error)
-	ValidateAPIKey(ctx context.Context, key, secret string) (*APIKeyClaims, error)
-}
-
-// TokenClaims структура для данных JWT токена
-type TokenClaims struct {
-	UserID   string `json:"user_id"`
-	TenantID string `json:"tenant_id"`
-	IsAdmin  bool   `json:"is_admin"`
-}
-
-// APIKeyClaims структура для данных API ключа
-type APIKeyClaims struct {
-	TenantID string `json:"tenant_id"`
-	KeyID    string `json:"key_id"`
 }

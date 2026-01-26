@@ -9,16 +9,16 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Metrics представляет систему метрик
 type Metrics struct {
 	// Стандартные метрики Prometheus
-	RequestCount *prometheus.CounterVec
+	RequestCount    *prometheus.CounterVec
 	RequestDuration *prometheus.HistogramVec
-	ErrorsCount *prometheus.CounterVec
+	ErrorsCount     *prometheus.CounterVec
 
 	// OpenTelemetry Tracer
 	Tracer trace.Tracer `json:"-"`
@@ -149,7 +149,7 @@ func (rw *responseWriter) WriteHeader(code int) {
 }
 
 // InitializeOpenTelemetry инициализирует OpenTelemetry (опционально)
-// В реальном приложении здесь будет настройка экспортеров (Jaeger, Zipkin и т.д.)
+// TODO В реальном приложении здесь будет настройка экспортеров (Jaeger, Zipkin и т.д.)
 func InitializeOpenTelemetry(serviceName string) error {
 	// В реальном приложении здесь будет настройка провайдера трассировки
 	// Например:
@@ -163,9 +163,9 @@ func InitializeOpenTelemetry(serviceName string) error {
 	// 	)),
 	// )
 	// otel.SetTracerProvider(tp)
-	
+
 	// Для примера просто устанавливаем базовый трейсер
 	otel.SetTracerProvider(tracesdk.NewTracerProvider())
-	
+
 	return nil
 }

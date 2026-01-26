@@ -28,4 +28,7 @@ type CheckRepository interface {
 
 	// GetActiveChecksByTenant возвращает список активных проверок для tenant
 	GetActiveChecksByTenant(ctx context.Context, tenantID string) ([]*domain.Check, error)
+
+	// Health check метод
+	Ping(ctx context.Context) (interface{}, error)
 }

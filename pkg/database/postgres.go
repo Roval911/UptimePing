@@ -22,11 +22,11 @@ type Config struct {
 	Database string
 	SSLMode  string
 	// Connection pool settings
-	MaxConns     int
-	MinConns     int
-	MaxConnLife  time.Duration
-	MaxConnIdle  time.Duration
-	HealthCheck  time.Duration
+	MaxConns    int
+	MinConns    int
+	MaxConnLife time.Duration
+	MaxConnIdle time.Duration
+	HealthCheck time.Duration
 	// Retry settings
 	MaxRetries    int
 	RetryInterval time.Duration
@@ -132,7 +132,7 @@ func (p *Postgres) HealthCheck(ctx context.Context) error {
 }
 
 // GetConfig возвращает конфигурацию из переменных окружения
-// В реальном приложении здесь будет интеграция с системой конфигурации
+// TODO В реальном приложении здесь будет интеграция с системой конфигурации
 func GetConfig() *Config {
 	// TODO: Реализовать загрузку из переменных окружения
 	return NewConfig()

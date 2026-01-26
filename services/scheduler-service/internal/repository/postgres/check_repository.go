@@ -336,3 +336,12 @@ func (r *CheckRepository) GetActiveChecksByTenant(ctx context.Context, tenantID 
 
 	return checks, nil
 }
+
+// Ping проверяет подключение к базе данных
+func (r *CheckRepository) Ping(ctx context.Context) (interface{}, error) {
+	err := r.pool.Ping(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
+	return "pong", nil
+}

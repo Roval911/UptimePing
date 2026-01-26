@@ -12,10 +12,10 @@ import (
 
 // Config представляет конфигурацию приложения. Структура содержит вложенные структуры для различных компонентов приложения.
 type Config struct {
-	Server   ServerConfig   `json:"server" yaml:"server"`
-	Database DatabaseConfig `json:"database" yaml:"database"`
-	Logger   LoggerConfig   `json:"logger" yaml:"logger"`
-	Environment string      `json:"environment" yaml:"environment"`
+	Server      ServerConfig   `json:"server" yaml:"server"`
+	Database    DatabaseConfig `json:"database" yaml:"database"`
+	Logger      LoggerConfig   `json:"logger" yaml:"logger"`
+	Environment string         `json:"environment" yaml:"environment"`
 }
 
 // ServerConfig представляет конфигурацию сервера. Содержит настройки хоста и порта для HTTP-сервера.
@@ -40,11 +40,11 @@ type LoggerConfig struct {
 }
 
 // LoadConfig загружает конфигурацию в следующем порядке приоритета:
-	// 1. Загрузка значений по умолчанию
-	// 2. Загрузка из файла (если указан)
-	// 3. Переопределение значениями из переменных окружения
-	// 4. Валидация конфигурации
-	// Возвращает готовую конфигурацию или ошибку.
+// 1. Загрузка значений по умолчанию
+// 2. Загрузка из файла (если указан)
+// 3. Переопределение значениями из переменных окружения
+// 4. Валидация конфигурации
+// Возвращает готовую конфигурацию или ошибку.
 func LoadConfig(configFile string) (*Config, error) {
 	// Initialize config with default values
 	config := &Config{
@@ -53,10 +53,10 @@ func LoadConfig(configFile string) (*Config, error) {
 			Port: 8080,
 		},
 		Database: DatabaseConfig{
-			Host: "localhost",
-			Port: 5432,
-			Name: "uptimeping",
-			User: "uptimeping",
+			Host:     "localhost",
+			Port:     5432,
+			Name:     "uptimeping",
+			User:     "uptimeping",
 			Password: "uptimeping",
 		},
 		Logger: LoggerConfig{
@@ -165,7 +165,7 @@ func loadConfigFromEnv(config *Config) error {
 }
 
 func validateConfig(config *Config) error {
-		// Проверка корректности окружения. Поддерживаются только: dev, staging, prod
+	// Проверка корректности окружения. Поддерживаются только: dev, staging, prod
 	switch config.Environment {
 	case "dev", "staging", "prod":
 		// Valid environment
@@ -173,7 +173,7 @@ func validateConfig(config *Config) error {
 		return fmt.Errorf("invalid environment: %s, must be one of: dev, staging, prod", config.Environment)
 	}
 
-		// Валидация конфигурации сервера
+	// Валидация конфигурации сервера
 	// Проверяем, что хост не пустой и порт в допустимом диапазоне (1-65535)
 	if config.Server.Host == "" {
 		return fmt.Errorf("server.host is required")
@@ -182,7 +182,7 @@ func validateConfig(config *Config) error {
 		return fmt.Errorf("server.port must be between 1 and 65535")
 	}
 
-		// Валидация конфигурации базы данных
+	// Валидация конфигурации базы данных
 	// Проверяем, что все обязательные поля заполнены и порт в допустимом диапазоне
 	if config.Database.Host == "" {
 		return fmt.Errorf("database.host is required")
@@ -200,7 +200,7 @@ func validateConfig(config *Config) error {
 		return fmt.Errorf("database.password is required")
 	}
 
-		// Валидация конфигурации логгера
+	// Валидация конфигурации логгера
 	// Проверяем, что уровень и формат логирования заданы
 	if config.Logger.Level == "" {
 		return fmt.Errorf("logger.level is required")
@@ -213,7 +213,7 @@ func validateConfig(config *Config) error {
 }
 
 // Save сохраняет конфигурацию в файл в формате YAML.
-	// Автоматически создает директорию, если она не существует.
+// Автоматически создает директорию, если она не существует.
 func (c *Config) Save(filename string) error {
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(filename)

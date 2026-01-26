@@ -19,4 +19,14 @@ type SchedulerRepository interface {
 
 	// GetScheduledChecks возвращает список запланированных проверок
 	GetScheduledChecks(ctx context.Context) ([]*domain.Check, error)
+
+	// Методы для работы с расписаниями
+	Create(ctx context.Context, schedule *domain.Schedule) (*domain.Schedule, error)
+	DeleteByCheckID(ctx context.Context, checkID string) error
+	GetByCheckID(ctx context.Context, checkID string) (*domain.Schedule, error)
+	List(ctx context.Context, pageSize int, pageToken string, filter string) ([]*domain.Schedule, error)
+	Count(ctx context.Context, filter string) (int, error)
+
+	// Health check метод
+	Ping(ctx context.Context) (interface{}, error)
 }

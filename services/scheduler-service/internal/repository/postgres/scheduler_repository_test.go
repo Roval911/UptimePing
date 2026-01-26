@@ -13,17 +13,17 @@ import (
 func TestSchedulerRepository_AddCheck(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		check := &domain.Check{
-			ID:       uuid.New().String(),
-			TenantID: "tenant-123",
-			Name:     "Test Check",
-			Target:   "https://example.com",
-			Type:     domain.CheckTypeHTTP,
-			Interval: 60,
-			Timeout:  30,
-			Status:   domain.CheckStatusActive,
-			Priority: domain.PriorityNormal,
-			Config:   map[string]interface{}{"method": "GET"},
-			NextRunAt:  timePtr(time.Now().Add(time.Minute)),
+			ID:        uuid.New().String(),
+			TenantID:  "tenant-123",
+			Name:      "Test Check",
+			Target:    "https://example.com",
+			Type:      domain.CheckTypeHTTP,
+			Interval:  60,
+			Timeout:   30,
+			Status:    domain.CheckStatusActive,
+			Priority:  domain.PriorityNormal,
+			Config:    map[string]interface{}{"method": "GET"},
+			NextRunAt: timePtr(time.Now().Add(time.Minute)),
 		}
 
 		_ = check
@@ -61,15 +61,15 @@ func TestSchedulerRepository_RemoveCheck(t *testing.T) {
 func TestSchedulerRepository_UpdateCheck(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		check := &domain.Check{
-			ID:       uuid.New().String(),
-			TenantID: "tenant-123",
-			Name:     "Updated Check",
-			Target:   "https://updated.example.com",
-			Type:     domain.CheckTypeHTTP,
-			Interval: 120,
-			Timeout:  60,
-			Status:   domain.CheckStatusActive,
-			Priority: domain.PriorityHigh,
+			ID:        uuid.New().String(),
+			TenantID:  "tenant-123",
+			Name:      "Updated Check",
+			Target:    "https://updated.example.com",
+			Type:      domain.CheckTypeHTTP,
+			Interval:  120,
+			Timeout:   60,
+			Status:    domain.CheckStatusActive,
+			Priority:  domain.PriorityHigh,
 			NextRunAt: timePtr(time.Now().Add(2 * time.Minute)),
 		}
 
@@ -97,16 +97,16 @@ func TestSchedulerRepository_GetScheduledChecks(t *testing.T) {
 func TestScheduledCheckSerialization(t *testing.T) {
 	t.Run("valid_check", func(t *testing.T) {
 		scheduledCheck := ScheduledCheck{
-			ID:       uuid.New().String(),
-			TenantID: "tenant-123",
-			Name:     "Test Check",
-			Target:   "https://example.com",
-			Type:     domain.CheckTypeHTTP,
-			Interval: 60,
-			Timeout:  30,
-			Priority: domain.PriorityNormal,
-			Config:   map[string]interface{}{"method": "GET", "expected_status": 200},
-			NextRunAt:  timePtr(time.Now().Add(time.Minute)),
+			ID:        uuid.New().String(),
+			TenantID:  "tenant-123",
+			Name:      "Test Check",
+			Target:    "https://example.com",
+			Type:      domain.CheckTypeHTTP,
+			Interval:  60,
+			Timeout:   30,
+			Priority:  domain.PriorityNormal,
+			Config:    map[string]interface{}{"method": "GET", "expected_status": 200},
+			NextRunAt: timePtr(time.Now().Add(time.Minute)),
 		}
 
 		_ = scheduledCheck
@@ -118,9 +118,9 @@ func TestScheduledCheckSerialization(t *testing.T) {
 			ID:       uuid.New().String(),
 			TenantID: "tenant-123",
 			Config: map[string]interface{}{
-				"method":         "POST",
-				"headers":        map[string]string{"Content-Type": "application/json"},
-				"body":           "{\"test\": true}",
+				"method":          "POST",
+				"headers":         map[string]string{"Content-Type": "application/json"},
+				"body":            "{\"test\": true}",
 				"expected_status": 201,
 			},
 			NextRunAt: timePtr(time.Now().Add(time.Minute)),

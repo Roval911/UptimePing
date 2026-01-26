@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/services/scheduler-service/internal/mocks"
 )
 
 // MockTaskService - мок для TaskService
@@ -40,9 +40,9 @@ func (m *MockTaskService) Stop() {
 }
 
 // setupTestScheduler создает тестовый планировщик
-func setupTestScheduler() (*Scheduler, *MockTaskService, *logger.MockLogger) {
+func setupTestScheduler() (*Scheduler, *MockTaskService, *mocks.MockLogger) {
 	mockTaskService := &MockTaskService{}
-	mockLogger := &logger.MockLogger{}
+	mockLogger := &mocks.MockLogger{}
 	mockLogger.On("Info", mock.AnythingOfType("string"), mock.Anything).Maybe()
 	mockLogger.On("Debug", mock.AnythingOfType("string"), mock.Anything).Maybe()
 	mockLogger.On("Error", mock.AnythingOfType("string"), mock.Anything).Maybe()

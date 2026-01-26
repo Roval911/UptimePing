@@ -15,6 +15,7 @@ type Logger interface {
 	Warn(msg string, fields ...Field)
 	Error(msg string, fields ...Field)
 	With(fields ...Field) Logger
+	Sync() error
 }
 
 // Field представляет поле лога
@@ -53,7 +54,7 @@ func NewLogger(environment, level, serviceName string, enableLoki bool) (Logger,
 	// Определяем настройки кодирования в зависимости от окружения
 	var encoderConfig zapcore.EncoderConfig
 	var encoder zapcore.Encoder
-	
+
 	if environment == "dev" {
 		// Для разработки используем читаемый формат
 		encoderConfig = zap.NewDevelopmentEncoderConfig()
@@ -148,6 +149,11 @@ func (l *LoggerImpl) With(fields ...Field) Logger {
 	return &LoggerImpl{zapLogger: l.zapLogger.With(zapFields...)}
 }
 
+// Sync синхронизирует буферы логгера
+func (l *LoggerImpl) Sync() error {
+	return l.zapLogger.Sync()
+}
+
 // CtxField возвращает поле с trace_id из контекста
 func CtxField(ctx context.Context) Field {
 	if traceID, ok := ctx.Value("trace_id").(string); ok {
@@ -164,6 +170,11 @@ func String(key, val string) Field {
 // Int создает поле с целочисленным значением
 func Int(key string, val int) Field {
 	return Field{zap.Int(key, val)}
+}
+
+// Int32 создает поле с int32 значением
+func Int32(key string, val int32) Field {
+	return Field{zap.Int32(key, val)}
 }
 
 // Float64 создает поле с значением типа float64

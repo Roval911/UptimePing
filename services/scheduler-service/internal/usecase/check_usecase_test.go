@@ -35,6 +35,9 @@ func (m *MockLogger) Error(msg string, fields ...logger.Field) {
 
 func (m *MockLogger) With(fields ...logger.Field) logger.Logger {
 	args := m.Called(fields)
+	if args.Get(0) == nil {
+		return m
+	}
 	return args.Get(0).(logger.Logger)
 }
 
@@ -86,6 +89,14 @@ func (m *MockCheckRepository) GetActiveChecksByTenant(ctx context.Context, tenan
 	return args.Get(0).([]*domain.Check), args.Error(1)
 }
 
+func (m *MockCheckRepository) Ping(ctx context.Context) (interface{}, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0), args.Error(1)
+}
+
 // MockSchedulerRepository - мок для SchedulerRepository
 type MockSchedulerRepository struct {
 	mock.Mock
@@ -111,6 +122,45 @@ func (m *MockSchedulerRepository) GetScheduledChecks(ctx context.Context) ([]*do
 	return args.Get(0).([]*domain.Check), args.Error(1)
 }
 
+func (m *MockSchedulerRepository) Create(ctx context.Context, schedule *domain.Schedule) (*domain.Schedule, error) {
+	args := m.Called(ctx, schedule)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.Schedule), args.Error(1)
+}
+
+func (m *MockSchedulerRepository) DeleteByCheckID(ctx context.Context, checkID string) error {
+	args := m.Called(ctx, checkID)
+	return args.Error(0)
+}
+
+func (m *MockSchedulerRepository) GetByCheckID(ctx context.Context, checkID string) (*domain.Schedule, error) {
+	args := m.Called(ctx, checkID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.Schedule), args.Error(1)
+}
+
+func (m *MockSchedulerRepository) List(ctx context.Context, pageSize int, pageToken string, filter string) ([]*domain.Schedule, error) {
+	args := m.Called(ctx, pageSize, pageToken, filter)
+	return args.Get(0).([]*domain.Schedule), args.Error(1)
+}
+
+func (m *MockSchedulerRepository) Count(ctx context.Context, filter string) (int, error) {
+	args := m.Called(ctx, filter)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *MockSchedulerRepository) Ping(ctx context.Context) (interface{}, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0), args.Error(1)
+}
+
 func setupTestUseCase() (*CheckUseCase, *MockCheckRepository, *MockSchedulerRepository, *MockLogger) {
 	mockCheckRepo := &MockCheckRepository{}
 	mockSchedulerRepo := &MockSchedulerRepository{}
@@ -122,7 +172,7 @@ func setupTestUseCase() (*CheckUseCase, *MockCheckRepository, *MockSchedulerRepo
 func TestCheckUseCase_CreateCheck_Success(t *testing.T) {
 	ctx := context.Background()
 	tenantID := "tenant-123"
-	
+
 	check := &domain.Check{
 		Name:     "Test Check",
 		Type:     domain.CheckTypeHTTP,
@@ -161,7 +211,7 @@ func TestCheckUseCase_CreateCheck_Success(t *testing.T) {
 func TestCheckUseCase_CreateCheck_ValidationError(t *testing.T) {
 	ctx := context.Background()
 	tenantID := "tenant-123"
-	
+
 	check := &domain.Check{
 		Name:     "", // Пустое имя вызовет ошибку валидации
 		Type:     domain.CheckTypeHTTP,
@@ -186,7 +236,7 @@ func TestCheckUseCase_CreateCheck_ValidationError(t *testing.T) {
 func TestCheckUseCase_CreateCheck_SchedulerError(t *testing.T) {
 	ctx := context.Background()
 	tenantID := "tenant-123"
-	
+
 	check := &domain.Check{
 		Name:     "Test Check",
 		Type:     domain.CheckTypeHTTP,
@@ -220,7 +270,7 @@ func TestCheckUseCase_CreateCheck_SchedulerError(t *testing.T) {
 func TestCheckUseCase_UpdateCheck_Success(t *testing.T) {
 	ctx := context.Background()
 	checkID := "check-123"
-	
+
 	existingCheck := &domain.Check{
 		ID:        checkID,
 		TenantID:  "tenant-123",
@@ -266,7 +316,7 @@ func TestCheckUseCase_UpdateCheck_Success(t *testing.T) {
 func TestCheckUseCase_UpdateCheck_NotFound(t *testing.T) {
 	ctx := context.Background()
 	checkID := "non-existent-check"
-	
+
 	updatedCheck := &domain.Check{
 		Name:     "Updated Name",
 		Type:     domain.CheckTypeHTTP,
@@ -295,7 +345,7 @@ func TestCheckUseCase_UpdateCheck_NotFound(t *testing.T) {
 func TestCheckUseCase_DeleteCheck_Success(t *testing.T) {
 	ctx := context.Background()
 	checkID := "check-123"
-	
+
 	existingCheck := &domain.Check{
 		ID:        checkID,
 		TenantID:  "tenant-123",

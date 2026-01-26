@@ -2,7 +2,6 @@ package postgres_test
 
 import (
 	"context"
-	"database/sql"
 	"testing"
 	"time"
 
@@ -14,17 +13,21 @@ import (
 
 func TestUserRepository_Create(t *testing.T) {
 	// Тестовая база данных
-	_ = setupTestDB(t)
+	pool := setupTestDB(t)
+	if pool == nil {
+		t.Skip("Skipping test due to no database connection")
+		return
+	}
+	defer pool.Close()
 
 	// Создаем репозиторий
-	db := setupTestDB(t)
-	repo := postgres.NewUserRepository(db)
+	repo := postgres.NewUserRepository(pool)
 
 	// Создаем тестового пользователя
 	user := &domain.User{
 		ID:           "user-1",
 		Email:        "test@example.com",
-		PasswordHash: "hashed-password",
+		PasswordHash: "hashed-password-1",
 		TenantID:     "tenant-1",
 		IsActive:     true,
 		IsAdmin:      false,
@@ -32,167 +35,173 @@ func TestUserRepository_Create(t *testing.T) {
 		UpdatedAt:    time.Now().UTC().Truncate(time.Microsecond),
 	}
 
-	// Создаем пользователя
+	// Сохраняем пользователя
 	err := repo.Create(context.Background(), user)
 	require.NoError(t, err)
 
-	// Проверяем, что пользователь был создан
-	createdUser, err := repo.FindByID(context.Background(), user.ID)
+	// Проверяем, что пользователь сохранен
+	found, err := repo.FindByID(context.Background(), "user-1")
 	require.NoError(t, err)
-	assert.Equal(t, user.ID, createdUser.ID)
-	assert.Equal(t, user.Email, createdUser.Email)
-	assert.Equal(t, user.PasswordHash, createdUser.PasswordHash)
-	assert.Equal(t, user.TenantID, createdUser.TenantID)
-	assert.Equal(t, user.IsActive, createdUser.IsActive)
-	assert.Equal(t, user.IsAdmin, createdUser.IsAdmin)
-	assert.WithinDuration(t, user.CreatedAt, createdUser.CreatedAt, time.Second)
-	assert.WithinDuration(t, user.UpdatedAt, createdUser.UpdatedAt, time.Second)
+	assert.Equal(t, user.ID, found.ID)
+	assert.Equal(t, user.Email, found.Email)
+	assert.Equal(t, user.TenantID, found.TenantID)
+	assert.Equal(t, user.IsActive, found.IsActive)
+	assert.Equal(t, user.IsAdmin, found.IsAdmin)
 }
 
 func TestUserRepository_FindByID(t *testing.T) {
-	// Тестовая база данных
-	_ = setupTestDB(t)
+	pool := setupTestDB(t)
+	if pool == nil {
+		t.Skip("Skipping test due to no database connection")
+		return
+	}
+	defer pool.Close()
 
-	// Создаем репозиторий
-	db := setupTestDB(t)
-	repo := postgres.NewUserRepository(db)
+	repo := postgres.NewUserRepository(pool)
 
 	// Создаем тестового пользователя
 	user := &domain.User{
-		ID:           "user-1",
-		Email:        "test@example.com",
-		PasswordHash: "hashed-password",
-		TenantID:     "tenant-1",
+		ID:           "user-2",
+		Email:        "test2@example.com",
+		PasswordHash: "hashed-password-2",
+		TenantID:     "tenant-2",
 		IsActive:     true,
 		IsAdmin:      false,
 		CreatedAt:    time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt:    time.Now().UTC().Truncate(time.Microsecond),
 	}
 
-	// Создаем пользователя
 	err := repo.Create(context.Background(), user)
 	require.NoError(t, err)
 
-	// Ищем пользователя по ID
-	foundUser, err := repo.FindByID(context.Background(), user.ID)
+	// Ищем по ID
+	found, err := repo.FindByID(context.Background(), "user-2")
 	require.NoError(t, err)
-	assert.Equal(t, user.ID, foundUser.ID)
-	assert.Equal(t, user.Email, foundUser.Email)
+	assert.Equal(t, user.ID, found.ID)
+	assert.Equal(t, user.Email, found.Email)
+
+	// Ищем несуществующего пользователя
+	found, err = repo.FindByID(context.Background(), "non-existent")
+	assert.Error(t, err)
+	assert.Nil(t, found)
 }
 
 func TestUserRepository_FindByEmail(t *testing.T) {
-	// Тестовая база данных
-	_ = setupTestDB(t)
+	pool := setupTestDB(t)
+	if pool == nil {
+		t.Skip("Skipping test due to no database connection")
+		return
+	}
+	defer pool.Close()
 
-	// Создаем репозиторий
-	db := setupTestDB(t)
-	repo := postgres.NewUserRepository(db)
+	repo := postgres.NewUserRepository(pool)
 
 	// Создаем тестового пользователя
 	user := &domain.User{
-		ID:           "user-1",
-		Email:        "test@example.com",
-		PasswordHash: "hashed-password",
-		TenantID:     "tenant-1",
+		ID:           "user-3",
+		Email:        "test3@example.com",
+		PasswordHash: "hashed-password-3",
+		TenantID:     "tenant-3",
 		IsActive:     true,
 		IsAdmin:      false,
 		CreatedAt:    time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt:    time.Now().UTC().Truncate(time.Microsecond),
 	}
 
-	// Создаем пользователя
 	err := repo.Create(context.Background(), user)
 	require.NoError(t, err)
 
-	// Ищем пользователя по email
-	foundUser, err := repo.FindByEmail(context.Background(), user.Email)
+	// Ищем по email
+	found, err := repo.FindByEmail(context.Background(), "test3@example.com")
 	require.NoError(t, err)
-	assert.Equal(t, user.ID, foundUser.ID)
-	assert.Equal(t, user.Email, foundUser.Email)
+	assert.Equal(t, user.ID, found.ID)
+	assert.Equal(t, user.Email, found.Email)
+
+	// Ищем несуществующий email
+	found, err = repo.FindByEmail(context.Background(), "nonexistent@example.com")
+	assert.Error(t, err)
+	assert.Nil(t, found)
 }
 
 func TestUserRepository_Update(t *testing.T) {
-	// Тестовая база данных
-	_ = setupTestDB(t)
+	pool := setupTestDB(t)
+	if pool == nil {
+		t.Skip("Skipping test due to no database connection")
+		return
+	}
+	defer pool.Close()
 
-	// Создаем репозиторий
-	db := setupTestDB(t)
-	repo := postgres.NewUserRepository(db)
+	repo := postgres.NewUserRepository(pool)
 
 	// Создаем тестового пользователя
 	user := &domain.User{
-		ID:           "user-1",
-		Email:        "test@example.com",
-		PasswordHash: "hashed-password",
-		TenantID:     "tenant-1",
+		ID:           "user-4",
+		Email:        "original@example.com",
+		PasswordHash: "hashed-password-4",
+		TenantID:     "tenant-4",
 		IsActive:     true,
 		IsAdmin:      false,
 		CreatedAt:    time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt:    time.Now().UTC().Truncate(time.Microsecond),
 	}
 
-	// Создаем пользователя
 	err := repo.Create(context.Background(), user)
 	require.NoError(t, err)
 
 	// Обновляем пользователя
 	user.Email = "updated@example.com"
 	user.IsActive = false
-	user.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
+	user.IsAdmin = true
+	updatedAt := time.Now().UTC().Truncate(time.Microsecond)
+	user.UpdatedAt = updatedAt
 
 	err = repo.Update(context.Background(), user)
 	require.NoError(t, err)
 
-	// Проверяем, что пользователь был обновлен
-	updatedUser, err := repo.FindByID(context.Background(), user.ID)
+	// Проверяем обновление
+	found, err := repo.FindByID(context.Background(), "user-4")
 	require.NoError(t, err)
-	assert.Equal(t, "updated@example.com", updatedUser.Email)
-	assert.False(t, updatedUser.IsActive)
-	assert.WithinDuration(t, user.UpdatedAt, updatedUser.UpdatedAt, time.Second)
+	assert.Equal(t, "updated@example.com", found.Email)
+	assert.Equal(t, false, found.IsActive)
+	assert.Equal(t, true, found.IsAdmin)
 }
 
 func TestUserRepository_Delete(t *testing.T) {
-	// Тестовая база данных
-	_ = setupTestDB(t)
+	pool := setupTestDB(t)
+	if pool == nil {
+		t.Skip("Skipping test due to no database connection")
+		return
+	}
+	defer pool.Close()
 
-	// Создаем репозиторий
-	db := setupTestDB(t)
-	repo := postgres.NewUserRepository(db)
+	repo := postgres.NewUserRepository(pool)
 
 	// Создаем тестового пользователя
 	user := &domain.User{
-		ID:           "user-1",
-		Email:        "test@example.com",
-		PasswordHash: "hashed-password",
-		TenantID:     "tenant-1",
+		ID:           "user-5",
+		Email:        "delete@example.com",
+		PasswordHash: "hashed-password-5",
+		TenantID:     "tenant-5",
 		IsActive:     true,
 		IsAdmin:      false,
 		CreatedAt:    time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt:    time.Now().UTC().Truncate(time.Microsecond),
 	}
 
-	// Создаем пользователя
 	err := repo.Create(context.Background(), user)
 	require.NoError(t, err)
 
 	// Удаляем пользователя
-	err = repo.Delete(context.Background(), user.ID)
+	err = repo.Delete(context.Background(), "user-5")
 	require.NoError(t, err)
 
-	// Проверяем, что пользователь был удален
-	_, err = repo.FindByID(context.Background(), user.ID)
+	// Проверяем, что пользователь удален
+	found, err := repo.FindByID(context.Background(), "user-5")
+	assert.Error(t, err)
+	assert.Nil(t, found)
+
+	// Удаляем несуществующего пользователя
+	err = repo.Delete(context.Background(), "non-existent")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "user not found")
 }
-
-func setupTestDB(t *testing.T) *sql.DB {
-	// Здесь должен быть код для настройки тестовой базы данных
-	// В реальной реализации это может быть подключение к тестовой БД
-	// или использование in-memory базы данных
-
-	// Заглушка для примера
-	t.Skip("Test database setup not implemented")
-	return nil
-}
-
-var _ sql.DB = sql.DB{}

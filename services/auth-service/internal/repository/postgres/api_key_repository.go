@@ -7,16 +7,17 @@ import (
 
 	"UptimePingPlatform/services/auth-service/internal/domain"
 	"UptimePingPlatform/services/auth-service/internal/repository"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // APIKeyRepository реализация репозитория API ключей для PostgreSQL
 type APIKeyRepository struct {
-	db *sql.DB
+	pool *pgxpool.Pool
 }
 
 // NewAPIKeyRepository создает новый экземпляр APIKeyRepository
-func NewAPIKeyRepository(db *sql.DB) repository.APIKeyRepository {
-	return &APIKeyRepository{db: db}
+func NewAPIKeyRepository(pool *pgxpool.Pool) repository.APIKeyRepository {
+	return &APIKeyRepository{pool: pool}
 }
 
 // Create сохраняет новый API ключ в базе данных
@@ -24,7 +25,7 @@ func (r *APIKeyRepository) Create(ctx context.Context, key *domain.APIKey) error
 	query := `INSERT INTO api_keys (id, tenant_id, key_hash, secret_hash, name, is_active, expires_at, created_at) 
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.pool.Exec(ctx, query,
 		key.ID,
 		key.TenantID,
 		key.KeyHash,
@@ -47,7 +48,7 @@ func (r *APIKeyRepository) FindByID(ctx context.Context, id string) (*domain.API
 		FROM api_keys WHERE id = $1`
 
 	var key domain.APIKey
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
+	err := r.pool.QueryRow(ctx, query, id).Scan(
 		&key.ID,
 		&key.TenantID,
 		&key.KeyHash,
@@ -74,7 +75,7 @@ func (r *APIKeyRepository) FindByKeyHash(ctx context.Context, keyHash string) (*
 		FROM api_keys WHERE key_hash = $1`
 
 	var key domain.APIKey
-	err := r.db.QueryRowContext(ctx, query, keyHash).Scan(
+	err := r.pool.QueryRow(ctx, query, keyHash).Scan(
 		&key.ID,
 		&key.TenantID,
 		&key.KeyHash,
@@ -100,7 +101,7 @@ func (r *APIKeyRepository) ListByTenant(ctx context.Context, tenantID string) ([
 	query := `SELECT id, tenant_id, key_hash, secret_hash, name, is_active, expires_at, created_at 
 		FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC`
 
-	rows, err := r.db.QueryContext(ctx, query, tenantID)
+	rows, err := r.pool.Query(ctx, query, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list API keys: %w", err)
 	}
@@ -141,7 +142,7 @@ func (r *APIKeyRepository) Update(ctx context.Context, key *domain.APIKey) error
 		expires_at = $4 
 	WHERE id = $1`
 
-	result, err := r.db.ExecContext(ctx, query,
+	result, err := r.pool.Exec(ctx, query,
 		key.ID,
 		key.Name,
 		key.IsActive,
@@ -152,11 +153,7 @@ func (r *APIKeyRepository) Update(ctx context.Context, key *domain.APIKey) error
 		return fmt.Errorf("failed to update API key: %w", err)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
+	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
 		return fmt.Errorf("API key not found")
 	}
@@ -168,16 +165,12 @@ func (r *APIKeyRepository) Update(ctx context.Context, key *domain.APIKey) error
 func (r *APIKeyRepository) Delete(ctx context.Context, id string) error {
 	query := `DELETE FROM api_keys WHERE id = $1`
 
-	result, err := r.db.ExecContext(ctx, query, id)
+	result, err := r.pool.Exec(ctx, query, id)
 	if err != nil {
 		return fmt.Errorf("failed to delete API key: %w", err)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
+	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
 		return fmt.Errorf("API key not found")
 	}

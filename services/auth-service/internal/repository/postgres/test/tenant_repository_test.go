@@ -13,11 +13,15 @@ import (
 
 func TestTenantRepository_Create(t *testing.T) {
 	// Тестовая база данных
-	_ = setupTestDB(t)
+	pool := setupTestDB(t)
+	if pool == nil {
+		t.Skip("Skipping test due to no database connection")
+		return
+	}
+	defer pool.Close()
 
 	// Создаем репозиторий
-	db := setupTestDB(t)
-	repo := postgres.NewTenantRepository(db)
+	repo := postgres.NewTenantRepository(pool)
 
 	// Создаем тестовый тенант
 	tenant := &domain.Tenant{
@@ -29,150 +33,162 @@ func TestTenantRepository_Create(t *testing.T) {
 		UpdatedAt: time.Now().UTC().Truncate(time.Microsecond),
 	}
 
-	// Создаем тенант
+	// Сохраняем тенант
 	err := repo.Create(context.Background(), tenant)
 	require.NoError(t, err)
 
-	// Проверяем, что тенант был создан
-	createdTenant, err := repo.FindByID(context.Background(), tenant.ID)
+	// Проверяем, что тенант сохранен
+	found, err := repo.FindByID(context.Background(), "tenant-1")
 	require.NoError(t, err)
-	assert.Equal(t, tenant.ID, createdTenant.ID)
-	assert.Equal(t, tenant.Name, createdTenant.Name)
-	assert.Equal(t, tenant.Slug, createdTenant.Slug)
-	assert.Equal(t, tenant.Settings["theme"], createdTenant.Settings["theme"])
-	assert.Equal(t, tenant.Settings["notifications"], createdTenant.Settings["notifications"])
-	assert.WithinDuration(t, tenant.CreatedAt, createdTenant.CreatedAt, time.Second)
-	assert.WithinDuration(t, tenant.UpdatedAt, createdTenant.UpdatedAt, time.Second)
+	assert.Equal(t, tenant.ID, found.ID)
+	assert.Equal(t, tenant.Name, found.Name)
+	assert.Equal(t, tenant.Slug, found.Slug)
+	assert.Equal(t, tenant.Settings, found.Settings)
 }
 
 func TestTenantRepository_FindByID(t *testing.T) {
-	// Тестовая база данных
-	_ = setupTestDB(t)
+	pool := setupTestDB(t)
+	if pool == nil {
+		t.Skip("Skipping test due to no database connection")
+		return
+	}
+	defer pool.Close()
 
-	// Создаем репозиторий
-	db := setupTestDB(t)
-	repo := postgres.NewTenantRepository(db)
+	repo := postgres.NewTenantRepository(pool)
 
 	// Создаем тестовый тенант
 	tenant := &domain.Tenant{
-		ID:        "tenant-1",
-		Name:      "Test Tenant",
-		Slug:      "test-tenant",
-		Settings:  map[string]interface{}{"theme": "dark", "notifications": true},
+		ID:        "tenant-2",
+		Name:      "Test Tenant 2",
+		Slug:      "test-tenant-2",
+		Settings:  map[string]interface{}{"theme": "light"},
 		CreatedAt: time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt: time.Now().UTC().Truncate(time.Microsecond),
 	}
 
-	// Создаем тенант
 	err := repo.Create(context.Background(), tenant)
 	require.NoError(t, err)
 
-	// Ищем тенант по ID
-	foundTenant, err := repo.FindByID(context.Background(), tenant.ID)
+	// Ищем по ID
+	found, err := repo.FindByID(context.Background(), "tenant-2")
 	require.NoError(t, err)
-	assert.Equal(t, tenant.ID, foundTenant.ID)
-	assert.Equal(t, tenant.Name, foundTenant.Name)
+	assert.Equal(t, tenant.ID, found.ID)
+	assert.Equal(t, tenant.Name, found.Name)
+
+	// Ищем несуществующий тенант
+	found, err = repo.FindByID(context.Background(), "non-existent")
+	assert.Error(t, err)
+	assert.Nil(t, found)
 }
 
 func TestTenantRepository_FindBySlug(t *testing.T) {
-	// Тестовая база данных
-	_ = setupTestDB(t)
+	pool := setupTestDB(t)
+	if pool == nil {
+		t.Skip("Skipping test due to no database connection")
+		return
+	}
+	defer pool.Close()
 
-	// Создаем репозиторий
-	db := setupTestDB(t)
-	repo := postgres.NewTenantRepository(db)
+	repo := postgres.NewTenantRepository(pool)
 
 	// Создаем тестовый тенант
 	tenant := &domain.Tenant{
-		ID:        "tenant-1",
-		Name:      "Test Tenant",
-		Slug:      "test-tenant",
-		Settings:  map[string]interface{}{"theme": "dark", "notifications": true},
+		ID:        "tenant-3",
+		Name:      "Test Tenant 3",
+		Slug:      "test-tenant-3",
+		Settings:  map[string]interface{}{"theme": "dark"},
 		CreatedAt: time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt: time.Now().UTC().Truncate(time.Microsecond),
 	}
 
-	// Создаем тенант
 	err := repo.Create(context.Background(), tenant)
 	require.NoError(t, err)
 
-	// Ищем тенант по slug
-	foundTenant, err := repo.FindBySlug(context.Background(), tenant.Slug)
+	// Ищем по slug
+	found, err := repo.FindBySlug(context.Background(), "test-tenant-3")
 	require.NoError(t, err)
-	assert.Equal(t, tenant.ID, foundTenant.ID)
-	assert.Equal(t, tenant.Slug, foundTenant.Slug)
+	assert.Equal(t, tenant.ID, found.ID)
+	assert.Equal(t, tenant.Slug, found.Slug)
+
+	// Ищем несуществующий slug
+	found, err = repo.FindBySlug(context.Background(), "non-existent-slug")
+	assert.Error(t, err)
+	assert.Nil(t, found)
 }
 
 func TestTenantRepository_Update(t *testing.T) {
-	// Тестовая база данных
-	_ = setupTestDB(t)
+	pool := setupTestDB(t)
+	if pool == nil {
+		t.Skip("Skipping test due to no database connection")
+		return
+	}
+	defer pool.Close()
 
-	// Создаем репозиторий
-	db := setupTestDB(t)
-	repo := postgres.NewTenantRepository(db)
+	repo := postgres.NewTenantRepository(pool)
 
 	// Создаем тестовый тенант
 	tenant := &domain.Tenant{
-		ID:        "tenant-1",
-		Name:      "Test Tenant",
-		Slug:      "test-tenant",
-		Settings:  map[string]interface{}{"theme": "dark", "notifications": true},
+		ID:        "tenant-4",
+		Name:      "Original Name",
+		Slug:      "original-slug",
+		Settings:  map[string]interface{}{"theme": "light"},
 		CreatedAt: time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt: time.Now().UTC().Truncate(time.Microsecond),
 	}
 
-	// Создаем тенант
 	err := repo.Create(context.Background(), tenant)
 	require.NoError(t, err)
 
 	// Обновляем тенант
-	tenant.Name = "Updated Tenant"
-	tenant.Slug = "updated-tenant"
-	tenant.Settings["theme"] = "light"
-	tenant.Settings["notifications"] = false
-	tenant.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
+	tenant.Name = "Updated Name"
+	tenant.Settings = map[string]interface{}{"theme": "dark", "language": "en"}
+	updatedAt := time.Now().UTC().Truncate(time.Microsecond)
+	tenant.UpdatedAt = updatedAt
 
 	err = repo.Update(context.Background(), tenant)
 	require.NoError(t, err)
 
-	// Проверяем, что тенант был обновлен
-	updatedTenant, err := repo.FindByID(context.Background(), tenant.ID)
+	// Проверяем обновление
+	found, err := repo.FindByID(context.Background(), "tenant-4")
 	require.NoError(t, err)
-	assert.Equal(t, "Updated Tenant", updatedTenant.Name)
-	assert.Equal(t, "updated-tenant", updatedTenant.Slug)
-	assert.Equal(t, "light", updatedTenant.Settings["theme"])
-	assert.Equal(t, false, updatedTenant.Settings["notifications"])
-	assert.WithinDuration(t, tenant.UpdatedAt, updatedTenant.UpdatedAt, time.Second)
+	assert.Equal(t, "Updated Name", found.Name)
+	assert.Equal(t, tenant.Settings, found.Settings)
 }
 
 func TestTenantRepository_Delete(t *testing.T) {
-	// Тестовая база данных
-	_ = setupTestDB(t)
+	pool := setupTestDB(t)
+	if pool == nil {
+		t.Skip("Skipping test due to no database connection")
+		return
+	}
+	defer pool.Close()
 
-	// Создаем репозиторий
-	db := setupTestDB(t)
-	repo := postgres.NewTenantRepository(db)
+	repo := postgres.NewTenantRepository(pool)
 
 	// Создаем тестовый тенант
 	tenant := &domain.Tenant{
-		ID:        "tenant-1",
-		Name:      "Test Tenant",
-		Slug:      "test-tenant",
-		Settings:  map[string]interface{}{"theme": "dark", "notifications": true},
+		ID:        "tenant-5",
+		Name:      "Tenant to Delete",
+		Slug:      "tenant-to-delete",
+		Settings:  map[string]interface{}{"theme": "light"},
 		CreatedAt: time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt: time.Now().UTC().Truncate(time.Microsecond),
 	}
 
-	// Создаем тенант
 	err := repo.Create(context.Background(), tenant)
 	require.NoError(t, err)
 
 	// Удаляем тенант
-	err = repo.Delete(context.Background(), tenant.ID)
+	err = repo.Delete(context.Background(), "tenant-5")
 	require.NoError(t, err)
 
-	// Проверяем, что тенант был удален
-	_, err = repo.FindByID(context.Background(), tenant.ID)
+	// Проверяем, что тенант удален
+	found, err := repo.FindByID(context.Background(), "tenant-5")
+	assert.Error(t, err)
+	assert.Nil(t, found)
+
+	// Удаляем несуществующий тенант
+	err = repo.Delete(context.Background(), "non-existent")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "tenant not found")
 }

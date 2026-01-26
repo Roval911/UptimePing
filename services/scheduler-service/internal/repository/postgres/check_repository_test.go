@@ -20,19 +20,19 @@ func TestCheckRepository_Create(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		// Пример структуры теста
 		check := &domain.Check{
-			ID:       uuid.New().String(),
-			TenantID: "tenant-123",
-			Name:     "Test Check",
-			Target:   "https://example.com",
-			Type:     domain.CheckTypeHTTP,
-			Interval: 60,
-			Timeout:  30,
-			Status:   domain.CheckStatusActive,
-			Priority: domain.PriorityNormal,
-			Config:   map[string]interface{}{"method": "GET"},
+			ID:        uuid.New().String(),
+			TenantID:  "tenant-123",
+			Name:      "Test Check",
+			Target:    "https://example.com",
+			Type:      domain.CheckTypeHTTP,
+			Interval:  60,
+			Timeout:   30,
+			Status:    domain.CheckStatusActive,
+			Priority:  domain.PriorityNormal,
+			Config:    map[string]interface{}{"method": "GET"},
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
-			NextRunAt:   timePtr(time.Now().Add(time.Minute)),
+			NextRunAt: timePtr(time.Now().Add(time.Minute)),
 		}
 
 		// В реальном тесте здесь был бы вызов метода с моком
@@ -69,17 +69,17 @@ func TestCheckRepository_GetByTenantID(t *testing.T) {
 func TestCheckRepository_Update(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		check := &domain.Check{
-			ID:       uuid.New().String(),
-			TenantID: "tenant-123",
-			Name:     "Updated Check",
-			Target:   "https://updated.example.com",
-			Type:     domain.CheckTypeHTTP,
-			Interval: 120,
-			Timeout:  60,
-			Status:   domain.CheckStatusActive,
-			Priority: domain.PriorityHigh,
+			ID:        uuid.New().String(),
+			TenantID:  "tenant-123",
+			Name:      "Updated Check",
+			Target:    "https://updated.example.com",
+			Type:      domain.CheckTypeHTTP,
+			Interval:  120,
+			Timeout:   60,
+			Status:    domain.CheckStatusActive,
+			Priority:  domain.PriorityHigh,
 			UpdatedAt: time.Now(),
-			NextRunAt:   timePtr(time.Now().Add(2 * time.Minute)),
+			NextRunAt: timePtr(time.Now().Add(2 * time.Minute)),
 		}
 
 		_ = check

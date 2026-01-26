@@ -100,7 +100,7 @@ func (s *StaticServiceDiscovery) Watch(ctx context.Context, serviceName string, 
 }
 
 // DynamicServiceDiscovery реализует динамическое обнаружение сервисов
-// Пока пустая реализация, может быть расширена для работы с Consul, etcd и т.д.
+// TODO Пока пустая реализация, может быть расширена для работы с Consul, etcd и т.д.
 type DynamicServiceDiscovery struct {
 	// TODO: Реализовать интеграцию с реальными системами обнаружения сервисов
 	// На данный момент в проекте нет интеграции с Consul, etcd или другими системами service discovery

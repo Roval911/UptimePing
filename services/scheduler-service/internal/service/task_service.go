@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -11,8 +10,8 @@ import (
 
 	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/logger"
-	"UptimePingPlatform/pkg/rabbitmq"
 	"UptimePingPlatform/services/scheduler-service/internal/domain"
+	"UptimePingPlatform/services/scheduler-service/internal/mocks"
 	"UptimePingPlatform/services/scheduler-service/internal/repository"
 )
 
@@ -22,7 +21,7 @@ type TaskService struct {
 	taskRepo      repository.TaskRepository
 	lockRepo      repository.LockRepository
 	schedulerRepo repository.SchedulerRepository
-	rabbitMQ      *rabbitmq.Producer
+	rabbitMQ      mocks.ProducerInterface
 	cronScheduler *cron.Cron
 	logger        logger.Logger
 	workerID      string
@@ -34,7 +33,7 @@ func NewTaskService(
 	taskRepo repository.TaskRepository,
 	lockRepo repository.LockRepository,
 	schedulerRepo repository.SchedulerRepository,
-	rabbitMQ *rabbitmq.Producer,
+	rabbitMQ mocks.ProducerInterface,
 	logger logger.Logger,
 ) *TaskService {
 	return &TaskService{
@@ -163,16 +162,8 @@ func (s *TaskService) sendTaskToRabbitMQ(ctx context.Context, task *domain.Task)
 		return nil
 	}
 
-	// Сериализуем задачу в JSON
-	taskJSON, err := json.Marshal(task)
-	if err != nil {
-		return errors.Wrap(err, errors.ErrInternal, "failed to serialize task to JSON").
-			WithDetails(fmt.Sprintf("task_id: %s", task.ID)).
-			WithContext(ctx)
-	}
-
 	// Отправляем задачу в RabbitMQ очередь
-	if err := s.rabbitMQ.Publish(ctx, taskJSON, rabbitmq.WithRoutingKey("check_tasks")); err != nil {
+	if err := s.rabbitMQ.PublishTask(ctx, task); err != nil {
 		return errors.Wrap(err, errors.ErrInternal, "failed to publish task to RabbitMQ").
 			WithDetails(fmt.Sprintf("task_id: %s, queue: check_tasks", task.ID)).
 			WithContext(ctx)
@@ -315,9 +306,9 @@ func (s *TaskService) scheduleCronTask(ctx context.Context, check *domain.Check)
 // GetStats возвращает статистику сервиса
 func (s *TaskService) GetStats() map[string]interface{} {
 	stats := map[string]interface{}{
-		"worker_id":      s.workerID,
-		"service":        "task_service",
-		"cron_entries":   s.cronScheduler.Entries(),
+		"worker_id":          s.workerID,
+		"service":            "task_service",
+		"cron_entries":       s.cronScheduler.Entries(),
 		"rabbitmq_connected": s.rabbitMQ != nil,
 	}
 

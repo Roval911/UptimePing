@@ -353,6 +353,98 @@ func (uc *CheckUseCase) validateGraphQLConfig(check *domain.Check) error {
 	return nil
 }
 
+// GetCheck получает проверку по ID
+func (uc *CheckUseCase) GetCheck(ctx context.Context, checkID string) (*domain.Check, error) {
+	check, err := uc.checkRepo.GetByID(ctx, checkID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get check: %w", err)
+	}
+	return check, nil
+}
+
+// ScheduleCheck создает расписание для проверки
+func (uc *CheckUseCase) ScheduleCheck(ctx context.Context, schedule *domain.Schedule) (*domain.Schedule, error) {
+	// Валидация расписания
+	if schedule.CheckID == "" {
+		return nil, fmt.Errorf("check_id is required")
+	}
+	if schedule.CronExpression == "" {
+		return nil, fmt.Errorf("cron_expression is required")
+	}
+
+	// Установка времени создания
+	now := time.Now()
+	schedule.CreatedAt = now
+	schedule.UpdatedAt = now
+
+	// Сохранение расписания
+	createdSchedule, err := uc.schedulerRepo.Create(ctx, schedule)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create schedule: %w", err)
+	}
+
+	return createdSchedule, nil
+}
+
+// UnscheduleCheck удаляет расписание проверки
+func (uc *CheckUseCase) UnscheduleCheck(ctx context.Context, checkID string) error {
+	err := uc.schedulerRepo.DeleteByCheckID(ctx, checkID)
+	if err != nil {
+		return fmt.Errorf("failed to delete schedule: %w", err)
+	}
+	return nil
+}
+
+// GetSchedule получает расписание по ID проверки
+func (uc *CheckUseCase) GetSchedule(ctx context.Context, checkID string) (*domain.Schedule, error) {
+	schedule, err := uc.schedulerRepo.GetByCheckID(ctx, checkID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get schedule: %w", err)
+	}
+	return schedule, nil
+}
+
+// ListSchedulesParams параметры для списка расписаний
+type ListSchedulesParams struct {
+	PageSize  int
+	PageToken string
+	Filter    string
+}
+
+// ListSchedules получает список расписаний
+func (uc *CheckUseCase) ListSchedules(ctx context.Context, params ListSchedulesParams) ([]*domain.Schedule, int, error) {
+	schedules, err := uc.schedulerRepo.List(ctx, params.PageSize, params.PageToken, params.Filter)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list schedules: %w", err)
+	}
+
+	// Получаем общее количество
+	total, err := uc.schedulerRepo.Count(ctx, params.Filter)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to count schedules: %w", err)
+	}
+
+	return schedules, total, nil
+}
+
+// HealthCheck проверяет состояние сервиса
+func (uc *CheckUseCase) HealthCheck(ctx context.Context) bool {
+	// Простая проверка - пытаемся подключиться к репозиториям
+	_, err := uc.checkRepo.Ping(ctx)
+	if err != nil {
+		uc.logger.Error("Health check failed for check repository", logger.Error(err))
+		return false
+	}
+
+	_, err = uc.schedulerRepo.Ping(ctx)
+	if err != nil {
+		uc.logger.Error("Health check failed for scheduler repository", logger.Error(err))
+		return false
+	}
+
+	return true
+}
+
 // validateTCPConfig валидирует конфигурацию TCP проверки
 func (uc *CheckUseCase) validateTCPConfig(check *domain.Check) error {
 	if check.Config == nil {
