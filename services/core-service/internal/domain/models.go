@@ -21,9 +21,11 @@ type Task struct {
 type TaskType string
 
 const (
-	TaskTypeHTTP TaskType = "http"
-	TaskTypeTCP  TaskType = "tcp"
-	TaskTypeICMP TaskType = "icmp"
+	TaskTypeHTTP   TaskType = "http"
+	TaskTypeTCP    TaskType = "tcp"
+	TaskTypeICMP   TaskType = "icmp"
+	TaskTypeGRPC   TaskType = "grpc"
+	TaskTypeGraphQL TaskType = "graphql"
 )
 
 // TaskStatus представляет статус задачи
@@ -85,6 +87,27 @@ type ICMPConfig struct {
 	Count    int           `json:"count"`
 	Timeout  time.Duration `json:"timeout"`
 	Interval time.Duration `json:"interval"`
+}
+
+// gRPCConfig представляет конфигурацию gRPC проверки
+type gRPCConfig struct {
+	Service     string            `json:"service"`
+	Method      string            `json:"method"`
+	Host        string            `json:"host"`
+	Port        int               `json:"port"`
+	Headers     map[string]string `json:"headers,omitempty"`
+	Timeout     time.Duration     `json:"timeout"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+}
+
+// GraphQLConfig представляет конфигурацию GraphQL проверки
+type GraphQLConfig struct {
+	URL          string                 `json:"url"`
+	Query        string                 `json:"query"`
+	Variables    map[string]interface{} `json:"variables,omitempty"`
+	OperationName string               `json:"operation_name,omitempty"`
+	Headers      map[string]string     `json:"headers,omitempty"`
+	Timeout      time.Duration         `json:"timeout"`
 }
 
 // Validate валидирует задачу
@@ -186,6 +209,94 @@ func (t *Task) GetICMPConfig() (*ICMPConfig, error) {
 	if interval, ok := t.Config["interval"].(string); ok {
 		if duration, err := time.ParseDuration(interval); err == nil {
 			config.Interval = duration
+		}
+	}
+	
+	return config, nil
+}
+
+// GetgRPCConfig извлекает gRPC конфигурацию
+func (t *Task) GetgRPCConfig() (*gRPCConfig, error) {
+	if t.Type != string(TaskTypeGRPC) {
+		return nil, ErrInvalidTaskType
+	}
+	
+	config := &gRPCConfig{}
+	if service, ok := t.Config["service"].(string); ok {
+		config.Service = service
+	}
+	if method, ok := t.Config["method"].(string); ok {
+		config.Method = method
+	}
+	if host, ok := t.Config["host"].(string); ok {
+		config.Host = host
+	}
+	if port, ok := t.Config["port"].(float64); ok {
+		config.Port = int(port)
+	}
+	if timeout, ok := t.Config["timeout"].(string); ok {
+		if duration, err := time.ParseDuration(timeout); err == nil {
+			config.Timeout = duration
+		}
+	}
+	
+	// Извлечение headers
+	if headers, ok := t.Config["headers"].(map[string]interface{}); ok {
+		config.Headers = make(map[string]string)
+		for k, v := range headers {
+			if str, ok := v.(string); ok {
+				config.Headers[k] = str
+			}
+		}
+	}
+	
+	// Извлечение metadata
+	if metadata, ok := t.Config["metadata"].(map[string]interface{}); ok {
+		config.Metadata = make(map[string]string)
+		for k, v := range metadata {
+			if str, ok := v.(string); ok {
+				config.Metadata[k] = str
+			}
+		}
+	}
+	
+	return config, nil
+}
+
+// GetGraphQLConfig извлекает GraphQL конфигурацию
+func (t *Task) GetGraphQLConfig() (*GraphQLConfig, error) {
+	if t.Type != string(TaskTypeGraphQL) {
+		return nil, ErrInvalidTaskType
+	}
+	
+	config := &GraphQLConfig{}
+	if url, ok := t.Config["url"].(string); ok {
+		config.URL = url
+	}
+	if query, ok := t.Config["query"].(string); ok {
+		config.Query = query
+	}
+	if operationName, ok := t.Config["operation_name"].(string); ok {
+		config.OperationName = operationName
+	}
+	if timeout, ok := t.Config["timeout"].(string); ok {
+		if duration, err := time.ParseDuration(timeout); err == nil {
+			config.Timeout = duration
+		}
+	}
+	
+	// Извлечение variables
+	if variables, ok := t.Config["variables"].(map[string]interface{}); ok {
+		config.Variables = variables
+	}
+	
+	// Извлечение headers
+	if headers, ok := t.Config["headers"].(map[string]interface{}); ok {
+		config.Headers = make(map[string]string)
+		for k, v := range headers {
+			if str, ok := v.(string); ok {
+				config.Headers[k] = str
+			}
 		}
 	}
 	
