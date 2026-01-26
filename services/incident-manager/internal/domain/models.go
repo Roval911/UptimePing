@@ -34,6 +34,7 @@ type Incident struct {
 	Count       int                `json:"count" db:"count"`
 	ErrorMessage string            `json:"error_message" db:"error_message"`
 	ErrorHash   string             `json:"error_hash" db:"error_hash"`
+	Metadata    map[string]interface{} `json:"metadata" db:"metadata"`
 	CreatedAt   time.Time          `json:"created_at" db:"created_at"`
 	UpdatedAt   time.Time          `json:"updated_at" db:"updated_at"`
 }

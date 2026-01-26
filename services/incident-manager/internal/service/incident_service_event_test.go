@@ -89,6 +89,10 @@ func TestIncidentService_ProcessCheckResultEvent_Error_NewIncident(t *testing.T)
 	repo.On("GetByCheckAndErrorHash", mock.Anything, result.CheckID, mock.AnythingOfType("string")).
 		Return(nil, nil)
 	
+	// Мокируем отсутствие похожих инцидентов
+	repo.On("GetByTenantID", mock.Anything, result.TenantID, mock.AnythingOfType("*domain.IncidentFilter")).
+		Return([]*domain.Incident{}, nil)
+	
 	// Мокируем создание нового инцидента
 	repo.On("Create", mock.Anything, mock.AnythingOfType("*domain.Incident")).Return(nil)
 	

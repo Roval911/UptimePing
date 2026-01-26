@@ -11,6 +11,7 @@ import (
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/validation"
 	"UptimePingPlatform/services/incident-manager/internal/domain"
+	"UptimePingPlatform/services/incident-manager/internal/producer/rabbitmq"
 )
 
 // IncidentService интерфейс для управления инцидентами
@@ -98,6 +99,7 @@ type incidentService struct {
 	config    *IncidentConfig
 	logger    logger.Logger
 	validator *validation.Validator
+	producer  rabbitmq.IncidentProducerInterface
 }
 
 // NewIncidentService создает новый сервис инцидентов
@@ -115,7 +117,32 @@ func NewIncidentService(repo IncidentRepository, config *IncidentConfig, log log
 		config:    config,
 		logger:    log,
 		validator: validation.NewValidator(),
+		producer:  nil, // Producer будет установлен отдельно
 	}
+}
+
+// NewIncidentServiceWithProducer создает новый сервис инцидентов с producer
+func NewIncidentServiceWithProducer(repo IncidentRepository, config *IncidentConfig, log logger.Logger, producer rabbitmq.IncidentProducerInterface) IncidentService {
+	if config == nil {
+		config = DefaultIncidentConfig()
+	}
+	
+	if log == nil {
+		log, _ = logger.NewLogger("incident-manager", "info", "incident-service", false)
+	}
+	
+	return &incidentService{
+		repo:      repo,
+		config:    config,
+		logger:    log,
+		validator: validation.NewValidator(),
+		producer:  producer,
+	}
+}
+
+// SetProducer устанавливает producer для событий инцидентов
+func (s *incidentService) SetProducer(producer rabbitmq.IncidentProducerInterface) {
+	s.producer = producer
 }
 
 // ProcessCheckResult обрабатывает результат проверки
@@ -251,7 +278,7 @@ func (s *incidentService) processFailedCheck(ctx context.Context, result *CheckR
 		logger.String("severity", string(severity)),
 		logger.String("error_hash", errorHash))
 	
-	// Поиск открытого инцидента по check_id и error_hash
+	// Этап 1: Поиск точного совпадения по check_id и error_hash
 	existingIncident, err := s.repo.GetByCheckAndErrorHash(ctx, result.CheckID, errorHash)
 	if err != nil {
 		s.logger.Error("Failed to find existing incident",
@@ -262,44 +289,134 @@ func (s *incidentService) processFailedCheck(ctx context.Context, result *CheckR
 	}
 	
 	if existingIncident != nil {
-		// Обновление: count++, last_seen = now
-		existingIncident.IncrementCount()
-		existingIncident.UpdateSeverity(severity)
-		
-		// Проверяем необходимость эскалации
-		s.checkEscalation(existingIncident)
-		
-		// Если инцидент был разрешен, повторно открываем его
-		if existingIncident.IsResolved() {
-			existingIncident.Reopen()
-			s.logger.Info("Reopening resolved incident",
-				logger.String("incident_id", existingIncident.ID),
-				logger.String("check_id", result.CheckID),
-				logger.String("tenant_id", result.TenantID))
-		}
-		
-		s.logger.Debug("Updating existing incident",
-			logger.String("incident_id", existingIncident.ID),
-			logger.String("check_id", result.CheckID),
-			logger.String("tenant_id", result.TenantID),
-			logger.Int("count", existingIncident.Count),
-			logger.String("severity", string(existingIncident.Severity)),
-			logger.String("status", string(existingIncident.Status)))
-		
-		err = s.repo.Update(ctx, existingIncident)
-		if err != nil {
-			s.logger.Error("Failed to update incident",
-				logger.String("incident_id", existingIncident.ID),
-				logger.Error(err))
-			return errors.Wrap(err, errors.ErrInternal, "failed to update incident")
-		}
-		
-		// Публикация события incident.updated
-		s.publishIncidentEvent(ctx, "incident.updated", existingIncident, result)
-		
-		return nil
+		// Этап 2: Обновление существующего инцидента
+		return s.updateExistingIncident(ctx, existingIncident, result, severity)
 	}
 	
+	// Этап 3: Поиск похожих инцидентов по check_id для группировки
+	similarIncidents, err := s.findSimilarIncidents(ctx, result.CheckID, result.TenantID)
+	if err != nil {
+		s.logger.Error("Failed to find similar incidents",
+			logger.String("check_id", result.CheckID),
+			logger.String("tenant_id", result.TenantID),
+			logger.Error(err))
+		return errors.Wrap(err, errors.ErrInternal, "failed to find similar incidents")
+	}
+	
+	if len(similarIncidents) > 0 {
+		// Этап 4: Группировка с похожим инцидентом
+		return s.groupWithSimilarIncident(ctx, similarIncidents[0], result, severity)
+	}
+	
+	// Этап 5: Создание нового инцидента
+	return s.createNewIncident(ctx, result, severity)
+}
+
+// updateExistingIncident обновляет существующий инцидент
+func (s *incidentService) updateExistingIncident(ctx context.Context, incident *domain.Incident, result *CheckResult, severity domain.IncidentSeverity) error {
+	// Обновление счетчика и времени последнего появления
+	incident.IncrementCount()
+	incident.UpdateSeverity(severity)
+	
+	// Проверяем необходимость эскалации при длительных инцидентах
+	s.checkEscalation(incident)
+	
+	// Если инцидент был разрешен, повторно открываем его
+	if incident.IsResolved() {
+		incident.Reopen()
+		s.logger.Info("Reopening resolved incident",
+			logger.String("incident_id", incident.ID),
+			logger.String("check_id", result.CheckID),
+			logger.String("tenant_id", result.TenantID),
+			logger.Int("previous_count", incident.Count-1))
+	}
+	
+	s.logger.Debug("Updating existing incident",
+		logger.String("incident_id", incident.ID),
+		logger.String("check_id", result.CheckID),
+		logger.String("tenant_id", result.TenantID),
+		logger.Int("count", incident.Count),
+		logger.String("severity", string(incident.Severity)),
+		logger.String("status", string(incident.Status)))
+	
+	err := s.repo.Update(ctx, incident)
+	if err != nil {
+		s.logger.Error("Failed to update incident",
+			logger.String("incident_id", incident.ID),
+			logger.Error(err))
+		return errors.Wrap(err, errors.ErrInternal, "failed to update incident")
+	}
+	
+	// Публикация события incident.updated
+	s.publishIncidentEvent(ctx, "incident.updated", incident, result)
+	
+	return nil
+}
+
+// findSimilarIncidents ищет похожие инциденты по check_id
+func (s *incidentService) findSimilarIncidents(ctx context.Context, checkID, tenantID string) ([]*domain.Incident, error) {
+	// Поиск активных инцидентов по check_id
+	incidents, err := s.repo.GetByTenantID(ctx, tenantID, &domain.IncidentFilter{
+		CheckID: &checkID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	
+	// Фильтруем только активные инциденты
+	var activeIncidents []*domain.Incident
+	for _, incident := range incidents {
+		if incident.Status == domain.IncidentStatusOpen || incident.Status == domain.IncidentStatusAcknowledged {
+			activeIncidents = append(activeIncidents, incident)
+		}
+	}
+	
+	return activeIncidents, nil
+}
+
+// groupWithSimilarIncident группирует с похожим инцидентом
+func (s *incidentService) groupWithSimilarIncident(ctx context.Context, incident *domain.Incident, result *CheckResult, severity domain.IncidentSeverity) error {
+	// Обновляем существующий инцидент
+	incident.IncrementCount()
+	incident.UpdateSeverity(severity)
+	
+	// Добавляем информацию о группировке
+	if incident.Metadata == nil {
+		incident.Metadata = make(map[string]interface{})
+	}
+	incident.Metadata["grouped_errors"] = incident.Metadata["grouped_errors"]
+	if incident.Metadata["grouped_errors"] == nil {
+		incident.Metadata["grouped_errors"] = []string{}
+	}
+	
+	// Добавляем новую ошибку в список группированных
+	if errors, ok := incident.Metadata["grouped_errors"].([]string); ok {
+		incident.Metadata["grouped_errors"] = append(errors, result.ErrorMessage)
+	}
+	
+	s.logger.Info("Grouping with similar incident",
+		logger.String("incident_id", incident.ID),
+		logger.String("check_id", result.CheckID),
+		logger.String("tenant_id", result.TenantID),
+		logger.String("error_message", result.ErrorMessage),
+		logger.Int("total_count", incident.Count))
+	
+	err := s.repo.Update(ctx, incident)
+	if err != nil {
+		s.logger.Error("Failed to update grouped incident",
+			logger.String("incident_id", incident.ID),
+			logger.Error(err))
+		return errors.Wrap(err, errors.ErrInternal, "failed to update grouped incident")
+	}
+	
+	// Публикация события incident.updated с флагом группировки
+	s.publishIncidentEvent(ctx, "incident.grouped", incident, result)
+	
+	return nil
+}
+
+// createNewIncident создает новый инцидент
+func (s *incidentService) createNewIncident(ctx context.Context, result *CheckResult, severity domain.IncidentSeverity) error {
 	// Создание нового инцидента
 	newIncident := domain.NewIncident(result.CheckID, result.TenantID, severity, result.ErrorMessage)
 	
@@ -308,9 +425,10 @@ func (s *incidentService) processFailedCheck(ctx context.Context, result *CheckR
 		logger.String("check_id", result.CheckID),
 		logger.String("tenant_id", result.TenantID),
 		logger.String("severity", string(severity)),
-		logger.String("error_hash", newIncident.ErrorHash))
+		logger.String("error_hash", newIncident.ErrorHash),
+		logger.String("error_message", result.ErrorMessage))
 	
-	err = s.repo.Create(ctx, newIncident)
+	err := s.repo.Create(ctx, newIncident)
 	if err != nil {
 		s.logger.Error("Failed to create incident",
 			logger.String("check_id", result.CheckID),
@@ -418,6 +536,9 @@ func (s *incidentService) resolveIncidentOnSuccess(ctx context.Context, result *
 
 // createOrUpdateIncident создает или обновляет инцидент при ошибке
 func (s *incidentService) createOrUpdateIncident(ctx context.Context, result *CheckResult) (*domain.Incident, error) {
+	var newIncident *domain.Incident
+	var err error
+	
 	// Определяем уровень серьезности на основе сообщения об ошибке
 	severity := s.determineSeverity(result.ErrorMessage, result.Duration)
 	
@@ -428,7 +549,7 @@ func (s *incidentService) createOrUpdateIncident(ctx context.Context, result *Ch
 		logger.String("severity", string(severity)))
 	
 	// Создаем новый инцидент
-	newIncident := domain.NewIncident(result.CheckID, result.TenantID, severity, result.ErrorMessage)
+	newIncident = domain.NewIncident(result.CheckID, result.TenantID, severity, result.ErrorMessage)
 	
 	// Ищем существующий инцидент по check_id и error_hash
 	existingIncident, err := s.repo.GetByCheckAndErrorHash(ctx, result.CheckID, newIncident.ErrorHash)
@@ -442,66 +563,25 @@ func (s *incidentService) createOrUpdateIncident(ctx context.Context, result *Ch
 	
 	if existingIncident != nil {
 		// Инцидент существует, обновляем его
-		return s.updateExistingIncident(ctx, existingIncident, result, severity)
+		err := s.updateExistingIncident(ctx, existingIncident, result, severity)
+		if err != nil {
+			return nil, err
+		}
+		return existingIncident, nil
 	}
 	
 	// Создаем новый инцидент
-	s.logger.Info("Creating new incident",
-		logger.String("incident_id", newIncident.ID),
-		logger.String("check_id", result.CheckID),
-		logger.String("tenant_id", result.TenantID),
-		logger.String("severity", string(severity)),
-		logger.String("error_hash", newIncident.ErrorHash))
+	newIncident = domain.NewIncident(result.CheckID, result.TenantID, severity, result.ErrorMessage)
 	
 	err = s.repo.Create(ctx, newIncident)
 	if err != nil {
-		s.logger.Error("Failed to create incident",
-			logger.String("check_id", result.CheckID),
-			logger.String("tenant_id", result.TenantID),
-			logger.Error(err))
 		return nil, errors.Wrap(err, errors.ErrInternal, "failed to create incident")
 	}
 	
+	// Публикация события incident.opened
+	s.publishIncidentEvent(ctx, "incident.opened", newIncident, result)
+	
 	return newIncident, nil
-}
-
-// updateExistingIncident обновляет существующий инцидент
-func (s *incidentService) updateExistingIncident(ctx context.Context, incident *domain.Incident, result *CheckResult, severity domain.IncidentSeverity) (*domain.Incident, error) {
-	// Увеличиваем счетчик
-	incident.IncrementCount()
-	
-	// Обновляем серьезность если необходимо
-	incident.UpdateSeverity(severity)
-	
-	// Проверяем необходимость эскалации
-	s.checkEscalation(incident)
-	
-	// Если инцидент был разрешен, повторно открываем его
-	if incident.IsResolved() {
-		incident.Reopen()
-		s.logger.Info("Reopening resolved incident",
-			logger.String("incident_id", incident.ID),
-			logger.String("check_id", result.CheckID),
-			logger.String("tenant_id", result.TenantID))
-	}
-	
-	s.logger.Debug("Updating existing incident",
-		logger.String("incident_id", incident.ID),
-		logger.String("check_id", result.CheckID),
-		logger.String("tenant_id", result.TenantID),
-		logger.Int("count", incident.Count),
-		logger.String("severity", string(incident.Severity)),
-		logger.String("status", string(incident.Status)))
-	
-	err := s.repo.Update(ctx, incident)
-	if err != nil {
-		s.logger.Error("Failed to update incident",
-			logger.String("incident_id", incident.ID),
-			logger.Error(err))
-		return nil, errors.Wrap(err, errors.ErrInternal, "failed to update incident")
-	}
-	
-	return incident, nil
 }
 
 // determineSeverity определяет уровень серьезности на основе ошибки и длительности
@@ -534,33 +614,123 @@ func (s *incidentService) determineSeverity(errorMessage string, duration time.D
 // checkEscalation проверяет необходимость эскалации инцидента
 func (s *incidentService) checkEscalation(incident *domain.Incident) {
 	originalSeverity := incident.Severity
+	escalated := false
 	
-	// Проверяем эскалацию на основе времени
+	// Этап 1: Проверяем эскалацию на основе времени существования
 	if escalationTimeout, exists := s.config.EscalationTimeouts[incident.Severity]; exists {
 		if time.Since(incident.FirstSeen) > escalationTimeout {
 			s.escalateSeverity(incident)
+			escalated = true
 			s.logger.Info("Escalating incident due to timeout",
 				logger.String("incident_id", incident.ID),
 				logger.String("from_severity", string(originalSeverity)),
 				logger.String("to_severity", string(incident.Severity)),
 				logger.Duration("incident_duration", incident.GetDuration()),
 				logger.Duration("escalation_timeout", escalationTimeout))
-			return
 		}
 	}
 	
-	// Проверяем эскалацию на основе количества повторений
-	if maxRetries, exists := s.config.MaxRetriesBeforeEscalation[incident.Severity]; exists {
-		if incident.Count > maxRetries {
+	// Этап 2: Проверяем эскалацию на основе количества повторений
+	if !escalated {
+		if maxRetries, exists := s.config.MaxRetriesBeforeEscalation[incident.Severity]; exists {
+			if incident.Count > maxRetries {
+				s.escalateSeverity(incident)
+				escalated = true
+				s.logger.Info("Escalating incident due to retry count",
+					logger.String("incident_id", incident.ID),
+					logger.String("from_severity", string(originalSeverity)),
+					logger.String("to_severity", string(incident.Severity)),
+					logger.Int("retry_count", incident.Count),
+					logger.Int("max_retries", maxRetries))
+			}
+		}
+	}
+	
+	// Этап 3: Проверяем эскалацию на основе частоты ошибок
+	if !escalated {
+		if s.shouldEscalateBasedOnFrequency(incident) {
 			s.escalateSeverity(incident)
-			s.logger.Info("Escalating incident due to retry count",
+			escalated = true
+			s.logger.Info("Escalating incident due to high error frequency",
 				logger.String("incident_id", incident.ID),
 				logger.String("from_severity", string(originalSeverity)),
 				logger.String("to_severity", string(incident.Severity)),
-				logger.Int("retry_count", incident.Count),
-				logger.Int("max_retries", maxRetries))
+				logger.Float64("error_frequency", s.calculateErrorFrequency(incident)))
 		}
 	}
+	
+	// Этап 4: Добавляем метаданные эскалации
+	if escalated {
+		if incident.Metadata == nil {
+			incident.Metadata = make(map[string]interface{})
+		}
+		
+		// Инициализируем escalation_history если нужно
+		if incident.Metadata["escalation_history"] == nil {
+			incident.Metadata["escalation_history"] = []interface{}{}
+		}
+		
+		// Добавляем запись в историю эскалации
+		history := incident.Metadata["escalation_history"].([]interface{})
+		incident.Metadata["escalation_history"] = append(history, map[string]interface{}{
+			"timestamp":        time.Now(),
+			"from_severity":    string(originalSeverity),
+			"to_severity":      string(incident.Severity),
+			"incident_duration": incident.GetDuration(),
+			"retry_count":       incident.Count,
+			"reason":           s.getEscalationReason(originalSeverity, incident),
+		})
+	}
+}
+
+// shouldEscalateBasedOnFrequency проверяет необходимость эскалации на основе частоты ошибок
+func (s *incidentService) shouldEscalateBasedOnFrequency(incident *domain.Incident) bool {
+	// Эскалация если инцидент длится более 30 минут и частота ошибок > 1 в минуту
+	if incident.GetDuration() < 30*time.Minute {
+		return false
+	}
+	
+	frequency := s.calculateErrorFrequency(incident)
+	return frequency > 1.0 // Более 1 ошибки в минуту
+}
+
+// calculateErrorFrequency вычисляет частоту ошибок (ошибок в минуту)
+func (s *incidentService) calculateErrorFrequency(incident *domain.Incident) float64 {
+	duration := incident.GetDuration()
+	if duration == 0 {
+		return 0
+	}
+	
+	durationMinutes := duration.Minutes()
+	if durationMinutes == 0 {
+		return float64(incident.Count)
+	}
+	
+	return float64(incident.Count) / durationMinutes
+}
+
+// getEscalationReason определяет причину эскалации
+func (s *incidentService) getEscalationReason(originalSeverity domain.IncidentSeverity, incident *domain.Incident) string {
+	// Сначала проверяем эскалацию на основе частоты
+	if s.shouldEscalateBasedOnFrequency(incident) {
+		return "high_frequency"
+	}
+	
+	// Затем проверяем эскалацию на основе времени
+	if escalationTimeout, exists := s.config.EscalationTimeouts[originalSeverity]; exists {
+		if time.Since(incident.FirstSeen) > escalationTimeout {
+			return "timeout"
+		}
+	}
+	
+	// Наконец проверяем эскалацию на основе количества повторений
+	if maxRetries, exists := s.config.MaxRetriesBeforeEscalation[originalSeverity]; exists {
+		if incident.Count > maxRetries {
+			return "retry_count"
+		}
+	}
+	
+	return "unknown"
 }
 
 // escalateSeverity повышает уровень серьезности инцидента
@@ -777,34 +947,57 @@ func (s *incidentService) publishIncidentEvent(ctx context.Context, eventType st
 		logger.Int("count", incident.Count),
 		logger.Duration("duration", result.Duration))
 	
-	// TODO: Здесь будет реальная публикация события в RabbitMQ/Kafka/EventBus
-	// Для примера просто логируем событие
-	
-	// Структура события (для будущего использования)
-	event := map[string]interface{}{
-		"event_type":     eventType,
-		"incident_id":    incident.ID,
-		"check_id":        result.CheckID,
-		"tenant_id":       result.TenantID,
-		"severity":        string(incident.Severity),
-		"status":          string(incident.Status),
-		"count":           incident.Count,
-		"error_message":   result.ErrorMessage,
-		"duration":        result.Duration.Milliseconds(),
-		"first_seen":      incident.FirstSeen,
-		"last_seen":       incident.LastSeen,
-		"error_hash":      incident.ErrorHash,
-		"timestamp":       time.Now(),
-		"service":         "incident-manager",
+	// Публикуем событие через RabbitMQ producer
+	if s.producer != nil && s.producer.IsConnected() {
+		// Конвертируем service.CheckResult в rabbitmq.CheckResult
+		rabbitmqResult := &rabbitmq.CheckResult{
+			CheckID:      result.CheckID,
+			TenantID:     result.TenantID,
+			IsSuccess:    result.IsSuccess,
+			ErrorMessage: result.ErrorMessage,
+			Duration:     result.Duration,
+			Timestamp:    result.Timestamp,
+			Metadata:     result.Metadata,
+		}
+		
+		err := s.producer.PublishIncidentEventWithRetry(ctx, eventType, incident, rabbitmqResult)
+		if err != nil {
+			s.logger.Error("Failed to publish incident event to RabbitMQ",
+				logger.String("event_type", eventType),
+				logger.String("incident_id", incident.ID),
+				logger.Error(err))
+		} else {
+			s.logger.Debug("Incident event published successfully to RabbitMQ",
+				logger.String("event_type", eventType),
+				logger.String("incident_id", incident.ID))
+		}
+	} else {
+		s.logger.Warn("RabbitMQ producer not available, event not published",
+			logger.String("event_type", eventType),
+			logger.String("incident_id", incident.ID),
+			logger.Bool("producer_nil", s.producer == nil))
+		
+		// Логируем событие для отладки если producer недоступен
+		event := map[string]interface{}{
+			"event_type":     eventType,
+			"incident_id":    incident.ID,
+			"check_id":        result.CheckID,
+			"tenant_id":       result.TenantID,
+			"severity":        string(incident.Severity),
+			"status":          string(incident.Status),
+			"count":           incident.Count,
+			"error_message":   result.ErrorMessage,
+			"duration":        result.Duration.Milliseconds(),
+			"first_seen":      incident.FirstSeen,
+			"last_seen":       incident.LastSeen,
+			"error_hash":      incident.ErrorHash,
+			"timestamp":       time.Now(),
+			"service":         "incident-manager",
+		}
+		
+		s.logger.Debug("Incident event data (not published)",
+			logger.Any("event", event))
 	}
-	
-	// В реальной реализации здесь будет:
-	// 1. Сериализация в JSON
-	// 2. Публикация в message broker (RabbitMQ/Kafka)
-	// 3. Обработка ошибок публикации
-	
-	s.logger.Debug("Incident event data",
-		logger.Any("event", event))
 }
 
 // generateErrorHash генерирует хеш для дедупликации ошибок
