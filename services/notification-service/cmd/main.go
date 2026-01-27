@@ -40,16 +40,22 @@ func main() {
 		panic(fmt.Sprintf("Failed to create logger: %v", err))
 	}
 
-	// Загрузка конфигурации провайдеров из файла или переменных окружения
+	// Загрузка конфигурации провайдеров из YAML файла
 	providersConfig := config.DefaultProvidersConfig()
-	
-	// Попытка загрузить из файла конфигурации, если он существует
-	if configFile := os.Getenv("PROVIDERS_CONFIG_FILE"); configFile != "" {
-		if data, err := os.ReadFile(configFile); err == nil {
-			if err := yaml.Unmarshal(data, &providersConfig); err != nil {
-				appLogger.Warn("Failed to parse providers config file", logger.Error(err))
-			}
+
+	// Загрузка из файла config.yaml с подстановкой переменных окружения
+	if data, err := os.ReadFile("config/config.yaml"); err == nil {
+		// Простая подстановка переменных окружения вида ${VAR:default}
+		configContent := string(data)
+		configContent = os.ExpandEnv(configContent)
+
+		if err := yaml.Unmarshal([]byte(configContent), &providersConfig); err != nil {
+			appLogger.Warn("Failed to parse providers config file", logger.Error(err))
+		} else {
+			appLogger.Info("Loaded providers config from config/config.yaml")
 		}
+	} else {
+		appLogger.Warn("No config file found, using defaults")
 	}
 
 	appLogger.Info("Starting Notification Service")
@@ -70,7 +76,7 @@ func main() {
 	// Инициализация компонентов
 	eventFilter := filter.NewEventFilter(filter.DefaultFilterConfig(), appLogger)
 	notificationGrouper := grouper.NewNotificationGrouper(grouper.DefaultGrouperConfig(), appLogger)
-	
+
 	// Создание менеджера провайдеров уведомлений
 	providerManager := provider.NewProviderManager(provider.ProviderConfig{
 		Telegram: providersConfig.Telegram,
@@ -78,10 +84,10 @@ func main() {
 		Email:    providersConfig.Email,
 		Retry:    providersConfig.Retry,
 	}, appLogger)
-	
+
 	// Создание менеджера шаблонов
 	templateManager := template.NewDefaultTemplateManager(appLogger)
-	
+
 	// Создание процессора с провайдерами
 	notificationProcessor := processor.NewNotificationProcessor(
 		processor.DefaultProcessorConfig(),
