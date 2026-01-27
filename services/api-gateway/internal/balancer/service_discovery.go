@@ -6,6 +6,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health/grpc_health_v1"
+
 	"UptimePingPlatform/pkg/logger"
 )
 
@@ -73,9 +77,127 @@ func NewInstanceHealthChecker(address string, log logger.Logger) InstanceHealthC
 
 // NewGrpcHealthChecker создает новый gRPC health checker
 func NewGrpcHealthChecker(address string, log logger.Logger) InstanceHealthChecker {
-	//TODO В реальной реализации здесь бы создавался gRPC HealthChecker
-	// Пока используем мок для совместимости
-	return &MockHealthChecker{address: address, logger: log}
+	return &GrpcHealthChecker{
+		address: address,
+		logger:  log,
+	}
+}
+
+// GrpcHealthChecker реализует проверку здоровья через gRPC Health Checking Protocol
+type GrpcHealthChecker struct {
+	address   string
+	logger    logger.Logger
+	client    grpc_health_v1.HealthClient
+	conn      *grpc.ClientConn
+	mu        sync.RWMutex
+	lastSeen  time.Time
+	isHealthy bool
+}
+
+func (g *GrpcHealthChecker) IsHealthy() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// Если клиент не инициализирован, пытаемся подключиться
+	if g.client == nil {
+		if err := g.connect(); err != nil {
+			if g.logger != nil {
+				g.logger.Error("Failed to connect to gRPC health service",
+					logger.String("address", g.address),
+					logger.Error(err))
+			}
+			g.isHealthy = false
+			return false
+		}
+	}
+
+	// Проверяем здоровье сервиса
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := g.client.Check(ctx, &grpc_health_v1.HealthCheckRequest{
+		Service: "", // Проверяем здоровье всего сервиса
+	})
+
+	if err != nil {
+		if g.logger != nil {
+			g.logger.Error("Health check failed",
+				logger.String("address", g.address),
+				logger.Error(err))
+		}
+		g.isHealthy = false
+		return false
+	}
+
+	g.lastSeen = time.Now()
+	g.isHealthy = resp.Status == grpc_health_v1.HealthCheckResponse_SERVING
+
+	if g.logger != nil {
+		g.logger.Debug("Health check completed",
+			logger.String("address", g.address),
+			logger.String("status", resp.Status.String()),
+			logger.Bool("healthy", g.isHealthy))
+	}
+
+	return g.isHealthy
+}
+
+func (g *GrpcHealthChecker) Address() string {
+	return g.address
+}
+
+func (g *GrpcHealthChecker) LastSeen() time.Time {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.lastSeen
+}
+
+func (g *GrpcHealthChecker) Close() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.conn != nil {
+		err := g.conn.Close()
+		g.conn = nil
+		g.client = nil
+		
+		if g.logger != nil {
+			g.logger.Info("gRPC health checker closed",
+				logger.String("address", g.address),
+				logger.Error(err))
+		}
+		return err
+	}
+
+	if g.logger != nil {
+		g.logger.Info("gRPC health checker closed (no connection)",
+			logger.String("address", g.address))
+	}
+	return nil
+}
+
+// connect устанавливает соединение с gRPC сервисом
+func (g *GrpcHealthChecker) connect() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, err := grpc.DialContext(ctx, g.address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+	)
+	if err != nil {
+		return err
+	}
+
+	g.conn = conn
+	g.client = grpc_health_v1.NewHealthClient(conn)
+
+	if g.logger != nil {
+		g.logger.Info("Connected to gRPC health service",
+			logger.String("address", g.address))
+	}
+
+	return nil
 }
 
 // MockHealthChecker мок для health checker (для тестов)
@@ -139,12 +261,18 @@ func NewStaticServiceDiscovery(logger logger.Logger) *StaticServiceDiscovery {
 
 // Register регистрирует инстансы для сервиса
 func (s *StaticServiceDiscovery) Register(serviceName string, addresses []string, weights []int) {
+	s.RegisterWithHealthChecker(serviceName, addresses, weights, false)
+}
+
+// RegisterWithHealthChecker регистрирует инстансы с указанием типа health checker
+func (s *StaticServiceDiscovery) RegisterWithHealthChecker(serviceName string, addresses []string, weights []int, useGrpcHealth bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.logger.Info("Registering service instances",
 		logger.String("service", serviceName),
-		logger.Int("address_count", len(addresses)))
+		logger.Int("address_count", len(addresses)),
+		logger.Bool("grpc_health", useGrpcHealth))
 
 	instances := make([]*Instance, 0, len(addresses))
 	for i, address := range addresses {
@@ -156,9 +284,16 @@ func (s *StaticServiceDiscovery) Register(serviceName string, addresses []string
 		s.logger.Debug("Creating instance",
 			logger.String("service", serviceName),
 			logger.String("address", address),
-			logger.Int("weight", weight))
+			logger.Int("weight", weight),
+			logger.Bool("grpc_health", useGrpcHealth))
 
-		healthChecker := NewInstanceHealthChecker(address, s.logger)
+		var healthChecker InstanceHealthChecker
+		if useGrpcHealth {
+			healthChecker = NewGrpcHealthChecker(address, s.logger)
+		} else {
+			healthChecker = NewInstanceHealthChecker(address, s.logger)
+		}
+		
 		instance := NewInstance(address, healthChecker, weight)
 		instances = append(instances, instance)
 	}
@@ -227,5 +362,27 @@ func (s *StaticServiceDiscovery) Watch(ctx context.Context, serviceName string, 
 		}
 	}()
 
+	return nil
+}
+
+// Close закрывает все health checker соединения
+func (s *StaticServiceDiscovery) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.logger.Info("Closing service discovery")
+
+	for serviceName, instances := range s.instances {
+		for _, instance := range instances {
+			if err := instance.HealthChecker.Close(); err != nil {
+				s.logger.Error("Failed to close health checker",
+					logger.String("service", serviceName),
+					logger.String("address", instance.Address),
+					logger.Error(err))
+			}
+		}
+	}
+
+	s.logger.Info("Service discovery closed successfully")
 	return nil
 }

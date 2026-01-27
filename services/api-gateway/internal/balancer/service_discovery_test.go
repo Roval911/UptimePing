@@ -209,17 +209,17 @@ func TestNewGrpcHealthChecker(t *testing.T) {
 		t.Fatal("GrpcHealthChecker should not be nil")
 	}
 
-	mockChecker, ok := checker.(*MockHealthChecker)
+	grpcChecker, ok := checker.(*GrpcHealthChecker)
 	if !ok {
-		t.Fatal("Checker should be MockHealthChecker")
+		t.Fatal("Checker should be GrpcHealthChecker")
 	}
 
-	if mockChecker.Address() != address {
-		t.Errorf("Expected address %s, got %s", address, mockChecker.Address())
+	if grpcChecker.Address() != address {
+		t.Errorf("Expected address %s, got %s", address, grpcChecker.Address())
 	}
 	
 	// Проверяем, что логгер установлен
-	if mockChecker.logger != log {
+	if grpcChecker.logger != log {
 		t.Error("Logger should be set correctly")
 	}
 }
@@ -427,6 +427,109 @@ func TestStaticServiceDiscovery_Watch(t *testing.T) {
 	// Watch может быть асинхронным, поэтому не проверяем callback
 	// Главное - чтобы не было ошибки и блокировки
 	t.Logf("Watch completed successfully, callback called: %v", callbackCalled)
+}
+
+// TestStaticServiceDiscovery_RegisterWithHealthChecker тестирует регистрацию с gRPC health checker
+func TestStaticServiceDiscovery_RegisterWithHealthChecker(t *testing.T) {
+	log := &MockLogger{}
+	sd := NewStaticServiceDiscovery(log)
+
+	serviceName := "test-service"
+	addresses := []string{"localhost:50051", "localhost:50052"}
+	weights := []int{1, 2}
+
+	// Регистрируем с gRPC health checker
+	sd.RegisterWithHealthChecker(serviceName, addresses, weights, true)
+
+	// Проверяем, что инстансы зарегистрированы
+	ctx := context.Background()
+	instances, err := sd.GetInstances(ctx, serviceName)
+
+	if err != nil {
+		t.Errorf("GetInstances should not return error, got %v", err)
+	}
+
+	if len(instances) != 2 {
+		t.Errorf("Expected 2 instances, got %d", len(instances))
+	}
+
+	// Проверяем, что используются gRPC health checkers
+	for _, instance := range instances {
+		_, isGrpcChecker := instance.HealthChecker.(*GrpcHealthChecker)
+		if !isGrpcChecker {
+			t.Errorf("Instance %s should use GrpcHealthChecker", instance.Address)
+		}
+	}
+}
+
+// TestStaticServiceDiscovery_RegisterWithHealthChecker_Mixed тестирует смешанную регистрацию
+func TestStaticServiceDiscovery_RegisterWithHealthChecker_Mixed(t *testing.T) {
+	log := &MockLogger{}
+	sd := NewStaticServiceDiscovery(log)
+
+	// Регистрируем один сервис с gRPC health checker
+	sd.RegisterWithHealthChecker("grpc-service", []string{"localhost:50051"}, []int{1}, true)
+	
+	// Регистрируем другой сервис с mock health checker
+	sd.RegisterWithHealthChecker("mock-service", []string{"localhost:50052"}, []int{1}, false)
+
+	ctx := context.Background()
+
+	// Проверяем gRPC сервис
+	grpcInstances, err := sd.GetInstances(ctx, "grpc-service")
+	if err != nil {
+		t.Errorf("GetInstances should not return error, got %v", err)
+	}
+	if len(grpcInstances) != 1 {
+		t.Errorf("Expected 1 grpc instance, got %d", len(grpcInstances))
+	}
+	_, isGrpcChecker := grpcInstances[0].HealthChecker.(*GrpcHealthChecker)
+	if !isGrpcChecker {
+		t.Error("grpc-service should use GrpcHealthChecker")
+	}
+
+	// Проверяем mock сервис
+	mockInstances, err := sd.GetInstances(ctx, "mock-service")
+	if err != nil {
+		t.Errorf("GetInstances should not return error, got %v", err)
+	}
+	if len(mockInstances) != 1 {
+		t.Errorf("Expected 1 mock instance, got %d", len(mockInstances))
+	}
+	_, isMockChecker := mockInstances[0].HealthChecker.(*MockHealthChecker)
+	if !isMockChecker {
+		t.Error("mock-service should use MockHealthChecker")
+	}
+}
+
+// TestStaticServiceDiscovery_Close тестирует закрытие service discovery
+func TestStaticServiceDiscovery_Close(t *testing.T) {
+	log := &MockLogger{}
+	sd := NewStaticServiceDiscovery(log)
+
+	serviceName := "test-service"
+	addresses := []string{"localhost:50051", "localhost:50052"}
+	weights := []int{1, 1}
+
+	sd.Register(serviceName, addresses, weights)
+
+	// Закрываем service discovery
+	err := sd.Close()
+	if err != nil {
+		t.Errorf("Close should not return error, got %v", err)
+	}
+
+	// Проверяем логи
+	logs := log.GetLogs()
+	closeFound := false
+	for _, logEntry := range logs {
+		if logEntry == "INFO: Closing service discovery" {
+			closeFound = true
+		}
+	}
+	if !closeFound {
+		t.Error("Expected to find 'Closing service discovery' log entry")
+	}
 }
 
 // TestStaticServiceDiscovery_ConcurrentAccess тестирует конкурентный доступ
