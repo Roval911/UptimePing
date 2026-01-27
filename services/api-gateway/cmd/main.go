@@ -49,7 +49,9 @@ func main() {
 
 	// Инициализация Redis с retry логикой
 	redisConfig := pkg_redis.NewConfig()
-	redisConfig.Addr = "localhost:6379" // В реальном приложении брать из конфига
+	if redisAddr := os.Getenv("REDIS_ADDR"); redisAddr != "" {
+		redisConfig.Addr = redisAddr
+	}
 
 	redisCtx, redisCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer redisCancel()
@@ -77,7 +79,11 @@ func main() {
 	metricCollector := metrics.NewMetrics("api_gateway")
 
 	// Создаем реальный gRPC клиент для auth-service
-	authClient, err := client.NewGRPCAuthClient("localhost:50051", 5*time.Second, appLogger)
+	authServiceAddr := os.Getenv("AUTH_SERVICE_ADDR")
+	if authServiceAddr == "" {
+		authServiceAddr = "localhost:50051"
+	}
+	authClient, err := client.NewGRPCAuthClient(authServiceAddr, 5*time.Second, appLogger)
 	if err != nil {
 		appLogger.Error("Failed to connect to auth service", logger.String("error", err.Error()))
 		os.Exit(1)
@@ -85,7 +91,11 @@ func main() {
 	defer authClient.Close()
 
 	// Создаем gRPC клиент для scheduler-service
-	schedulerClient, err := client.NewSchedulerClient("localhost:50052", 5*time.Second, appLogger)
+	schedulerServiceAddr := os.Getenv("SCHEDULER_SERVICE_ADDR")
+	if schedulerServiceAddr == "" {
+		schedulerServiceAddr = "localhost:50052"
+	}
+	schedulerClient, err := client.NewSchedulerClient(schedulerServiceAddr, 5*time.Second, appLogger)
 	if err != nil {
 		appLogger.Error("Failed to connect to scheduler service", logger.String("error", err.Error()))
 		os.Exit(1)

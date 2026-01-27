@@ -26,7 +26,7 @@ type gRPCChecker struct {
 // NewgRPCChecker создает новый gRPC checker
 func NewgRPCChecker(timeout int64, log logger.Logger) *gRPCChecker {
 	return &gRPCChecker{
-		BaseChecker: NewBaseChecker(timeout),
+		BaseChecker: NewBaseChecker(log),
 		dialTimeout: time.Duration(timeout) * time.Millisecond,
 		logger:      log,
 		validator:   validation.NewValidator(),

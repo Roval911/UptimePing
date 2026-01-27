@@ -54,7 +54,7 @@ type GraphQLLocation struct {
 // NewGraphQLChecker создает новый GraphQL checker
 func NewGraphQLChecker(timeout int64, log logger.Logger) *GraphQLChecker {
 	return &GraphQLChecker{
-		BaseChecker: NewBaseChecker(timeout),
+		BaseChecker: NewBaseChecker(log),
 		client: &http.Client{
 			Timeout: time.Duration(timeout) * time.Millisecond,
 			Transport: &http.Transport{
@@ -279,7 +279,6 @@ func (g *GraphQLChecker) createErrorResult(task *domain.Task, statusCode int, du
 // SetTimeout устанавливает таймаут HTTP клиента
 func (g *GraphQLChecker) SetTimeout(timeout time.Duration) {
 	g.client.Timeout = timeout
-	g.BaseChecker.SetTimeout(int64(timeout.Milliseconds()))
 }
 
 // GetClient возвращает HTTP клиент для тестирования

@@ -1,16 +1,42 @@
 server:
-  host: "0.0.0.0"
-  port: 8080
+  host: "${SERVER_HOST:0.0.0.0}"
+  port: ${SERVER_PORT:8081}
 
 database:
-  host: "localhost"
-  port: 5432
-  name: "auth_service"
-  user: "auth_user"
-  password: "auth_password"
+  host: "${DB_HOST:localhost}"
+  port: ${DB_PORT:5432}
+  name: "${DB_NAME:uptimeping}"
+  user: "${DB_USER:uptimeping}"
+  password: "${DB_PASSWORD:uptimeping}"
 
 logger:
-  level: "debug"
-  format: "json"
+  level: "${LOG_LEVEL:info}"
+  format: "${LOG_FORMAT:json}"
 
-environment: "dev"
+redis:
+  addr: "${REDIS_ADDR:localhost:6379}"
+  password: "${REDIS_PASSWORD:}"
+  db: ${REDIS_DB:0}
+  pool_size: ${REDIS_POOL_SIZE:10}
+  min_idle_conn: ${REDIS_MIN_IDLE_CONN:2}
+  max_retries: ${REDIS_MAX_RETRIES:3}
+  retry_interval: "${REDIS_RETRY_INTERVAL:1s}"
+  health_check: "${REDIS_HEALTH_CHECK:30s}"
+
+jwt:
+  access_secret: "${JWT_ACCESS_SECRET:your-access-secret}"
+  refresh_secret: "${JWT_REFRESH_SECRET:your-refresh-secret}"
+  access_token_duration: "${JWT_ACCESS_TOKEN_DURATION:15m}"
+  refresh_token_duration: "${JWT_REFRESH_TOKEN_DURATION:7d}"
+
+rabbitmq:
+  url: "${RABBITMQ_URL:amqp://guest:guest@localhost:5672/}"
+  queue: "${RABBITMQ_AUTH_QUEUE:auth_notifications}"
+
+grpc:
+  port: ${GRPC_PORT:50051}
+
+rate_limit:
+  requests_per_minute: ${RATE_LIMIT_REQUESTS_PER_MINUTE:100}
+
+environment: "${ENVIRONMENT:dev}"

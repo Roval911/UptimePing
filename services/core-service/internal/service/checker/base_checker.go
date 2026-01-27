@@ -22,7 +22,13 @@ func NewBaseChecker(logger logger.Logger) *BaseChecker {
 
 // LogOperationStart логирует начало операции
 func (b *BaseChecker) LogOperationStart(ctx context.Context, operation string, fields ...map[string]interface{}) {
-	b.logger.Info("Starting "+operation, fields...)
+	loggerFields := make([]logger.Field, 0, len(fields))
+	for _, field := range fields {
+		for key, value := range field {
+			loggerFields = append(loggerFields, logger.Any(key, value))
+		}
+	}
+	b.logger.Info("Starting "+operation, loggerFields...)
 }
 
 // LogOperationSuccess логирует успешное завершение операции

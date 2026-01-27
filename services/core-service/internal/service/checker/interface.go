@@ -31,29 +31,6 @@ type CheckerFactory interface {
 	GetSupportedTypes() []domain.TaskType
 }
 
-// BaseChecker предоставляет базовую функциональность для всех checker'ов
-type BaseChecker struct {
-	// Общие поля для всех checker'ов
-	timeout int64 // таймаут в миллисекундах
-}
-
-// NewBaseChecker создает новый базовый checker
-func NewBaseChecker(timeout int64) *BaseChecker {
-	return &BaseChecker{
-		timeout: timeout,
-	}
-}
-
-// GetTimeout возвращает таймаут
-func (b *BaseChecker) GetTimeout() int64 {
-	return b.timeout
-}
-
-// SetTimeout устанавливает таймаут
-func (b *BaseChecker) SetTimeout(timeout int64) {
-	b.timeout = timeout
-}
-
 // HTTPClient определяет интерфейс для HTTP клиента
 type HTTPClient interface {
 	// Do выполняет HTTP запрос
@@ -106,7 +83,7 @@ type TCPConnection struct {
 // NewTCPChecker создает новый TCP checker
 func NewTCPChecker(timeout int64, dialer TCPDialer, log logger.Logger) *TCPChecker {
 	return &TCPChecker{
-		BaseChecker: NewBaseChecker(timeout),
+		BaseChecker: NewBaseChecker(log),
 		dialer:      dialer,
 		logger:      log,
 		validator:   validation.NewValidator(),

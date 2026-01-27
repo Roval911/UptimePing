@@ -51,9 +51,9 @@ func main() {
 
 	// Инициализация RabbitMQ
 	rabbitmqConfig := pkg_rabbitmq.NewConfig()
-	rabbitmqConfig.URL = "amqp://guest:guest@localhost:5672/"
-	rabbitmqConfig.Exchange = "incidents"
-	rabbitmqConfig.RoutingKey = "incident.events"
+	rabbitmqConfig.URL = cfg.RabbitMQ.URL
+	rabbitmqConfig.Exchange = cfg.RabbitMQ.Exchange
+	rabbitmqConfig.RoutingKey = cfg.RabbitMQ.RoutingKey
 
 	rabbitmqConn, err := pkg_rabbitmq.Connect(context.Background(), rabbitmqConfig)
 	if err != nil {
@@ -64,7 +64,8 @@ func main() {
 
 	// Инициализация RabbitMQ producer для инцидентов
 	incidentProducerConfig := incidentProducer.DefaultIncidentProducerConfig()
-	incidentProducerConfig.Exchange = "incidents"
+	incidentProducerConfig.URL = cfg.RabbitMQ.URL
+	incidentProducerConfig.Exchange = cfg.RabbitMQ.Exchange
 
 	incidentProducer, err := incidentProducer.NewIncidentProducer(rabbitmqConn, incidentProducerConfig, appLogger)
 	if err != nil {

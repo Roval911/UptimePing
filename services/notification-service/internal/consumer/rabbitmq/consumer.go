@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -56,8 +57,13 @@ type Config struct {
 
 // NewConfig создает конфигурацию по умолчанию
 func NewConfig() *Config {
+	rabbitmqURL := "amqp://guest:guest@localhost:5672/"
+	if url := os.Getenv("RABBITMQ_URL"); url != "" {
+		rabbitmqURL = url
+	}
+	
 	return &Config{
-		URL:            "amqp://guest:guest@localhost:5672/",
+		URL:            rabbitmqURL,
 		Exchange:       NotificationsExchange,
 		Queue:          NotificationsQueue,
 		DLX:            NotificationsDLX,

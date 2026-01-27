@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
+	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/pkg/rabbitmq"
 	"UptimePingPlatform/services/core-service/internal/client"
 	"UptimePingPlatform/services/core-service/internal/logging"
-	"UptimePingPlatform/pkg/rabbitmq"
-	"UptimePingPlatform/pkg/logger"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -28,11 +28,11 @@ const (
 
 // CheckResult представляет результат проверки здоровья
 type CheckResult struct {
-	Component string    `json:"component"`
-	Status    Status    `json:"status"`
-	Message   string    `json:"message"`
-	Duration time.Duration `json:"duration"`
-	Timestamp time.Time `json:"timestamp"`
+	Component string                 `json:"component"`
+	Status    Status                 `json:"status"`
+	Message   string                 `json:"message"`
+	Duration  time.Duration          `json:"duration"`
+	Timestamp time.Time              `json:"timestamp"`
 	Details   map[string]interface{} `json:"details,omitempty"`
 }
 
@@ -48,20 +48,20 @@ type Config struct {
 	RabbitMQTimeout time.Duration `json:"rabbitmq_timeout"`
 	DatabaseTimeout time.Duration `json:"database_timeout"`
 	IncidentTimeout time.Duration `json:"incident_timeout"`
-	
+
 	// Интервалы проверок
 	CheckInterval time.Duration `json:"check_interval"`
-	
+
 	// Настройки RabbitMQ
-	RabbitMQURL string `json:"rabbitmq_url"`
+	RabbitMQURL   string `json:"rabbitmq_url"`
 	RabbitMQQueue string `json:"rabbitmq_queue"`
-	
+
 	// Настройки базы данных
 	DatabaseDSN string `json:"database_dsn"`
-	
+
 	// Настройки Incident Manager
 	IncidentManagerAddress string `json:"incident_manager_address"`
-	
+
 	// Graceful shutdown
 	ShutdownTimeout time.Duration `json:"shutdown_timeout"`
 	MaxShutdownWait time.Duration `json:"max_shutdown_wait"`
@@ -70,16 +70,16 @@ type Config struct {
 // DefaultConfig возвращает конфигурацию по умолчанию
 func DefaultConfig() *Config {
 	return &Config{
-		RabbitMQTimeout:      5 * time.Second,
-		DatabaseTimeout:      5 * time.Second,
-		IncidentTimeout:      5 * time.Second,
-		CheckInterval:        30 * time.Second,
-		RabbitMQURL:          "amqp://localhost:5672",
-		RabbitMQQueue:        "uptime_checks",
-		DatabaseDSN:          "postgres://user:password@localhost/uptimedb?sslmode=disable",
+		RabbitMQTimeout:        5 * time.Second,
+		DatabaseTimeout:        5 * time.Second,
+		IncidentTimeout:        5 * time.Second,
+		CheckInterval:          30 * time.Second,
+		RabbitMQURL:            "amqp://localhost:5672",
+		RabbitMQQueue:          "uptime_checks",
+		DatabaseDSN:            "postgres://user:password@localhost/uptimedb?sslmode=disable",
 		IncidentManagerAddress: "localhost:50052",
-		ShutdownTimeout:      30 * time.Second,
-		MaxShutdownWait:      10 * time.Second,
+		ShutdownTimeout:        30 * time.Second,
+		MaxShutdownWait:        10 * time.Second,
 	}
 }
 
@@ -117,17 +117,17 @@ func (c *Config) Validate() error {
 
 // Service представляет сервис health check
 type Service struct {
-	config    *Config
-	logger    *logging.UptimeLogger
-	checkers  []HealthChecker
-	results   map[string]*CheckResult
-	mu        sync.RWMutex
-	
+	config   *Config
+	logger   *logging.UptimeLogger
+	checkers []HealthChecker
+	results  map[string]*CheckResult
+	mu       sync.RWMutex
+
 	// Компоненты
-	db          *sql.DB
-	rabbitMQ    *rabbitmq.Producer
+	db             *sql.DB
+	rabbitMQ       *rabbitmq.Producer
 	incidentClient client.IncidentClient
-	
+
 	// Graceful shutdown
 	shutdownChan chan struct{}
 	shutdownOnce sync.Once
@@ -139,11 +139,11 @@ func NewService(config *Config, logger *logging.UptimeLogger) (*Service, error) 
 	if config == nil {
 		config = DefaultConfig()
 	}
-	
+
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
-	
+
 	service := &Service{
 		config:       config,
 		logger:       logger.WithComponent("health-checker"),
@@ -151,10 +151,10 @@ func NewService(config *Config, logger *logging.UptimeLogger) (*Service, error) 
 		results:      make(map[string]*CheckResult),
 		shutdownChan: make(chan struct{}),
 	}
-	
+
 	// Инициализируем checkers
 	service.initCheckers()
-	
+
 	return service, nil
 }
 
@@ -163,12 +163,12 @@ func (s *Service) initCheckers() {
 	// RabbitMQ checker
 	rabbitLogger, _ := logger.NewLogger("development", "info", "rabbitmq-health", false)
 	s.checkers = append(s.checkers, &RabbitMQChecker{
-		url:    s.config.RabbitMQURL,
-		queue:  s.config.RabbitMQQueue,
+		url:     s.config.RabbitMQURL,
+		queue:   s.config.RabbitMQQueue,
 		timeout: s.config.RabbitMQTimeout,
-		logger: &rabbitLogger,
+		logger:  &rabbitLogger,
 	})
-	
+
 	// Database checker
 	dbLogger, _ := logger.NewLogger("development", "info", "database-health", false)
 	s.checkers = append(s.checkers, &DatabaseChecker{
@@ -176,7 +176,7 @@ func (s *Service) initCheckers() {
 		timeout: s.config.DatabaseTimeout,
 		logger:  &dbLogger,
 	})
-	
+
 	// Incident Manager checker
 	incidentLogger, _ := logger.NewLogger("development", "info", "incident-manager-health", false)
 	s.checkers = append(s.checkers, &IncidentManagerChecker{
@@ -189,15 +189,15 @@ func (s *Service) initCheckers() {
 // Start запускает сервис health check
 func (s *Service) Start(ctx context.Context) error {
 	s.logger.GetBaseLogger().Info("Starting health check service")
-	
+
 	// Запускаем периодические проверки
 	s.wg.Add(1)
 	go s.runPeriodicChecks(ctx)
-	
+
 	s.logger.GetBaseLogger().Info("Health check service started",
 		logger.Int("checkers_count", len(s.checkers)),
 		logger.String("check_interval", s.config.CheckInterval.String()))
-	
+
 	return nil
 }
 
@@ -206,44 +206,44 @@ func (s *Service) Stop(ctx context.Context) error {
 	s.shutdownOnce.Do(func() {
 		close(s.shutdownChan)
 	})
-	
+
 	s.logger.GetBaseLogger().Info("Stopping health check service")
-	
+
 	// Создаем контекст с таймаутом
 	shutdownCtx, cancel := context.WithTimeout(ctx, s.config.ShutdownTimeout)
 	defer cancel()
-	
+
 	// Ждем завершения
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
 		close(done)
 	}()
-	
+
 	select {
 	case <-done:
 		s.logger.GetBaseLogger().Info("Health check service stopped gracefully")
 	case <-shutdownCtx.Done():
 		s.logger.GetBaseLogger().Warn("Health check service shutdown timeout reached")
 	}
-	
+
 	return nil
 }
 
 // CheckAll выполняет все проверки здоровья
 func (s *Service) CheckAll(ctx context.Context) map[string]*CheckResult {
 	results := make(map[string]*CheckResult)
-	
+
 	for _, checker := range s.checkers {
 		result := checker.Check(ctx)
 		results[checker.Name()] = result
-		
+
 		// Обновляем кэш результатов
 		s.mu.Lock()
 		s.results[checker.Name()] = result
 		s.mu.Unlock()
 	}
-	
+
 	return results
 }
 
@@ -251,14 +251,14 @@ func (s *Service) CheckAll(ctx context.Context) map[string]*CheckResult {
 func (s *Service) GetStatus() Status {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	if len(s.results) == 0 {
 		return StatusUnknown
 	}
-	
+
 	hasUnhealthy := false
 	hasDegraded := false
-	
+
 	for _, result := range s.results {
 		switch result.Status {
 		case StatusUnhealthy:
@@ -267,14 +267,14 @@ func (s *Service) GetStatus() Status {
 			hasDegraded = true
 		}
 	}
-	
+
 	if hasUnhealthy {
 		return StatusUnhealthy
 	}
 	if hasDegraded {
 		return StatusDegraded
 	}
-	
+
 	return StatusHealthy
 }
 
@@ -282,26 +282,26 @@ func (s *Service) GetStatus() Status {
 func (s *Service) GetResults() map[string]*CheckResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	// Создаем копию результатов
 	results := make(map[string]*CheckResult)
 	for k, v := range s.results {
 		results[k] = v
 	}
-	
+
 	return results
 }
 
 // runPeriodicChecks запускает периодические проверки
 func (s *Service) runPeriodicChecks(ctx context.Context) {
 	defer s.wg.Done()
-	
+
 	ticker := time.NewTicker(s.config.CheckInterval)
 	defer ticker.Stop()
-	
+
 	// Выполняем первую проверку немедленно
 	s.performChecks(ctx)
-	
+
 	for {
 		select {
 		case <-ticker.C:
@@ -317,9 +317,9 @@ func (s *Service) runPeriodicChecks(ctx context.Context) {
 // performChecks выполняет все проверки
 func (s *Service) performChecks(ctx context.Context) {
 	s.logger.GetBaseLogger().Debug("Performing health checks")
-	
+
 	results := s.CheckAll(ctx)
-	
+
 	// Логируем результаты
 	for name, result := range results {
 		logFunc := s.logger.GetBaseLogger().Info
@@ -328,14 +328,14 @@ func (s *Service) performChecks(ctx context.Context) {
 		} else if result.Status == StatusDegraded {
 			logFunc = s.logger.GetBaseLogger().Warn
 		}
-		
+
 		logFunc("Health check result",
 			logger.String("component", name),
 			logger.String("status", string(result.Status)),
 			logger.String("message", result.Message),
 			logger.String("duration", result.Duration.String()))
 	}
-	
+
 	// Обновляем общую статистику
 	status := s.GetStatus()
 	s.logger.GetBaseLogger().Info("Overall health status",
@@ -370,16 +370,16 @@ func (c *RabbitMQChecker) Name() string {
 
 func (c *RabbitMQChecker) Check(ctx context.Context) *CheckResult {
 	start := time.Now()
-	
+
 	result := &CheckResult{
 		Component: c.Name(),
 		Timestamp: start,
 	}
-	
+
 	// Создаем контекст с таймаутом
 	_, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	
+
 	// Пытаемся подключиться к RabbitMQ
 	config := rabbitmq.NewConfig()
 	config.URL = c.url
@@ -391,9 +391,9 @@ func (c *RabbitMQChecker) Check(ctx context.Context) *CheckResult {
 		return result
 	}
 	defer conn.Close()
-	
+
 	producer := rabbitmq.NewProducer(conn, config)
-	
+
 	// Проверяем доступность очереди
 	err = producer.Publish(ctx, []byte("health-check"))
 	if err != nil {
@@ -402,7 +402,7 @@ func (c *RabbitMQChecker) Check(ctx context.Context) *CheckResult {
 		result.Duration = time.Since(start)
 		return result
 	}
-	
+
 	result.Status = StatusHealthy
 	result.Message = "RabbitMQ is healthy"
 	result.Duration = time.Since(start)
@@ -410,7 +410,7 @@ func (c *RabbitMQChecker) Check(ctx context.Context) *CheckResult {
 		"url":   c.url,
 		"queue": c.queue,
 	}
-	
+
 	return result
 }
 
@@ -427,16 +427,16 @@ func (c *DatabaseChecker) Name() string {
 
 func (c *DatabaseChecker) Check(ctx context.Context) *CheckResult {
 	start := time.Now()
-	
+
 	result := &CheckResult{
 		Component: c.Name(),
 		Timestamp: start,
 	}
-	
+
 	// Создаем контекст с таймаутом
 	_, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	
+
 	// Пытаемся подключиться к базе данных
 	db, err := sql.Open("postgres", c.dsn)
 	if err != nil {
@@ -446,7 +446,7 @@ func (c *DatabaseChecker) Check(ctx context.Context) *CheckResult {
 		return result
 	}
 	defer db.Close()
-	
+
 	// Выполняем простой запрос
 	var version string
 	err = db.QueryRow("SELECT version()").Scan(&version)
@@ -456,7 +456,7 @@ func (c *DatabaseChecker) Check(ctx context.Context) *CheckResult {
 		result.Duration = time.Since(start)
 		return result
 	}
-	
+
 	result.Status = StatusHealthy
 	result.Message = "Database is healthy"
 	result.Duration = time.Since(start)
@@ -464,7 +464,7 @@ func (c *DatabaseChecker) Check(ctx context.Context) *CheckResult {
 		"version": version,
 		"dsn":     c.dsn,
 	}
-	
+
 	return result
 }
 
@@ -481,18 +481,18 @@ func (c *IncidentManagerChecker) Name() string {
 
 func (c *IncidentManagerChecker) Check(ctx context.Context) *CheckResult {
 	start := time.Now()
-	
+
 	result := &CheckResult{
 		Component: c.Name(),
 		Timestamp: start,
 	}
-	
+
 	// Создаем контекст с таймаутом
 	checkCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	
+
 	// Создаем gRPC соединение
-	conn, err := grpc.DialContext(checkCtx, c.address, 
+	conn, err := grpc.DialContext(checkCtx, c.address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithBlock())
 	if err != nil {
@@ -502,14 +502,14 @@ func (c *IncidentManagerChecker) Check(ctx context.Context) *CheckResult {
 		return result
 	}
 	defer conn.Close()
-	
+
 	// Проверяем health service
 	healthClient := grpc_health_v1.NewHealthClient(conn)
-	
+
 	req := &grpc_health_v1.HealthCheckRequest{
 		Service: "incident.service",
 	}
-	
+
 	resp, err := healthClient.Check(checkCtx, req)
 	if err != nil {
 		result.Status = StatusDegraded
@@ -517,7 +517,7 @@ func (c *IncidentManagerChecker) Check(ctx context.Context) *CheckResult {
 		result.Duration = time.Since(start)
 		return result
 	}
-	
+
 	status := StatusHealthy
 	switch resp.Status {
 	case grpc_health_v1.HealthCheckResponse_SERVING:
@@ -527,14 +527,14 @@ func (c *IncidentManagerChecker) Check(ctx context.Context) *CheckResult {
 	case grpc_health_v1.HealthCheckResponse_SERVICE_UNKNOWN:
 		status = StatusUnhealthy
 	}
-	
+
 	result.Status = status
 	result.Message = fmt.Sprintf("Incident Manager status: %s", resp.Status.String())
 	result.Duration = time.Since(start)
 	result.Details = map[string]interface{}{
-		"address": c.address,
+		"address":     c.address,
 		"grpc_status": resp.Status.String(),
 	}
-	
+
 	return result
 }

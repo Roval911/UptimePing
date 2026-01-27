@@ -98,8 +98,8 @@ func main() {
 
 	// Инициализация RabbitMQ для уведомлений
 	rabbitConfig := rabbitmq.NewConfig()
-	rabbitConfig.URL = "amqp://localhost:5672" // TODO: взять из конфига
-	rabbitConfig.Queue = "auth_notifications"
+	rabbitConfig.URL = cfg.RabbitMQ.URL
+	rabbitConfig.Queue = cfg.RabbitMQ.Queue
 	
 	rabbitConn, err := rabbitmq.Connect(context.Background(), rabbitConfig)
 	if err != nil {
@@ -111,7 +111,7 @@ func main() {
 	}
 
 	// Инициализация компонентов
-	jwtManager := jwt.NewManager("your-access-secret", "your-refresh-secret", 24*time.Hour, 7*24*time.Hour)
+	jwtManager := jwt.NewManager(cfg.JWT.AccessSecret, cfg.JWT.RefreshSecret, 24*time.Hour, 7*24*time.Hour)
 	passwordHasher := password.NewBcryptHasher(12)
 
 	// Инициализация репозиториев
@@ -142,13 +142,13 @@ func main() {
 
 	// Запуск gRPC сервера
 	go func() {
-		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", 50051))
+		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPC.Port))
 		if err != nil {
 			appLogger.Error("Failed to listen", logger.String("error", err.Error()))
 			os.Exit(1)
 		}
 
-		appLogger.Info("gRPC server starting", logger.Int("port", 50051))
+		appLogger.Info("gRPC server starting", logger.Int("port", cfg.GRPC.Port))
 		if err := grpcServer.Serve(lis); err != nil {
 			appLogger.Error("Failed to serve gRPC", logger.String("error", err.Error()))
 			os.Exit(1)
@@ -169,7 +169,7 @@ func main() {
 		rateLimitMiddleware := func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				clientIP := getClientIP(r)
-				allowed, err := rateLimiter.CheckRateLimit(r.Context(), clientIP, 100, time.Minute) // 100 запросов в минуту
+				allowed, err := rateLimiter.CheckRateLimit(r.Context(), clientIP, cfg.RateLimiting.RequestsPerMinute, time.Minute)
 				if err != nil {
 					appLogger.Error("Rate limit check failed", logger.String("error", err.Error()))
 					http.Error(w, "Rate limit check failed", http.StatusInternalServerError)

@@ -12,10 +12,16 @@ import (
 
 // Config представляет конфигурацию приложения. Структура содержит вложенные структуры для различных компонентов приложения.
 type Config struct {
-	Server      ServerConfig   `json:"server" yaml:"server"`
-	Database    DatabaseConfig `json:"database" yaml:"database"`
-	Logger      LoggerConfig   `json:"logger" yaml:"logger"`
-	Environment string         `json:"environment" yaml:"environment"`
+	Server         ServerConfig    `json:"server" yaml:"server"`
+	Database       DatabaseConfig  `json:"database" yaml:"database"`
+	Logger         LoggerConfig    `json:"logger" yaml:"logger"`
+	Environment    string          `json:"environment" yaml:"environment"`
+	Redis          RedisConfig     `json:"redis" yaml:"redis"`
+	JWT            JWTConfig       `json:"jwt" yaml:"jwt"`
+	RabbitMQ       RabbitMQConfig  `json:"rabbitmq" yaml:"rabbitmq"`
+	GRPC          GRPCConfig      `json:"grpc" yaml:"grpc"`
+	RateLimiting   RateLimitConfig `json:"rate_limiting" yaml:"rate_limiting"`
+	Providers      ProvidersConfig `json:"providers" yaml:"providers"`
 }
 
 // ServerConfig представляет конфигурацию сервера. Содержит настройки хоста и порта для HTTP-сервера.
@@ -37,6 +43,86 @@ type DatabaseConfig struct {
 type LoggerConfig struct {
 	Level  string `json:"level" yaml:"level"`
 	Format string `json:"format" yaml:"format"`
+}
+
+// RabbitMQConfig представляет конфигурацию RabbitMQ
+type RabbitMQConfig struct {
+	URL        string `json:"url" yaml:"url"`
+	Exchange   string `json:"exchange" yaml:"exchange"`
+	RoutingKey string `json:"routing_key" yaml:"routing_key"`
+	Queue      string `json:"queue" yaml:"queue"`
+}
+
+// RedisConfig представляет конфигурацию Redis
+type RedisConfig struct {
+	Addr           string        `json:"addr" yaml:"addr"`
+	Password       string        `json:"password" yaml:"password"`
+	DB             int           `json:"db" yaml:"db"`
+	PoolSize       int           `json:"pool_size" yaml:"pool_size"`
+	MinIdleConn    int           `json:"min_idle_conn" yaml:"min_idle_conn"`
+	MaxRetries     int           `json:"max_retries" yaml:"max_retries"`
+	RetryInterval  string        `json:"retry_interval" yaml:"retry_interval"`
+	HealthCheck    string        `json:"health_check" yaml:"health_check"`
+}
+
+// IncidentManagerConfig представляет конфигурацию Incident Manager
+type IncidentManagerConfig struct {
+	Address string `json:"address" yaml:"address"`
+}
+
+// RateLimitConfig представляет конфигурацию Rate Limiting
+type RateLimitConfig struct {
+	RequestsPerMinute int `json:"requests_per_minute" yaml:"requests_per_minute"`
+}
+
+// JWTConfig представляет конфигурацию JWT
+type JWTConfig struct {
+	AccessSecret           string `json:"access_secret" yaml:"access_secret"`
+	RefreshSecret          string `json:"refresh_secret" yaml:"refresh_secret"`
+	AccessTokenDuration    string `json:"access_token_duration" yaml:"access_token_duration"`
+	RefreshTokenDuration   string `json:"refresh_token_duration" yaml:"refresh_token_duration"`
+}
+
+// GRPCConfig представляет конфигурацию gRPC
+type GRPCConfig struct {
+	Port int `json:"port" yaml:"port"`
+}
+
+// ProvidersConfig представляет конфигурацию провайдеров уведомлений
+type ProvidersConfig struct {
+	Telegram TelegramProviderConfig `json:"telegram" yaml:"telegram"`
+	Slack    SlackProviderConfig    `json:"slack" yaml:"slack"`
+	Email    EmailProviderConfig    `json:"email" yaml:"email"`
+}
+
+// TelegramProviderConfig представляет конфигурацию Telegram провайдера
+type TelegramProviderConfig struct {
+	BotToken    string `json:"bot_token" yaml:"bot_token"`
+	APIURL      string `json:"api_url" yaml:"api_url"`
+	Timeout     string `json:"timeout" yaml:"timeout"`
+	RetryAttempts int  `json:"retry_attempts" yaml:"retry_attempts"`
+}
+
+// SlackProviderConfig представляет конфигурацию Slack провайдера
+type SlackProviderConfig struct {
+	BotToken    string `json:"bot_token" yaml:"bot_token"`
+	WebhookURL  string `json:"webhook_url" yaml:"webhook_url"`
+	APIURL      string `json:"api_url" yaml:"api_url"`
+	Timeout     string `json:"timeout" yaml:"timeout"`
+	RetryAttempts int  `json:"retry_attempts" yaml:"retry_attempts"`
+}
+
+// EmailProviderConfig представляет конфигурацию Email провайдера
+type EmailProviderConfig struct {
+	SMTPHost     string `json:"smtp_host" yaml:"smtp_host"`
+	SMTPPort     int    `json:"smtp_port" yaml:"smtp_port"`
+	Username     string `json:"username" yaml:"username"`
+	Password     string `json:"password" yaml:"password"`
+	FromAddress  string `json:"from_address" yaml:"from_address"`
+	FromName     string `json:"from_name" yaml:"from_name"`
+	UseStartTLS  bool   `json:"use_starttls" yaml:"use_starttls"`
+	Timeout      string `json:"timeout" yaml:"timeout"`
+	RetryAttempts int    `json:"retry_attempts" yaml:"retry_attempts"`
 }
 
 // LoadConfig загружает конфигурацию в следующем порядке приоритета:
@@ -64,6 +150,60 @@ func LoadConfig(configFile string) (*Config, error) {
 			Format: "json",
 		},
 		Environment: "dev",
+		Redis: RedisConfig{
+			Addr:           "localhost:6379",
+			Password:       "",
+			DB:             0,
+			PoolSize:       10,
+			MinIdleConn:    2,
+			MaxRetries:     3,
+			RetryInterval:  "1s",
+			HealthCheck:    "30s",
+		},
+		JWT: JWTConfig{
+			AccessSecret:         "your-access-secret",
+			RefreshSecret:        "your-refresh-secret",
+			AccessTokenDuration:  "15m",
+			RefreshTokenDuration: "7d",
+		},
+		RabbitMQ: RabbitMQConfig{
+			URL:        "amqp://guest:guest@localhost:5672/",
+			Exchange:   "notifications",
+			RoutingKey: "notification.events",
+			Queue:      "notifications",
+		},
+		GRPC: GRPCConfig{
+			Port: 50051,
+		},
+		RateLimiting: RateLimitConfig{
+			RequestsPerMinute: 100,
+		},
+		Providers: ProvidersConfig{
+			Telegram: TelegramProviderConfig{
+				BotToken:     "",
+				APIURL:       "https://api.telegram.org",
+				Timeout:      "30s",
+				RetryAttempts: 3,
+			},
+			Slack: SlackProviderConfig{
+				BotToken:     "",
+				WebhookURL:   "",
+				APIURL:       "https://slack.com/api",
+				Timeout:      "30s",
+				RetryAttempts: 3,
+			},
+			Email: EmailProviderConfig{
+				SMTPHost:     "smtp.gmail.com",
+				SMTPPort:     587,
+				Username:     "",
+				Password:     "",
+				FromAddress:  "noreply@uptimeping.com",
+				FromName:     "UptimePing Platform",
+				UseStartTLS:  true,
+				Timeout:      "30s",
+				RetryAttempts: 3,
+			},
+		},
 	}
 
 	// Load from file if specified

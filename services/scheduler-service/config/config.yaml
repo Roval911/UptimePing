@@ -1,0 +1,44 @@
+server:
+  host: "${SERVER_HOST:0.0.0.0}"
+  port: ${SERVER_PORT:8080}
+
+database:
+  host: "${DB_HOST:localhost}"
+  port: ${DB_PORT:5432}
+  name: "${DB_NAME:uptimeping}"
+  user: "${DB_USER:uptimeping}"
+  password: "${DB_PASSWORD:uptimeping}"
+
+logger:
+  level: "${LOG_LEVEL:info}"
+  format: "${LOG_FORMAT:json}"
+
+redis:
+  addr: "${REDIS_ADDR:localhost:6379}"
+  password: "${REDIS_PASSWORD:}"
+  db: ${REDIS_DB:0}
+  pool_size: ${REDIS_POOL_SIZE:10}
+  min_idle_conn: ${REDIS_MIN_IDLE_CONN:2}
+  max_retries: ${REDIS_MAX_RETRIES:3}
+  retry_interval: "${REDIS_RETRY_INTERVAL:1s}"
+  health_check: "${REDIS_HEALTH_CHECK:30s}"
+
+scheduler:
+  max_concurrent_tasks: ${SCHEDULER_MAX_CONCURRENT_TASKS:10}
+  task_timeout: "${SCHEDULER_TASK_TIMEOUT:30s}"
+  cleanup_interval: "${SCHEDULER_CLEANUP_INTERVAL:1h}"
+  lock_timeout: "${SCHEDULER_LOCK_TIMEOUT:5m}"
+  
+rate_limit:
+  requests_per_minute: ${RATE_LIMIT_REQUESTS_PER_MINUTE:60}
+  burst_size: ${RATE_LIMIT_BURST_SIZE:10}
+
+retry:
+  max_attempts: ${RETRY_MAX_ATTEMPTS:3}
+  initial_delay: "${RETRY_INITIAL_DELAY:1s}"
+  max_delay: "${RETRY_MAX_DELAY:30s}"
+  multiplier: ${RETRY_MULTIPLIER:2.0}
+  jitter: ${RETRY_JITTER:true}
+  jitter_range: ${RETRY_JITTER_RANGE:0.1}
+
+environment: "${ENVIRONMENT:dev}"

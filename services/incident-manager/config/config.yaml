@@ -1,16 +1,22 @@
 server:
-  host: "0.0.0.0"
-  port: 50053
+  host: "${SERVER_HOST:0.0.0.0}"
+  port: ${SERVER_PORT:50053}
 
 database:
-  host: "localhost"
-  port: 5432
-  name: "uptimeping"
-  user: "uptimeping"
-  password: "uptimeping"
+  host: "${DB_HOST:localhost}"
+  port: ${DB_PORT:5432}
+  name: "${DB_NAME:uptimeping}"
+  user: "${DB_USER:uptimeping}"
+  password: "${DB_PASSWORD:uptimeping}"
 
 logger:
-  level: "info"
-  format: "json"
+  level: "${LOG_LEVEL:info}"
+  format: "${LOG_FORMAT:json}"
 
-environment: "dev"
+rabbitmq:
+  url: "${RABBITMQ_URL:amqp://guest:guest@localhost:5672/}"
+  exchange: "${RABBITMQ_EXCHANGE:incidents}"
+  routing_key: "${RABBITMQ_ROUTING_KEY:incidents.events}"
+  queue: "${RABBITMQ_QUEUE:incidents}"
+
+environment: "${ENVIRONMENT:dev}"

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -98,8 +99,8 @@ func main() {
 	
 	// Инициализируем RabbitMQ
 	rabbitConfig := pkg_rabbitmq.NewConfig()
-	rabbitConfig.URL = "amqp://localhost:5672" // TODO: взять из конфига
-	rabbitConfig.Queue = "uptime_checks"
+	rabbitConfig.URL = cfg.RabbitMQ.URL
+	rabbitConfig.Queue = cfg.RabbitMQ.Queue
 	
 	rabbitConn, err := pkg_rabbitmq.Connect(ctx, rabbitConfig)
 	if err != nil {
@@ -110,7 +111,12 @@ func main() {
 	
 	// Инициализируем Redis
 	redisConfig := pkg_redis.NewConfig()
-	redisConfig.Addr = "localhost:6379" // TODO: взять из конфига
+	redisConfig.Addr = cfg.Redis.Addr
+	redisConfig.Password = cfg.Redis.Password
+	redisConfig.DB = cfg.Redis.DB
+	redisConfig.PoolSize = cfg.Redis.PoolSize
+	redisConfig.MinIdleConn = cfg.Redis.MinIdleConn
+	redisConfig.MaxRetries = cfg.Redis.MaxRetries
 	
 	redisClient, err := pkg_redis.Connect(ctx, redisConfig)
 	if err != nil {
@@ -171,7 +177,7 @@ func main() {
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			// Rate limiting для API запросов
 			clientIP := getClientIP(r)
-			allowed, err := rateLimiter.CheckRateLimit(r.Context(), clientIP, 100, time.Minute) // 100 запросов в минуту
+			allowed, err := rateLimiter.CheckRateLimit(r.Context(), clientIP, cfg.RateLimiting.RequestsPerMinute, time.Minute)
 			if err != nil {
 				http.Error(w, "Rate limit check failed", http.StatusInternalServerError)
 				return
@@ -196,11 +202,11 @@ func main() {
 		mux.Handle("/metrics", metricsInstance.GetHandler())
 		
 		server := &http.Server{
-			Addr:    ":8081", // TODO: взять из конфига
+			Addr:    fmt.Sprintf(":%d", cfg.Server.Port), // Используем порт из конфига
 			Handler: mux,
 		}
 		
-		appLogger.Info("HTTP server started", logger.String("port", "8081"))
+		appLogger.Info("HTTP server started", logger.Int("port", cfg.Server.Port))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			appLogger.Error("HTTP server failed", logger.Error(err))
 		}

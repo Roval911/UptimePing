@@ -62,9 +62,9 @@ func main() {
 
 	// Инициализация RabbitMQ
 	rabbitmqConfig := pkg_rabbitmq.NewConfig()
-	rabbitmqConfig.URL = "amqp://guest:guest@localhost:5672/"
-	rabbitmqConfig.Exchange = "notifications"
-	rabbitmqConfig.RoutingKey = "notification.events"
+	rabbitmqConfig.URL = cfg.RabbitMQ.URL
+	rabbitmqConfig.Exchange = cfg.RabbitMQ.Exchange
+	rabbitmqConfig.RoutingKey = cfg.RabbitMQ.RoutingKey
 
 	rabbitmqConn, err := pkg_rabbitmq.Connect(context.Background(), rabbitmqConfig)
 	if err != nil {

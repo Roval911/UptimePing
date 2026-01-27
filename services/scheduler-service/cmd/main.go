@@ -23,19 +23,20 @@ import (
 	"UptimePingPlatform/services/scheduler-service/internal/repository/postgres"
 	"UptimePingPlatform/services/scheduler-service/internal/repository/redis"
 	"UptimePingPlatform/services/scheduler-service/internal/usecase"
+	"gopkg.in/yaml.v2"
 )
 
 func main() {
 	// Инициализация конфигурации
-	cfg, err := config.LoadConfig("config/config.yaml")
+	cfg, err := loadConfig()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
 	// Инициализация логгера
 	appLogger, err := logger.NewLogger(
-		cfg.Environment,
 		cfg.Logger.Level,
+		cfg.Logger.Format,
 		"scheduler-service",
 		false, // временно отключил Loki
 	)
@@ -49,15 +50,10 @@ func main() {
 	}()
 
 	// Инициализация retry конфигурации
-	retryConfig := connection.DefaultRetryConfig()
+	retryConfig := cfg.Retry
 	
 	// Инициализация базы данных с retry логикой
-	dbConfig := database.NewConfig()
-	dbConfig.Host = cfg.Database.Host
-	dbConfig.Port = cfg.Database.Port
-	dbConfig.User = cfg.Database.User
-	dbConfig.Password = cfg.Database.Password
-	dbConfig.Database = cfg.Database.Name
+	dbConfig := loadDatabaseConfig(cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -79,8 +75,7 @@ func main() {
 	defer postgresDB.Close()
 
 	// Инициализация Redis с retry логикой
-	redisConfig := pkg_redis.NewConfig()
-	redisConfig.Addr = "localhost:6379" // В реальном приложении брать из конфига
+	redisConfig := loadRedisConfig(cfg)
 
 	redisCtx, redisCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer redisCancel()
@@ -247,4 +242,152 @@ func setupHandler(checkUseCase *usecase.CheckUseCase, schedulerUseCase *usecase.
 
 	// Оборачиваем в errors middleware для обработки ошибок
 	return errors.Middleware(mux)
+}
+
+// AppConfig расширенная конфигурация для scheduler-service
+type AppConfig struct {
+	config.Config
+	Redis     RedisConfig     `json:"redis" yaml:"redis"`
+	Scheduler SchedulerConfig `json:"scheduler" yaml:"scheduler"`
+	RateLimit RateLimitConfig `json:"rate_limit" yaml:"rate_limit"`
+	Retry     connection.RetryConfig `json:"retry" yaml:"retry"`
+	Production ProductionConfig `json:"production" yaml:"production"`
+}
+
+// RedisConfig конфигурация Redis
+type RedisConfig struct {
+	Addr           string        `json:"addr" yaml:"addr"`
+	Password       string        `json:"password" yaml:"password"`
+	DB             int           `json:"db" yaml:"db"`
+	PoolSize       int           `json:"pool_size" yaml:"pool_size"`
+	MinIdleConn    int           `json:"min_idle_conn" yaml:"min_idle_conn"`
+	MaxRetries     int           `json:"max_retries" yaml:"max_retries"`
+	RetryInterval  time.Duration `json:"retry_interval" yaml:"retry_interval"`
+	HealthCheck    time.Duration `json:"health_check" yaml:"health_check"`
+}
+
+// SchedulerConfig конфигурация планировщика
+type SchedulerConfig struct {
+	MaxConcurrentTasks int           `json:"max_concurrent_tasks" yaml:"max_concurrent_tasks"`
+	TaskTimeout        time.Duration `json:"task_timeout" yaml:"task_timeout"`
+	CleanupInterval    time.Duration `json:"cleanup_interval" yaml:"cleanup_interval"`
+	LockTimeout        time.Duration `json:"lock_timeout" yaml:"lock_timeout"`
+}
+
+// RateLimitConfig конфигурация rate limiting
+type RateLimitConfig struct {
+	RequestsPerMinute int `json:"requests_per_minute" yaml:"requests_per_minute"`
+	BurstSize         int `json:"burst_size" yaml:"burst_size"`
+}
+
+// ProductionConfig конфигурация для production
+type ProductionConfig struct {
+	Database DatabasePoolConfig `json:"database" yaml:"database"`
+}
+
+// DatabasePoolConfig конфигурация пула базы данных
+type DatabasePoolConfig struct {
+	MaxConns         int           `json:"max_conns" yaml:"max_conns"`
+	MinConns         int           `json:"min_conns" yaml:"min_conns"`
+	MaxConnLifetime  time.Duration `json:"max_conn_lifetime" yaml:"max_conn_lifetime"`
+	MaxConnIdleTime  time.Duration `json:"max_conn_idle_time" yaml:"max_conn_idle_time"`
+	HealthCheckPeriod time.Duration `json:"health_check_period" yaml:"health_check_period"`
+}
+
+// loadConfig загружает конфигурацию из YAML файла с подстановкой переменных окружения
+func loadConfig() (*AppConfig, error) {
+	// Загрузка базовой конфигурации
+	cfg, err := config.LoadConfig("")
+	if err != nil {
+		return nil, fmt.Errorf("failed to load base config: %w", err)
+	}
+
+	// Расширенная конфигурация
+	appConfig := &AppConfig{
+		Config: *cfg,
+	}
+
+	// Загрузка из файла config.yaml с подстановкой переменных окружения
+	if data, err := os.ReadFile("config/config.yaml"); err == nil {
+		// Простая подстановка переменных окружения вида ${VAR:default}
+		configContent := string(data)
+		configContent = os.ExpandEnv(configContent)
+		
+		if err := yaml.Unmarshal([]byte(configContent), appConfig); err != nil {
+			return nil, fmt.Errorf("failed to parse config file: %w", err)
+		}
+	} else {
+		// Использование значений по умолчанию, если файл не найден
+		appConfig := &AppConfig{
+			Redis: RedisConfig{
+				Addr:           os.Getenv("REDIS_ADDR"),
+				DB:             0,
+				PoolSize:       10,
+				MinIdleConn:    2,
+				MaxRetries:     3,
+				RetryInterval:  1 * time.Second,
+				HealthCheck:    30 * time.Second,
+			},
+		}
+		
+		if appConfig.Redis.Addr == "" {
+			appConfig.Redis.Addr = "localhost:6379"
+		}
+		appConfig.Scheduler = SchedulerConfig{
+			MaxConcurrentTasks: 10,
+			TaskTimeout:        30 * time.Second,
+			CleanupInterval:    1 * time.Hour,
+			LockTimeout:        5 * time.Minute,
+		}
+		appConfig.RateLimit = RateLimitConfig{
+			RequestsPerMinute: 60,
+			BurstSize:         10,
+		}
+		appConfig.Retry = connection.DefaultRetryConfig()
+	}
+
+	return appConfig, nil
+}
+
+// loadRedisConfig создает конфигурацию для pkg/redis
+func loadRedisConfig(cfg *AppConfig) *pkg_redis.Config {
+	redisConfig := pkg_redis.NewConfig()
+	redisConfig.Addr = cfg.Redis.Addr
+	redisConfig.Password = cfg.Redis.Password
+	redisConfig.DB = cfg.Redis.DB
+	redisConfig.PoolSize = cfg.Redis.PoolSize
+	redisConfig.MinIdleConn = cfg.Redis.MinIdleConn
+	redisConfig.MaxRetries = cfg.Redis.MaxRetries
+	redisConfig.RetryInterval = cfg.Redis.RetryInterval
+	redisConfig.HealthCheck = cfg.Redis.HealthCheck
+	return redisConfig
+}
+
+// loadDatabaseConfig создает конфигурацию для pkg/database
+func loadDatabaseConfig(cfg *AppConfig) *database.Config {
+	dbConfig := database.NewConfig()
+	dbConfig.Host = cfg.Database.Host
+	dbConfig.Port = cfg.Database.Port
+	dbConfig.User = cfg.Database.User
+	dbConfig.Password = cfg.Database.Password
+	dbConfig.Database = cfg.Database.Name
+	
+	// Production настройки, если доступны
+	if cfg.Production.Database.MaxConns > 0 {
+		dbConfig.MaxConns = cfg.Production.Database.MaxConns
+	}
+	if cfg.Production.Database.MinConns > 0 {
+		dbConfig.MinConns = cfg.Production.Database.MinConns
+	}
+	if cfg.Production.Database.MaxConnLifetime > 0 {
+		dbConfig.MaxConnLife = cfg.Production.Database.MaxConnLifetime
+	}
+	if cfg.Production.Database.MaxConnIdleTime > 0 {
+		dbConfig.MaxConnIdle = cfg.Production.Database.MaxConnIdleTime
+	}
+	if cfg.Production.Database.HealthCheckPeriod > 0 {
+		dbConfig.HealthCheck = cfg.Production.Database.HealthCheckPeriod
+	}
+	
+	return dbConfig
 }

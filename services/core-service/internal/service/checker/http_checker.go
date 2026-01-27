@@ -47,7 +47,7 @@ type HTTPResponseDetails struct {
 // NewHTTPChecker создает новый HTTP checker
 func NewHTTPChecker(timeout int64, log logger.Logger) *HTTPChecker {
 	return &HTTPChecker{
-		BaseChecker: NewBaseChecker(timeout),
+		BaseChecker: NewBaseChecker(log),
 		client: &http.Client{
 			Timeout: time.Duration(timeout) * time.Millisecond,
 			Transport: &http.Transport{
@@ -434,7 +434,6 @@ func (h *HTTPChecker) createErrorResult(task *domain.Task, statusCode int, durat
 // SetTimeout устанавливает таймаут HTTP клиента
 func (h *HTTPChecker) SetTimeout(timeout time.Duration) {
 	h.client.Timeout = timeout
-	h.BaseChecker.SetTimeout(int64(timeout.Milliseconds()))
 }
 
 // GetClient возвращает HTTP клиент для тестирования
