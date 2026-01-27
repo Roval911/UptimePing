@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // CheckType представляет тип проверки
@@ -312,10 +314,14 @@ func NewTask(checkID, tenantID string, priority Priority) *Task {
 	}
 }
 
-// todo generateID генерирует уникальный ID
-// В реальной реализации здесь будет использоваться UUID генератор
+// generateID генерирует уникальный UUID
 func generateID() string {
-	return fmt.Sprintf("task_%d", time.Now().UnixNano())
+	id, err := uuid.NewRandom()
+	if err != nil {
+		// Fallback к timestamp-based ID если UUID генерация не удалась
+		return fmt.Sprintf("task_%d", time.Now().UnixNano())
+	}
+	return id.String()
 }
 
 // validateCronExpression валидирует cron выражение

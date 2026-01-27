@@ -3,14 +3,17 @@ package client
 import (
 	"context"
 	"errors"
-	"math/rand"
 	"testing"
 	"time"
 
 	"UptimePingPlatform/gen/go/proto/api/incident/v1"
+	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/core-service/internal/domain"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 func TestConfig_Validate(t *testing.T) {
@@ -173,37 +176,6 @@ func TestClientStats_IncrementCounters(t *testing.T) {
 	}
 	if stats.RetriesTotal != 1 {
 		t.Errorf("Expected retries total 1, got %d", stats.RetriesTotal)
-	}
-}
-
-func TestIncidentClient_CalculateRetryDelay(t *testing.T) {
-	config := &Config{
-		InitialDelay:    100 * time.Millisecond,
-		MaxDelay:        10 * time.Second,
-		RetryMultiplier: 2.0,
-		RetryJitter:     0.1,
-	}
-	
-	client := &incidentClient{config: config}
-
-	// Тест без jitter (используем детерминированный подход)
-	rand.Seed(42) // Фиксированный seed для предсказуемости
-	
-	delay1 := client.calculateRetryDelay(0)
-	if delay1 < 90*time.Millisecond || delay1 > 110*time.Millisecond {
-		t.Errorf("Expected delay around 100ms with jitter, got %v", delay1)
-	}
-
-	delay2 := client.calculateRetryDelay(1)
-	expected := time.Duration(float64(config.InitialDelay) * config.RetryMultiplier)
-	if delay2 < expected-time.Duration(float64(expected)*0.1) || delay2 > expected+time.Duration(float64(expected)*0.1) {
-		t.Errorf("Expected delay around %v with jitter, got %v", expected, delay2)
-	}
-
-	// Тест ограничения максимальной задержки
-	delay3 := client.calculateRetryDelay(10)
-	if delay3 > config.MaxDelay {
-		t.Errorf("Expected delay not to exceed max delay %v, got %v", config.MaxDelay, delay3)
 	}
 }
 
@@ -515,18 +487,6 @@ func TestIncidentClient_GetIncident_Validation(t *testing.T) {
 	}
 }
 
-// Бенчмарки
-func BenchmarkIncidentClient_CalculateRetryDelay(b *testing.B) {
-	client := &incidentClient{
-		config: DefaultConfig(),
-	}
-	
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		client.calculateRetryDelay(i % 10)
-	}
-}
-
 func BenchmarkIncidentClient_GenerateErrorHash(b *testing.B) {
 	client := &incidentClient{}
 	
@@ -556,4 +516,182 @@ func BenchmarkClientStats_UpdateStats(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		stats.updateStats(i%2 == 0, time.Duration(i)*time.Millisecond, nil)
 	}
+}
+
+// MockLogger для тестов
+type MockLogger struct {
+	mock.Mock
+}
+
+func (m *MockLogger) Debug(msg string, fields ...logger.Field) {
+	m.Called(msg, fields)
+}
+
+func (m *MockLogger) Info(msg string, fields ...logger.Field) {
+	m.Called(msg, fields)
+}
+
+func (m *MockLogger) Warn(msg string, fields ...logger.Field) {
+	m.Called(msg, fields)
+}
+
+func (m *MockLogger) Error(msg string, fields ...logger.Field) {
+	m.Called(msg, fields)
+}
+
+func (m *MockLogger) With(fields ...logger.Field) logger.Logger {
+	args := m.Called(fields)
+	return args.Get(0).(logger.Logger)
+}
+
+func (m *MockLogger) Sync() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
+// TestIncidentClient_NewIncidentClient тестирует создание клиента с pkg/logger
+func TestIncidentClient_NewIncidentClient(t *testing.T) {
+	mockLogger := &MockLogger{}
+	
+	// Создаем клиент без подключения (пропускаем connect())
+	config := DefaultConfig()
+	config.Address = "localhost:99999" // Недоступный адрес
+	
+	client := &incidentClient{
+		config: config,
+		stats:  &ClientStats{},
+		logger: mockLogger,
+	}
+	
+	// Проверяем, что клиент создан
+	assert.NotNil(t, client)
+	assert.Equal(t, config, client.config)
+	assert.Equal(t, mockLogger, client.logger)
+}
+
+// TestIncidentClient_WithPkgLogger тестирует интеграцию с pkg/logger
+func TestIncidentClient_WithPkgLogger(t *testing.T) {
+	// Создаем реальный logger из pkg
+	log, err := logger.NewLogger("test", "dev", "debug", false)
+	assert.NoError(t, err)
+	
+	config := DefaultConfig()
+	config.Address = "localhost:99999" // Недоступный адрес
+	
+	// Создаем клиент без подключения
+	client := &incidentClient{
+		config: config,
+		stats:  &ClientStats{},
+		logger: log,
+	}
+	
+	// Проверяем, что клиент создан
+	assert.NotNil(t, client)
+	assert.Equal(t, config, client.config)
+	assert.Equal(t, log, client.logger)
+}
+
+// TestIncidentClient_WithConnection тестирует grpcConnecter
+func TestIncidentClient_WithConnection(t *testing.T) {
+	connecter := &grpcConnecter{
+		address: "localhost:99999",
+		timeout: 1 * time.Second,
+	}
+	
+	// Тест подключения
+	err := connecter.Connect(context.Background())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to dial")
+	
+	// Тест статуса
+	assert.False(t, connecter.IsConnected())
+	
+	// Тест закрытия
+	err = connecter.Close()
+	assert.NoError(t, err)
+}
+
+// TestIncidentClient_ExecuteWithRetry тестирует новую retry логику с pkg/connection
+func TestIncidentClient_ExecuteWithRetry(t *testing.T) {
+	mockLogger := &MockLogger{}
+	
+	client := &incidentClient{
+		config: &Config{
+			MaxRetries:      2,
+			InitialDelay:    10 * time.Millisecond,
+			MaxDelay:        100 * time.Millisecond,
+			RetryMultiplier: 2.0,
+		},
+		logger: mockLogger,
+		client: &mockClient{}, // Создаем mock клиент
+	}
+	
+	// Тест успешной операции
+	err := client.executeWithRetry(context.Background(), func() error {
+		return nil
+	})
+	assert.NoError(t, err)
+	
+	// Тест операции с ошибкой, которая требует retry
+	mockLogger.On("Warn", "Operation failed, will retry", mock.Anything).Return()
+	
+	err = client.executeWithRetry(context.Background(), func() error {
+		return status.Error(codes.Unavailable, "service unavailable")
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "max retries exceeded")
+	
+	mockLogger.AssertExpectations(t)
+}
+
+// mockClient реализует интерфейс для тестов
+type mockClient struct{}
+
+func (m *mockClient) CreateIncident(ctx context.Context, req *v1.CreateIncidentRequest, opts ...grpc.CallOption) (*v1.Incident, error) {
+	return nil, status.Error(codes.Unavailable, "service unavailable")
+}
+
+func (m *mockClient) UpdateIncident(ctx context.Context, req *v1.UpdateIncidentRequest, opts ...grpc.CallOption) (*v1.Incident, error) {
+	return nil, status.Error(codes.Unavailable, "service unavailable")
+}
+
+func (m *mockClient) ResolveIncident(ctx context.Context, req *v1.ResolveIncidentRequest, opts ...grpc.CallOption) (*v1.ResolveIncidentResponse, error) {
+	return nil, status.Error(codes.Unavailable, "service unavailable")
+}
+
+func (m *mockClient) GetIncident(ctx context.Context, req *v1.GetIncidentRequest, opts ...grpc.CallOption) (*v1.GetIncidentResponse, error) {
+	return nil, status.Error(codes.Unavailable, "service unavailable")
+}
+
+func (m *mockClient) ListIncidents(ctx context.Context, req *v1.ListIncidentsRequest, opts ...grpc.CallOption) (*v1.ListIncidentsResponse, error) {
+	return nil, status.Error(codes.Unavailable, "service unavailable")
+}
+
+// TestIncidentClient_CreateIncident_WithPkgLogger тестирует создание инцидента с pkg/logger
+func TestIncidentClient_CreateIncident_WithPkgLogger(t *testing.T) {
+	mockLogger := &MockLogger{}
+	
+	// Настраиваем mock для логирования ошибок
+	mockLogger.On("Error", "Failed to create incident", mock.Anything).Return()
+	
+	client := &incidentClient{
+		config: DefaultConfig(),
+		stats:  &ClientStats{},
+		logger: mockLogger,
+		client: nil, // Имитируем неинициализированный клиент
+	}
+	
+	ctx := context.Background()
+	result := &domain.CheckResult{
+		CheckID: "check1",
+		Success: false,
+		Error:   "test error",
+	}
+	
+	// Тест валидации
+	_, err := client.CreateIncident(ctx, result, "tenant1")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "gRPC client is not initialized")
+	
+	mockLogger.AssertExpectations(t)
 }

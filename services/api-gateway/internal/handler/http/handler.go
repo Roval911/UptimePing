@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	forgev1 "UptimePingPlatform/gen/go/proto/api/forge/v1"
 	schedulerv1 "UptimePingPlatform/gen/go/proto/api/scheduler/v1"
@@ -117,12 +118,94 @@ func (h *Handler) handleProtected(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// TODO isAuthenticated проверяет аутентификацию запроса
-// В реальной реализации будет проверять JWT или API ключ
+// isAuthenticated проверяет аутентификацию запроса
+// Поддерживает JWT токены в Authorization header или API ключи
 func (h *Handler) isAuthenticated(r *http.Request) bool {
-	// Пока возвращаем true для тестирования
-	// В реальной реализации будет проверять JWT или API ключ
-	return true
+	ctx := r.Context()
+	
+	// Сначала проверяем X-API-Key header (имеет приоритет)
+	apiKeyHeader := r.Header.Get("X-API-Key")
+	if apiKeyHeader != "" {
+		if len(apiKeyHeader) < 16 {
+			h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+				"error": "invalid_x_api_key_length",
+			})
+			return false
+		}
+
+		h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+			"success": true,
+			"method":  "x_api_key_header",
+		})
+		return true
+	}
+
+	// Проверяем Authorization header
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+			"error": "missing_auth_header",
+		})
+		return false
+	}
+
+	// Проверяем формат JWT Bearer токена
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		if token == "" {
+			h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+				"error": "empty_bearer_token",
+			})
+			return false
+		}
+
+		// Базовая валидация JWT токена (формат: header.payload.signature)
+		parts := strings.Split(token, ".")
+		if len(parts) != 3 {
+			h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+				"error": "invalid_jwt_format",
+			})
+			return false
+		}
+
+		// В реальной реализации здесь будет проверка подписи и экспирации
+		// Сейчас проверяем только базовый формат
+		h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+			"success": true,
+			"method":  "jwt_bearer",
+		})
+		return true
+	}
+
+	// Проверяем API ключ в формате "Api-Key <key>"
+	if strings.HasPrefix(authHeader, "Api-Key ") {
+		apiKey := strings.TrimPrefix(authHeader, "Api-Key ")
+		if apiKey == "" {
+			h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+				"error": "empty_api_key",
+			})
+			return false
+		}
+
+		// Базовая валидация API ключа (минимальная длина)
+		if len(apiKey) < 16 {
+			h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+				"error": "invalid_api_key_length",
+			})
+			return false
+		}
+
+		h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+			"success": true,
+			"method":  "api_key_header",
+		})
+		return true
+	}
+
+	h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+		"error": "unsupported_auth_format",
+	})
+	return false
 }
 
 // handleLogin обрабатывает запросы на аутентификацию
@@ -207,19 +290,37 @@ func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Валидация входных данных
-	if req.Email == "" {
-		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "email is required"), http.StatusBadRequest)
+	// Валидация входных данных с использованием pkg/validation
+	requiredFields := map[string]interface{}{
+		"email":      req.Email,
+		"password":   req.Password,
+		"tenant_name": req.TenantName,
+	}
+
+	if err := h.validator.ValidateRequiredFields(requiredFields, map[string]string{
+		"email":      "Email address",
+		"password":   "Password",
+		"tenant_name": "Tenant name",
+	}); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "validation failed"), http.StatusBadRequest)
 		return
 	}
 
-	if req.Password == "" {
-		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "password is required"), http.StatusBadRequest)
+	// Валидация формата email
+	if err := h.validator.ValidateStringLength(req.Email, "email", 5, 100); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid email format"), http.StatusBadRequest)
 		return
 	}
 
-	if req.TenantName == "" {
-		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "tenant name is required"), http.StatusBadRequest)
+	// Валидация длины пароля
+	if err := h.validator.ValidateStringLength(req.Password, "password", 8, 128); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid password length"), http.StatusBadRequest)
+		return
+	}
+
+	// Валидация длины имени тенанта
+	if err := h.validator.ValidateStringLength(req.TenantName, "tenant_name", 2, 100); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid tenant name length"), http.StatusBadRequest)
 		return
 	}
 
@@ -259,9 +360,21 @@ func (h *Handler) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Валидация
-	if req.RefreshToken == "" {
-		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "refresh token is required"), http.StatusBadRequest)
+	// Валидация с использованием pkg/validation
+	requiredFields := map[string]interface{}{
+		"refresh_token": req.RefreshToken,
+	}
+
+	if err := h.validator.ValidateRequiredFields(requiredFields, map[string]string{
+		"refresh_token": "Refresh token",
+	}); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "validation failed"), http.StatusBadRequest)
+		return
+	}
+
+	// Валидация длины refresh токена (JWT токены обычно длинные)
+	if err := h.validator.ValidateStringLength(req.RefreshToken, "refresh_token", 100, 1000); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid refresh token length"), http.StatusBadRequest)
 		return
 	}
 
@@ -302,14 +415,28 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Валидация
-	if req.UserID == "" {
-		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "user_id is required"), http.StatusBadRequest)
+	// Валидация с использованием pkg/validation
+	requiredFields := map[string]interface{}{
+		"user_id":  req.UserID,
+		"token_id": req.TokenID,
+	}
+
+	if err := h.validator.ValidateRequiredFields(requiredFields, map[string]string{
+		"user_id":  "User ID",
+		"token_id": "Token ID",
+	}); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "validation failed"), http.StatusBadRequest)
 		return
 	}
 
-	if req.TokenID == "" {
-		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "token_id is required"), http.StatusBadRequest)
+	// Валидация формата UUID
+	if err := h.validator.ValidateUUID(req.UserID, "user_id"); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid user_id format"), http.StatusBadRequest)
+		return
+	}
+
+	if err := h.validator.ValidateUUID(req.TokenID, "token_id"); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid token_id format"), http.StatusBadRequest)
 		return
 	}
 

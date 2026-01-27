@@ -127,3 +127,42 @@ func (m *MockSchedulerClient) Close() error {
 		logger.String("action", "mock_scheduler"))
 	return nil
 }
+
+// MockForgeServiceClient мок для ForgeServiceClient
+type MockForgeServiceClient struct {
+	log logger.Logger
+}
+
+func NewMockForgeServiceClient(log logger.Logger) *MockForgeServiceClient {
+	return &MockForgeServiceClient{log: log}
+}
+
+func (m *MockForgeServiceClient) GenerateConfig(ctx context.Context, protoContent string, options interface{}) (interface{}, error) {
+	m.log.Info("Mock generate config",
+		logger.String("action", "mock_forge"))
+	return nil, nil
+}
+
+func (m *MockForgeServiceClient) ParseProto(ctx context.Context, protoContent, fileName string) (interface{}, error) {
+	m.log.Info("Mock parse proto",
+		logger.String("action", "mock_forge"))
+	return nil, nil
+}
+
+func (m *MockForgeServiceClient) GenerateCode(ctx context.Context, protoContent string, options interface{}) (interface{}, error) {
+	m.log.Info("Mock generate code",
+		logger.String("action", "mock_forge"))
+	return nil, nil
+}
+
+func (m *MockForgeServiceClient) ValidateProto(ctx context.Context, protoContent string) (interface{}, error) {
+	m.log.Info("Mock validate proto",
+		logger.String("action", "mock_forge"))
+	return nil, nil
+}
+
+func (m *MockForgeServiceClient) Close() error {
+	m.log.Info("Mock forge client closed",
+		logger.String("action", "mock_forge"))
+	return nil
+}

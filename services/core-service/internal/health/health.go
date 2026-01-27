@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"UptimePingPlatform/pkg/connection"
+	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/rabbitmq"
 	"UptimePingPlatform/services/core-service/internal/client"
@@ -179,10 +181,12 @@ func (s *Service) initCheckers() {
 
 	// Incident Manager checker
 	incidentLogger, _ := logger.NewLogger("development", "info", "incident-manager-health", false)
+	incidentHandler := grpcBase.NewBaseHandler(incidentLogger)
 	s.checkers = append(s.checkers, &IncidentManagerChecker{
 		address: s.config.IncidentManagerAddress,
 		timeout: s.config.IncidentTimeout,
-		logger:  &incidentLogger,
+		logger:  incidentLogger,
+		handler: incidentHandler,
 	})
 }
 
@@ -468,11 +472,46 @@ func (c *DatabaseChecker) Check(ctx context.Context) *CheckResult {
 	return result
 }
 
+// grpcConnecter реализует connection.Connecter для gRPC
+type grpcConnecter struct {
+	address string
+	timeout time.Duration
+	conn    *grpc.ClientConn
+}
+
+func (g *grpcConnecter) Connect(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, g.timeout)
+	defer cancel()
+
+	conn, err := grpc.DialContext(ctx, g.address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to dial: %w", err)
+	}
+
+	g.conn = conn
+	return nil
+}
+
+func (g *grpcConnecter) Close() error {
+	if g.conn != nil {
+		return g.conn.Close()
+	}
+	return nil
+}
+
+func (g *grpcConnecter) IsConnected() bool {
+	return g.conn != nil
+}
+
 // IncidentManagerChecker проверяет здоровье Incident Manager
 type IncidentManagerChecker struct {
 	address string
 	timeout time.Duration
-	logger  *logger.Logger
+	logger  logger.Logger
+	handler *grpcBase.BaseHandler
 }
 
 func (c *IncidentManagerChecker) Name() string {
@@ -491,20 +530,32 @@ func (c *IncidentManagerChecker) Check(ctx context.Context) *CheckResult {
 	checkCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	// Создаем gRPC соединение
-	conn, err := grpc.DialContext(checkCtx, c.address, //todo устаревшие вызовы
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock())
+	// Создаем gRPC connecter
+	connecter := &grpcConnecter{
+		address: c.address,
+		timeout: c.timeout,
+	}
+
+	// Используем pkg/connection для retry логики
+	retryConfig := connection.RetryConfig{
+		MaxAttempts:  3,
+		InitialDelay: 100 * time.Millisecond,
+		MaxDelay:     2 * time.Second,
+		Multiplier:   2.0,
+		Jitter:       true,
+	}
+
+	err := connection.ConnectWithRetry(checkCtx, connecter, retryConfig)
 	if err != nil {
 		result.Status = StatusUnhealthy
 		result.Message = fmt.Sprintf("Failed to connect to Incident Manager: %v", err)
 		result.Duration = time.Since(start)
 		return result
 	}
-	defer conn.Close()
+	defer connecter.Close()
 
 	// Проверяем health service
-	healthClient := grpc_health_v1.NewHealthClient(conn)
+	healthClient := grpc_health_v1.NewHealthClient(connecter.conn)
 
 	req := &grpc_health_v1.HealthCheckRequest{
 		Service: "incident.service",
@@ -512,6 +563,8 @@ func (c *IncidentManagerChecker) Check(ctx context.Context) *CheckResult {
 
 	resp, err := healthClient.Check(checkCtx, req)
 	if err != nil {
+		c.handler.LogError(ctx, err, "Health check failed", c.Name())
+		
 		result.Status = StatusDegraded
 		result.Message = fmt.Sprintf("Incident Manager connected but health check failed: %v", err)
 		result.Duration = time.Since(start)

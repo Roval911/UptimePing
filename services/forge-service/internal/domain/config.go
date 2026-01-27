@@ -11,6 +11,7 @@ type InteractiveConfig struct {
 	Email       EmailConfig    `json:"email"`
 	Logger      LoggerConfig   `json:"logger"`
 	Environment string         `json:"environment"`
+	Services    map[string]*ServiceConfig `json:"services"`
 }
 
 // ServerConfig представляет конфигурацию сервера
@@ -59,45 +60,13 @@ type LoggerConfig struct {
 	Format string `json:"format"`
 }
 
-// NewDefaultInteractiveConfig создает конфигурацию по умолчанию
-func NewDefaultInteractiveConfig() *InteractiveConfig { //todo выносить или нет в файл конфигурации
-	return &InteractiveConfig{
-		Server: ServerConfig{
-			Host: "0.0.0.0",
-			Port: 8080,
-		},
-		Database: DatabaseConfig{
-			Host:     "localhost",
-			Port:     5432,
-			Name:     "uptimeping",
-			User:     "uptimeping",
-			Password: "uptimeping",
-		},
-		Redis: RedisConfig{
-			Addr:     "localhost:6379",
-			Password: "",
-			DB:       0,
-		},
-		Telegram: TelegramConfig{
-			BotToken: "",
-			ChatID:   "",
-			Enabled:  false,
-		},
-		Email: EmailConfig{
-			SMTPHost:    "smtp.gmail.com",
-			SMTPPort:    587,
-			Username:    "",
-			Password:    "",
-			FromAddress: "noreply@uptimeping.com",
-			FromName:    "UptimePing Platform",
-			Enabled:     false,
-		},
-		Logger: LoggerConfig{
-			Level:  "info",
-			Format: "json",
-		},
-		Environment: "dev",
-	}
+// ServiceConfig представляет конфигурацию gRPC сервиса
+type ServiceConfig struct {
+	Host            string   `json:"host"`
+	Port            int      `json:"port"`
+	DefaultTimeout  string   `json:"default_timeout"`
+	EnabledMethods  []string `json:"enabled_methods"`
+	DisabledMethods []string `json:"disabled_methods"`
 }
 
 // Validate валидирует конфигурацию

@@ -2,8 +2,11 @@ package grpc
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -329,21 +332,41 @@ type JWTClaims struct {
 	Email  string `json:"email"`
 	Name   string `json:"name"`
 	Role   string `json:"role"`
+	jwt.RegisteredClaims
 }
 
 // parseJWTToken парсит JWT токен и извлекает утверждения
-func (h *IncidentHandler) parseJWTToken(token string) (*JWTClaims, error) {
-	//todo Здесь должна быть реализация парсинга JWT токена
-	// Для простоты возвращаем базовую структуру
-	// В реальной реализации используйте библиотеку вроде github.com/golang-jwt/jwt
-
-	// Базовая реализация для демонстрации
-	claims := &JWTClaims{
-		UserID: "demo-user",
-		Email:  "demo@example.com",
-		Name:   "Demo User",
-		Role:   "user",
+func (h *IncidentHandler) parseJWTToken(tokenString string) (*JWTClaims, error) {
+	// Удаляем префикс "Bearer " если он есть
+	if strings.HasPrefix(tokenString, "Bearer ") {
+		tokenString = tokenString[7:]
 	}
 
-	return claims, nil
+	// Парсим токен без валидации подписи (для извлечения claims)
+	token, _, err := jwt.NewParser().ParseUnverified(tokenString, &JWTClaims{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse JWT token: %w", err)
+	}
+
+	// Проверяем claims
+	if claims, ok := token.Claims.(*JWTClaims); ok {
+		// Валидируем обязательные поля
+		if claims.UserID == "" {
+			return nil, fmt.Errorf("user_id claim is required")
+		}
+		
+		// Проверяем срок действия токена
+		if claims.ExpiresAt != nil && claims.ExpiresAt.Before(time.Now()) {
+			return nil, fmt.Errorf("token has expired")
+		}
+		
+		// Проверяем что токен не был выпущен в будущем
+		if claims.IssuedAt != nil && claims.IssuedAt.After(time.Now().Add(5*time.Minute)) {
+			return nil, fmt.Errorf("token issued in the future")
+		}
+		
+		return claims, nil
+	}
+
+	return nil, fmt.Errorf("invalid token claims")
 }

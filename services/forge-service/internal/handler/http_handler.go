@@ -14,14 +14,16 @@ import (
 type HTTPHandler struct {
 	logger            pkglogger.Logger
 	codeGenerator     *service.CodeGenerator
+	protoParser      *service.ProtoParser
 	interactiveConfig *domain.InteractiveConfig
 }
 
 // NewHTTPHandler создает новый HTTP обработчик
-func NewHTTPHandler(logger pkglogger.Logger, codeGenerator *service.CodeGenerator) *HTTPHandler {
+func NewHTTPHandler(logger pkglogger.Logger, codeGenerator *service.CodeGenerator, protoParser *service.ProtoParser) *HTTPHandler {
 	return &HTTPHandler{
 		logger:            logger,
 		codeGenerator:     codeGenerator,
+		protoParser:      protoParser,
 		interactiveConfig: domain.NewDefaultInteractiveConfig(),
 	}
 }
@@ -185,9 +187,16 @@ func (h *HTTPHandler) handleGenerateCheckers(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	//todo Здесь нужно получить список сервисов от парсера
-	// Для упрощения примера, используем пустой список
-	services := []domain.Service{}
+	// Получаем список сервисов от парсера
+	services, err := h.getServicesFromParser()
+	if err != nil {
+		h.logger.Error("Failed to get services from parser", pkglogger.Error(err))
+		http.Error(w, fmt.Sprintf("Failed to get services: %s", err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	h.logger.Info("Retrieved services from parser", 
+		pkglogger.Int("count", len(services)))
 
 	checkersPath := "generated/checkers"
 	if err := h.codeGenerator.GenerateGRPCCheckers(services, checkersPath); err != nil {
@@ -197,10 +206,11 @@ func (h *HTTPHandler) handleGenerateCheckers(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "success",
-		"message": "gRPC checkers generated successfully",
-		"path":    checkersPath,
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":   "success",
+		"message":  "gRPC checkers generated successfully",
+		"path":     checkersPath,
+		"services": len(services),
 	})
 }
 
@@ -248,4 +258,117 @@ func (h *HTTPHandler) CORSMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// getServicesFromParser получает список сервисов от парсера и конвертирует их в domain.Service
+func (h *HTTPHandler) getServicesFromParser() ([]domain.Service, error) {
+	if h.protoParser == nil {
+		return nil, fmt.Errorf("proto parser is not initialized")
+	}
+
+	// Получаем сервисы от парсера
+	serviceInfos := h.protoParser.GetServices()
+	services := make([]domain.Service, 0, len(serviceInfos))
+
+	for _, serviceInfo := range serviceInfos {
+		// Конвертируем ServiceInfo в domain.Service
+		service := domain.Service{
+			Name:    serviceInfo.Name,
+			Package: serviceInfo.Package,
+			Host:    h.getServiceHost(serviceInfo.Name),
+			Port:    h.getServicePort(serviceInfo.Name),
+			Methods: make([]domain.Method, 0, len(serviceInfo.Methods)),
+		}
+
+		// Конвертируем методы
+		for _, methodInfo := range serviceInfo.Methods {
+			method := domain.Method{
+				Name:    methodInfo.Name,
+				Timeout: h.getMethodTimeout(serviceInfo.Name, methodInfo.Name),
+				Enabled: h.isMethodEnabled(serviceInfo.Name, methodInfo.Name),
+			}
+			service.Methods = append(service.Methods, method)
+		}
+
+		services = append(services, service)
+	}
+
+	h.logger.Info("Converted services from parser", 
+		pkglogger.Int("total_services", len(services)))
+
+	return services, nil
+}
+
+// getServiceHost получает хост для сервиса из конфигурации
+func (h *HTTPHandler) getServiceHost(serviceName string) string {
+	// Ищем конфигурацию сервиса в interactiveConfig
+	if h.interactiveConfig != nil && h.interactiveConfig.Services != nil {
+		if serviceConfig, exists := h.interactiveConfig.Services[serviceName]; exists {
+			if serviceConfig.Host != "" {
+				return serviceConfig.Host
+			}
+		}
+	}
+	
+	// Значение по умолчанию
+	return "localhost"
+}
+
+// getServicePort получает порт для сервиса из конфигурации
+func (h *HTTPHandler) getServicePort(serviceName string) int {
+	// Ищем конфигурацию сервиса в interactiveConfig
+	if h.interactiveConfig != nil && h.interactiveConfig.Services != nil {
+		if serviceConfig, exists := h.interactiveConfig.Services[serviceName]; exists {
+			if serviceConfig.Port > 0 {
+				return serviceConfig.Port
+			}
+		}
+	}
+	
+	// Значение по умолчанию для gRPC
+	return 50051
+}
+
+// getMethodTimeout получает таймаут для метода из конфигурации
+func (h *HTTPHandler) getMethodTimeout(serviceName, methodName string) string {
+	// Ищем конфигурацию сервиса в interactiveConfig
+	if h.interactiveConfig != nil && h.interactiveConfig.Services != nil {
+		if serviceConfig, exists := h.interactiveConfig.Services[serviceName]; exists {
+			if serviceConfig.DefaultTimeout != "" {
+				return serviceConfig.DefaultTimeout
+			}
+		}
+	}
+	
+	// Значение по умолчанию
+	return "30s"
+}
+
+// isMethodEnabled проверяет включен ли метод из конфигурации
+func (h *HTTPHandler) isMethodEnabled(serviceName, methodName string) bool {
+	// Ищем конфигурацию сервиса в interactiveConfig
+	if h.interactiveConfig != nil && h.interactiveConfig.Services != nil {
+		if serviceConfig, exists := h.interactiveConfig.Services[serviceName]; exists {
+			// Если есть список отключенных методов, проверяем
+			if len(serviceConfig.DisabledMethods) > 0 {
+				for _, disabledMethod := range serviceConfig.DisabledMethods {
+					if disabledMethod == methodName {
+						return false
+					}
+				}
+			}
+			// Если есть список включенных методов, проверяем
+			if len(serviceConfig.EnabledMethods) > 0 {
+				for _, enabledMethod := range serviceConfig.EnabledMethods {
+					if enabledMethod == methodName {
+						return true
+					}
+				}
+				return false // Метод не в списке включенных
+			}
+		}
+	}
+	
+	// По умолчанию все методы включены
+	return true
 }

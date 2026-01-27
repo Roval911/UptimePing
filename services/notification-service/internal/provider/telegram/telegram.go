@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"UptimePingPlatform/pkg/logger"
@@ -241,17 +242,99 @@ func (p *TelegramProvider) parseChatID(recipient string) interface{} {
 
 // shouldRetry определяет, нужно ли повторять попытку
 func (p *TelegramProvider) shouldRetry(err error) bool {
-	//todo Здесь можно добавить логику для определения ошибок,
-	// которые требуют повторной попытки
-	// Например: network errors, timeouts, rate limiting
-
-	// Для простоты всегда возвращаем true для всех ошибок,
-	// кроме context cancellation
+	// Проверяем на context cancellation
 	if err == context.Canceled || err == context.DeadlineExceeded {
 		return false
 	}
 
-	return true
+	// Преобразуем ошибку в строку для анализа
+	errStr := err.Error()
+
+	// Ошибки сети, которые требуют повторной попытки
+	networkErrors := []string{
+		"connection refused",
+		"connection reset",
+		"timeout",
+		"network is unreachable",
+		"no such host",
+		"temporary failure",
+		"connection timed out",
+		"read timeout",
+		"write timeout",
+	}
+
+	for _, networkErr := range networkErrors {
+		if strings.Contains(strings.ToLower(errStr), networkErr) {
+			return true
+		}
+	}
+
+	// HTTP ошибки, которые требуют повторной попытки
+	httpRetryErrors := []string{
+		"HTTP 429", // Too Many Requests (rate limiting)
+		"HTTP 500", // Internal Server Error
+		"HTTP 502", // Bad Gateway
+		"HTTP 503", // Service Unavailable
+		"HTTP 504", // Gateway Timeout
+		"HTTP 507", // Insufficient Storage
+		"HTTP 509", // Bandwidth Limit Exceeded
+		"HTTP 520", // Unknown Error
+		"HTTP 521", // Web Server Is Down
+		"HTTP 522", // Connection Timed Out
+		"HTTP 523", // Origin Is Unreachable
+		"HTTP 524", // A Timeout Occurred
+	}
+
+	for _, httpErr := range httpRetryErrors {
+		if strings.Contains(errStr, httpErr) {
+			return true
+		}
+	}
+
+	// Telegram специфичные ошибки, которые требуют повторной попытки
+	telegramRetryErrors := []string{
+		"Too Many Requests",
+		"Internal Server Error",
+		"Bad Gateway",
+		"Service Unavailable",
+		"Gateway Timeout",
+		"Flood control exceeded",
+		"Chat not found",
+		"Too many requests",
+		"Retry after",
+	}
+
+	for _, telegramErr := range telegramRetryErrors {
+		if strings.Contains(errStr, telegramErr) {
+			return true
+		}
+	}
+
+	// Ошибки, которые НЕ требуют повторной попытки
+	noRetryErrors := []string{
+		"Bad Request",
+		"Unauthorized",
+		"Forbidden",
+		"Not Found",
+		"Conflict",
+		"Chat not found",
+		"User not found",
+		"Bot was blocked by the user",
+		"PEER_ID_INVALID",
+		"CHAT_ID_INVALID",
+		"ACCESS_DENIED",
+		"invalid chat id",
+		"bot token is invalid",
+	}
+
+	for _, noRetryErr := range noRetryErrors {
+		if strings.Contains(errStr, noRetryErr) {
+			return false
+		}
+	}
+
+	// По умолчанию для неизвестных ошибок не повторяем
+	return false
 }
 
 // GetType возвращает тип провайдера

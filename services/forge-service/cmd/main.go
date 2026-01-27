@@ -148,7 +148,7 @@ func main() {
 		pkglogger.Int("port", cfg.Server.Port))
 
 	// Создаем HTTP обработчики
-	httpHandler := handler.NewHTTPHandler(logger, codeGenerator)
+	httpHandler := handler.NewHTTPHandler(logger, codeGenerator, parser)
 
 	// Создаем mux для регистрации маршрутов
 	mux := http.NewServeMux()

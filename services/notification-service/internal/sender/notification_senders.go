@@ -1,7 +1,11 @@
 package sender
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
 	"time"
 
 	"UptimePingPlatform/pkg/logger"
@@ -155,13 +159,46 @@ func (s *SMSSender) Send(ctx context.Context, notification *domain.Notification)
 		logger.String("subject", notification.Subject),
 	)
 
-	// Имитация отправки SMS
-	time.Sleep(200 * time.Millisecond)
+	// Создание HTTP клиента
+	client := &http.Client{
+		Timeout: s.config.Timeout,
+	}
 
-	//todo Здесь должна быть реальная логика отправки SMS через SMS API
-	_ = s.config.APIKey
-	_ = s.config.APISecret
-	_ = s.config.FromNumber
+	// Формирование запроса к SMS API (используем Twilio как пример)
+	smsData := map[string]interface{}{
+		"From": s.config.FromNumber,
+		"To":   notification.Recipient,
+		"Body": fmt.Sprintf("%s: %s", notification.Subject, notification.Body),
+	}
+
+	jsonData, err := json.Marshal(smsData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal SMS data: %w", err)
+	}
+
+	// Создание запроса к SMS API
+	req, err := http.NewRequestWithContext(ctx, "POST", 
+		fmt.Sprintf("https://api.twilio.com/2010-04-01/Accounts/%s/Messages.json", s.config.APIKey),
+		bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create SMS request: %w", err)
+	}
+
+	// Установка заголовков
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Basic %s", s.getAuthString()))
+
+	// Отправка запроса
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send SMS request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Проверка ответа
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("SMS API returned status: %d", resp.StatusCode)
+	}
 
 	s.logger.Info("SMS notification sent successfully",
 		logger.String("notification_id", notification.ID),
@@ -169,6 +206,11 @@ func (s *SMSSender) Send(ctx context.Context, notification *domain.Notification)
 	)
 
 	return nil
+}
+
+// getAuthString создает базовую аутентификацию для SMS API
+func (s *SMSSender) getAuthString() string {
+	return fmt.Sprintf("%s:%s", s.config.APIKey, s.config.APISecret)
 }
 
 // GetType возвращает тип отправщика
@@ -210,15 +252,62 @@ func (s *WebhookSender) Send(ctx context.Context, notification *domain.Notificat
 		logger.String("subject", notification.Subject),
 	)
 
-	// Имитация отправки webhook
-	time.Sleep(150 * time.Millisecond)
+	// Создание HTTP клиента
+	client := &http.Client{
+		Timeout: s.config.Timeout,
+	}
 
-	//todo Здесь должна быть реальная логика отправки webhook
-	_ = s.config.URL
+	// Формирование payload для webhook
+	webhookPayload := map[string]interface{}{
+		"id":          notification.ID,
+		"event_id":    notification.EventID,
+		"type":        notification.Type,
+		"channel":     notification.Channel,
+		"subject":     notification.Subject,
+		"body":        notification.Body,
+		"tenant_id":   notification.TenantID,
+		"severity":    notification.Severity,
+		"status":      notification.Status,
+		"created_at":  notification.CreatedAt,
+		"data":        notification.Data,
+		"metadata":    notification.Metadata,
+	}
+
+	jsonData, err := json.Marshal(webhookPayload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal webhook payload: %w", err)
+	}
+
+	// Создание запроса к webhook
+	req, err := http.NewRequestWithContext(ctx, "POST", notification.Recipient, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create webhook request: %w", err)
+	}
+
+	// Установка заголовков
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "UptimePing-Webhook/1.0")
+	req.Header.Set("X-Notification-ID", notification.ID)
+	req.Header.Set("X-Event-ID", notification.EventID)
+	req.Header.Set("X-Tenant-ID", notification.TenantID)
+	req.Header.Set("X-Severity", notification.Severity)
+
+	// Отправка запроса
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send webhook request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Проверка ответа
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("webhook returned status: %d", resp.StatusCode)
+	}
 
 	s.logger.Info("Webhook notification sent successfully",
 		logger.String("notification_id", notification.ID),
 		logger.String("url", notification.Recipient),
+		logger.Int("status_code", resp.StatusCode),
 	)
 
 	return nil

@@ -50,7 +50,7 @@ func main() {
 	logger.Info("Metrics collector initialized")
 
 	// Добавляем сервисы из конфигурации или переменных окружения
-	if err := loadServicesFromConfig(metricsCollector, cfg); err != nil {
+	if err := loadServicesFromConfig(metricsCollector, cfg, logger); err != nil {
 		logger.Error("Failed to load services from config", pkglogger.Error(err))
 	}
 
@@ -128,32 +128,32 @@ func main() {
 }
 
 // loadServicesFromConfig загружает сервисы из конфигурации
-func loadServicesFromConfig(collector *collector.MetricsCollector, cfg *config.Config) error {
-	//todo Здесь можно добавить логику загрузки сервисов из конфигурации
-	// Например, из конфигурационного файла или переменных окружения
-
-	// Пример: добавляем сервисы из переменных окружения
+func loadServicesFromConfig(collector *collector.MetricsCollector, cfg *config.Config, logger pkglogger.Logger) error {
+	// Загружаем сервисы из конфигурации
 	services := []struct {
-		Name    string
-		Address string
-		EnvVar  string
+		name    string
+		config  config.ServiceConfig
 	}{
-		{"auth-service", "localhost:50051", "AUTH_SERVICE_ADDR"},
-		{"core-service", "localhost:50052", "CORE_SERVICE_ADDR"},
-		{"scheduler-service", "localhost:50053", "SCHEDULER_SERVICE_ADDR"},
-		{"api-gateway", "localhost:8080", "API_GATEWAY_ADDR"},
+		{"auth-service", cfg.Services.AuthService},
+		{"core-service", cfg.Services.CoreService},
+		{"scheduler-service", cfg.Services.SchedulerService},
+		{"api-gateway", cfg.Services.APIGateway},
 	}
 
 	for _, service := range services {
-		address := os.Getenv(service.EnvVar)
-		if address == "" {
-			address = service.Address
-		}
-
-		if address != "" {
-			if err := collector.AddService(service.Name, address); err != nil {
-				return fmt.Errorf("failed to add service %s: %w", service.Name, err)
+		// Добавляем сервис только если он включен в конфигурации
+		if service.config.Enabled && service.config.Address != "" {
+			if err := collector.AddService(service.name, service.config.Address); err != nil {
+				return fmt.Errorf("failed to add service %s: %w", service.name, err)
 			}
+			
+			logger.Info("Service added from config",
+				pkglogger.String("service", service.name),
+				pkglogger.String("address", service.config.Address))
+		} else {
+			logger.Info("Service disabled in config",
+				pkglogger.String("service", service.name),
+				pkglogger.Bool("enabled", service.config.Enabled))
 		}
 	}
 

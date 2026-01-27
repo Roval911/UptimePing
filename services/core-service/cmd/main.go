@@ -233,7 +233,7 @@ func mainCmd() {
 		RetryJitter:     0.1,
 	}
 
-	incidentClient, err := client.NewIncidentClient(incidentClientConfig)
+	incidentClient, err := client.NewIncidentClient(incidentClientConfig, appLogger)
 	if err != nil {
 		appLogger.Warn("Failed to create incident client, using nil", logger.Error(err))
 		incidentClient = nil

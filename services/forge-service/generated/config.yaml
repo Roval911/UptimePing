@@ -25,15 +25,15 @@ environment: "${ENVIRONMENT:dev}"
 
 notifications:
   telegram:
-    enabled: ${TELEGRAM_ENABLED:%!t(string=smtp.gmail.com)}
+    enabled: ${TELEGRAM_ENABLED:false}
     bot_token: "${TELEGRAM_BOT_TOKEN:}"
     chat_id: "${TELEGRAM_CHAT_ID:}"
   
   email:
-    enabled: ${EMAIL_ENABLED:%!t(int=587)}
-    smtp_host: "${EMAIL_SMTP_HOST:noreply@uptimeping.com}"
-    smtp_port: ${EMAIL_SMTP_PORT:%!d(string=UptimePing Platform)}
+    enabled: ${EMAIL_ENABLED:false}
+    smtp_host: "${EMAIL_SMTP_HOST:smtp.gmail.com}"
+    smtp_port: ${EMAIL_SMTP_PORT:587}
     username: "${EMAIL_USERNAME:}"
     password: "${EMAIL_PASSWORD:}"
-    from_address: "${EMAIL_FROM_ADDRESS:%!s(MISSING)}"
-    from_name: "${EMAIL_FROM_NAME:%!s(MISSING)}"
+    from_address: "${EMAIL_FROM_ADDRESS:noreply@uptimeping.com}"
+    from_name: "${EMAIL_FROM_NAME:UptimePing Platform}"

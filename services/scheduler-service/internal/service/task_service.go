@@ -325,19 +325,43 @@ func (s *TaskService) generateCronExpression(check *domain.Check) (string, error
 		return "", fmt.Errorf("invalid interval: %d", check.Interval)
 	}
 
-	//todo Для простоты используем формат: каждые N секунд
-	// В реальном проекте можно добавить более сложную логику
+	// Используем умную логику для генерации cron выражений
 	if check.Interval < 60 {
-		// Для интервалов меньше минуты
+		// Для интервалов меньше минуты - каждые N секунд
 		return fmt.Sprintf("*/%d * * * * *", check.Interval), nil
 	} else if check.Interval < 3600 {
-		// Для интервалов меньше часа
+		// Для интервалов меньше часа - каждые N минут в начале минуты
 		minutes := check.Interval / 60
-		return fmt.Sprintf("0 */%d * * * *", minutes), nil
-	} else {
-		// Для интервалов больше часа
+		if check.Interval%60 == 0 {
+			// Точные минуты
+			return fmt.Sprintf("0 */%d * * * *", minutes), nil
+		} else {
+			// Неравные интервалы - используем каждые N минут
+			return fmt.Sprintf("*/%d * * * *", minutes), nil
+		}
+	} else if check.Interval < 86400 {
+		// Для интервалов меньше дня - каждые N часов
 		hours := check.Interval / 3600
-		return fmt.Sprintf("0 0 */%d * * *", hours), nil
+		if check.Interval%3600 == 0 {
+			// Точные часы
+			return fmt.Sprintf("0 0 */%d * * *", hours), nil
+		} else {
+			// Неравные интервалы - используем каждые N часов
+			return fmt.Sprintf("0 0 */%d * * *", hours), nil
+		}
+	} else {
+		// Для интервалов больше дня - каждые N дней в полночь
+		days := check.Interval / 86400
+		if days > 31 {
+			// Если интервал больше месяца, используем 1-е число месяца
+			months := days / 30
+			if months > 12 {
+				// Если интервал больше года, используем 1 января
+				return "0 0 1 1 * *", nil
+			}
+			return fmt.Sprintf("0 0 1 */%d *", months), nil
+		}
+		return fmt.Sprintf("0 0 */%d * *", days), nil
 	}
 }
 

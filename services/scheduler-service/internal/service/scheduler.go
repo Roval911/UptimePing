@@ -16,6 +16,7 @@ type Scheduler struct {
 	cron        *cron.Cron
 	logger      logger.Logger
 	isRunning   bool
+	entryIDs    map[string]cron.EntryID // Хранение ID cron задач
 }
 
 // NewScheduler создает новый экземпляр Scheduler
@@ -25,6 +26,7 @@ func NewScheduler(taskService TaskServiceInterface, logger logger.Logger) *Sched
 		cron:        cron.New(cron.WithSeconds()), // Поддержка секунд
 		logger:      logger,
 		isRunning:   false,
+		entryIDs:    make(map[string]cron.EntryID),
 	}
 }
 
@@ -95,8 +97,8 @@ func (s *Scheduler) AddCheck(ctx context.Context, checkID string, nextRun time.T
 	// Создаем cron выражение для конкретного времени
 	cronExpr := s.formatTimeToCron(nextRun)
 
-	// Добавляем задачу в cron
-	_, err := s.cron.AddFunc(cronExpr, func() {
+	// Добавляем задачу в cron и сохраняем Entry ID
+	entryID, err := s.cron.AddFunc(cronExpr, func() {
 		s.taskService.ExecuteCronTask(ctx, checkID)
 	})
 
@@ -111,10 +113,14 @@ func (s *Scheduler) AddCheck(ctx context.Context, checkID string, nextRun time.T
 		return err
 	}
 
+	// Сохраняем Entry ID для возможности удаления
+	s.entryIDs[checkID] = entryID
+
 	s.logger.Debug("Added check to cron scheduler",
 		logger.String("check_id", checkID),
 		logger.String("cron_expr", cronExpr),
 		logger.String("next_run", nextRun.Format(time.RFC3339)),
+		logger.String("entry_id", fmt.Sprintf("%v", entryID)),
 		logger.CtxField(ctx),
 	)
 
@@ -123,10 +129,25 @@ func (s *Scheduler) AddCheck(ctx context.Context, checkID string, nextRun time.T
 
 // RemoveCheck удаляет проверку из планировщика
 func (s *Scheduler) RemoveCheck(ctx context.Context, checkID string) error {
-	// todo В текущей реализации cron не поддерживает удаление конкретных задач по ID
-	// Это потребует более сложной реализации с хранением entry ID
-	s.logger.Debug("RemoveCheck called - not implemented in current cron version",
+	// Проверяем, есть ли задача в планировщике
+	entryID, exists := s.entryIDs[checkID]
+	if !exists {
+		s.logger.Debug("Check not found in scheduler",
+			logger.String("check_id", checkID),
+			logger.CtxField(ctx),
+		)
+		return nil // Задача не найдена - считаем успешным удалением
+	}
+
+	// Удаляем задачу из cron
+	s.cron.Remove(entryID)
+	
+	// Удаляем ID из карты
+	delete(s.entryIDs, checkID)
+
+	s.logger.Debug("Removed check from cron scheduler",
 		logger.String("check_id", checkID),
+		logger.String("entry_id", fmt.Sprintf("%v", entryID)),
 		logger.CtxField(ctx),
 	)
 
@@ -168,7 +189,9 @@ func (s *Scheduler) GetTaskService() TaskServiceInterface {
 // GetStats возвращает статистику планировщика
 func (s *Scheduler) GetStats() map[string]interface{} {
 	return map[string]interface{}{
-		"is_running":   s.isRunning,
-		"cron_entries": s.cron.Entries(),
+		"is_running":     s.isRunning,
+		"cron_entries":   s.cron.Entries(),
+		"active_checks":  len(s.entryIDs),
+		"entry_ids":      s.entryIDs,
 	}
 }

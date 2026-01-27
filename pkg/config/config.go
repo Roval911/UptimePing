@@ -29,6 +29,8 @@ type Config struct {
 	Forge        ForgeConfig     `json:"forge" yaml:"forge"`
 	Metrics      MetricsConfig   `json:"metrics" yaml:"metrics"`
 	Health       HealthConfig    `json:"health" yaml:"health"`
+	Services     ServicesConfig  `json:"services" yaml:"services"`
+	Recipients   RecipientsConfig `json:"recipients" yaml:"recipients"`
 	Scheduler    SchedulerConfig `json:"scheduler" yaml:"scheduler"`
 	IncidentManager IncidentManagerConfig `json:"incident_manager" yaml:"incident_manager"`
 }
@@ -219,12 +221,62 @@ func LoadConfig(configFile string) (*Config, error) {
 			OutputDir: "generated",
 		},
 		Metrics: MetricsConfig{
-			Enabled: true,
-			Port:    9090,
+			ScrapeInterval: "15s",
+			Timeout:        "10s",
+			RetryAttempts:  3,
+			Enabled:        true,
+			Port:           9090,
 		},
 		Health: HealthConfig{
-			Enabled: true,
-			Port:    8081,
+			Enabled:       true,
+			Port:          8091,
+			CheckInterval: "30s",
+		},
+		Services: ServicesConfig{
+			AuthService: ServiceConfig{
+				Address: "localhost:50051",
+				Enabled: true,
+			},
+			CoreService: ServiceConfig{
+				Address: "localhost:50052",
+				Enabled: true,
+			},
+			SchedulerService: ServiceConfig{
+				Address: "localhost:50053",
+				Enabled: true,
+			},
+			APIGateway: ServiceConfig{
+				Address: "localhost:8080",
+				Enabled: true,
+			},
+		},
+		Recipients: RecipientsConfig{
+			DefaultEmails: []string{
+				"admin@uptimeping.com",
+				"ops@uptimeping.com",
+			},
+			DefaultSlack: []string{
+				"#alerts",
+				"#incidents",
+			},
+			DefaultSMS: []string{
+				"+1234567890",
+			},
+			DefaultWebhooks: []string{
+				"https://webhook.uptimeping.com/notifications",
+			},
+			TenantRecipients: map[string]TenantRecipients{},
+			SeverityRecipients: map[string]SeverityRecipients{
+				"critical": {
+					Emails: []string{"critical@uptimeping.com"},
+					Slack:  []string{"#critical-alerts"},
+					SMS:    []string{"+1234567890"},
+				},
+				"high": {
+					Emails: []string{"alerts@uptimeping.com"},
+					Slack:  []string{"#high-alerts"},
+				},
+			},
 		},
 		Scheduler: SchedulerConfig{
 			MaxConcurrentTasks: 10,
@@ -511,14 +563,63 @@ type ForgeConfig struct {
 
 // MetricsConfig представляет конфигурацию метрик
 type MetricsConfig struct {
-	Enabled bool `json:"enabled" yaml:"enabled"`
-	Port    int  `json:"port" yaml:"port"`
+	ScrapeInterval string `json:"scrape_interval" yaml:"scrape_interval"`
+	Timeout        string `json:"timeout" yaml:"timeout"`
+	RetryAttempts  int    `json:"retry_attempts" yaml:"retry_attempts"`
+	Enabled        bool   `json:"enabled" yaml:"enabled"`
+	Port           int    `json:"port" yaml:"port"`
 }
 
 // HealthConfig представляет конфигурацию health check
 type HealthConfig struct {
-	Enabled bool `json:"enabled" yaml:"enabled"`
-	Port    int  `json:"port" yaml:"port"`
+	Enabled       bool   `json:"enabled" yaml:"enabled"`
+	Port          int    `json:"port" yaml:"port"`
+	CheckInterval string `json:"check_interval" yaml:"check_interval"`
+}
+
+// ServicesConfig представляет конфигурацию сервисов для мониторинга
+type ServicesConfig struct {
+	AuthService      ServiceConfig `json:"auth_service" yaml:"auth_service"`
+	CoreService      ServiceConfig `json:"core_service" yaml:"core_service"`
+	SchedulerService ServiceConfig `json:"scheduler_service" yaml:"scheduler_service"`
+	APIGateway       ServiceConfig `json:"api_gateway" yaml:"api_gateway"`
+}
+
+// ServiceConfig представляет конфигурацию отдельного сервиса
+type ServiceConfig struct {
+	Address string `json:"address" yaml:"address"`
+	Enabled bool   `json:"enabled" yaml:"enabled"`
+}
+
+// RecipientsConfig представляет конфигурацию получателей уведомлений
+type RecipientsConfig struct {
+	// Получатели по умолчанию для каждого канала
+	DefaultEmails []string          `json:"default_emails" yaml:"default_emails"`
+	DefaultSlack  []string          `json:"default_slack" yaml:"default_slack"`
+	DefaultSMS    []string          `json:"default_sms" yaml:"default_sms"`
+	DefaultWebhooks []string        `json:"default_webhooks" yaml:"default_webhooks"`
+	
+	// Получатели по tenant
+	TenantRecipients map[string]TenantRecipients `json:"tenant_recipients" yaml:"tenant_recipients"`
+	
+	// Получатели по серьезности
+	SeverityRecipients map[string]SeverityRecipients `json:"severity_recipients" yaml:"severity_recipients"`
+}
+
+// TenantRecipients представляет получателей для конкретного tenant
+type TenantRecipients struct {
+	Emails   []string `json:"emails" yaml:"emails"`
+	Slack    []string `json:"slack" yaml:"slack"`
+	SMS      []string `json:"sms" yaml:"sms"`
+	Webhooks []string `json:"webhooks" yaml:"webhooks"`
+}
+
+// SeverityRecipients представляет получателей для конкретного уровня серьезности
+type SeverityRecipients struct {
+	Emails   []string `json:"emails" yaml:"emails"`
+	Slack    []string `json:"slack" yaml:"slack"`
+	SMS      []string `json:"sms" yaml:"sms"`
+	Webhooks []string `json:"webhooks" yaml:"webhooks"`
 }
 
 // SchedulerConfig конфигурация планировщика

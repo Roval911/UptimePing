@@ -78,7 +78,7 @@ func main() {
 
 	// Инициализация компонентов
 	eventFilter := filter.NewEventFilter(filter.DefaultFilterConfig(), appLogger)
-	notificationGrouper := grouper.NewNotificationGrouper(grouper.DefaultGrouperConfig(), appLogger)
+	notificationGrouper := grouper.NewNotificationGrouper(grouper.DefaultGrouperConfig(), cfg.Recipients, appLogger)
 
 	// Создание менеджера провайдеров уведомлений
 	providerManager := provider.NewProviderManager(provider.ProviderConfig{

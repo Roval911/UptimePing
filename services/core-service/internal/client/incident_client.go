@@ -5,20 +5,18 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"log"
-	"math/rand"
 	"sync"
 	"time"
 
 	"UptimePingPlatform/gen/go/proto/api/incident/v1"
+	"UptimePingPlatform/pkg/connection"
+	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/core-service/internal/domain"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
-
-//todo добавить логирование из pkg
 
 // IncidentClient интерфейс для работы с Incident Manager
 type IncidentClient interface {
@@ -227,12 +225,12 @@ type incidentClient struct {
 	conn   *grpc.ClientConn
 	client v1.IncidentServiceClient
 	stats  *ClientStats
-	logger *log.Logger
+	logger logger.Logger
 	mu     sync.RWMutex
 }
 
 // NewIncidentClient создает новый клиент для Incident Manager
-func NewIncidentClient(config *Config) (IncidentClient, error) {
+func NewIncidentClient(config *Config, log logger.Logger) (IncidentClient, error) {
 	if config == nil {
 		config = DefaultConfig()
 	}
@@ -244,7 +242,7 @@ func NewIncidentClient(config *Config) (IncidentClient, error) {
 	client := &incidentClient{
 		config: config,
 		stats:  &ClientStats{},
-		logger: log.New(log.Writer(), "[IncidentClient] ", log.LstdFlags),
+		logger: log,
 	}
 
 	if err := client.connect(); err != nil {
@@ -254,15 +252,18 @@ func NewIncidentClient(config *Config) (IncidentClient, error) {
 	return client, nil
 }
 
-// connect устанавливает соединение с gRPC сервером
-func (c *incidentClient) connect() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+// grpcConnecter реализует connection.Connecter для gRPC
+type grpcConnecter struct {
+	address string
+	timeout time.Duration
+	conn    *grpc.ClientConn
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), c.config.Timeout)
+func (g *grpcConnecter) Connect(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, g.timeout)
 	defer cancel()
 
-	conn, err := grpc.DialContext(ctx, c.config.Address, //todo исправить устаревшие вызовы
+	conn, err := grpc.DialContext(ctx, g.address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithBlock(),
 	)
@@ -270,47 +271,57 @@ func (c *incidentClient) connect() error {
 		return fmt.Errorf("failed to dial: %w", err)
 	}
 
-	c.conn = conn
-	c.client = v1.NewIncidentServiceClient(conn)
-
-	if c.config.EnableLogging {
-		c.logger.Printf("Connected to Incident Manager at %s", c.config.Address)
-	}
-
+	g.conn = conn
 	return nil
 }
 
-// calculateRetryDelay вычисляет задержку для retry с экспоненциальным backoff и jitter
-func (c *incidentClient) calculateRetryDelay(attempt int) time.Duration {
-	delay := time.Duration(float64(c.config.InitialDelay) *
-		pow(c.config.RetryMultiplier, float64(attempt)))
-
-	if delay > c.config.MaxDelay {
-		delay = c.config.MaxDelay
+func (g *grpcConnecter) Close() error {
+	if g.conn != nil {
+		return g.conn.Close()
 	}
-
-	// Добавляем jitter
-	jitter := time.Duration(float64(delay) * c.config.RetryJitter * (rand.Float64()*2 - 1))
-	delay += jitter
-
-	// Убеждаемся, что задержка не отрицательная и не превышает максимум
-	if delay < 0 {
-		delay = 0
-	}
-	if delay > c.config.MaxDelay {
-		delay = c.config.MaxDelay
-	}
-
-	return delay
+	return nil
 }
 
-// pow быстрая реализация возведения в степень
-func pow(base, exp float64) float64 {
-	result := 1.0
-	for i := 0; i < int(exp); i++ {
-		result *= base
+func (g *grpcConnecter) IsConnected() bool {
+	return g.conn != nil
+}
+
+// connect устанавливает соединение с gRPC сервером
+func (c *incidentClient) connect() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Создаем retry конфигурацию
+	retryConfig := connection.RetryConfig{
+		MaxAttempts:  c.config.MaxRetries + 1, // +1 для начальной попытки
+		InitialDelay: c.config.InitialDelay,
+		MaxDelay:     c.config.MaxDelay,
+		Multiplier:   c.config.RetryMultiplier,
+		Jitter:       true,
 	}
-	return result
+
+	// Создаем gRPC connecter
+	connecter := &grpcConnecter{
+		address: c.config.Address,
+		timeout: c.config.Timeout,
+	}
+
+	// Используем ConnectWithRetry из pkg/connection
+	err := connection.ConnectWithRetry(context.Background(), connecter, retryConfig)
+	if err != nil {
+		return fmt.Errorf("failed to connect after retries: %w", err)
+	}
+
+	c.conn = connecter.conn
+	c.client = v1.NewIncidentServiceClient(connecter.conn)
+
+	if c.logger != nil {
+		c.logger.Info("Connected to Incident Manager",
+			logger.String("address", c.config.Address),
+			logger.String("component", "incident_client"))
+	}
+
+	return nil
 }
 
 // generateErrorHash генерирует хеш ошибки для дедупликации
@@ -344,40 +355,39 @@ func (c *incidentClient) executeWithRetry(ctx context.Context, fn func() error) 
 		return fmt.Errorf("gRPC client is not initialized")
 	}
 
-	var lastErr error
-
-	for attempt := 0; attempt <= c.config.MaxRetries; attempt++ {
-		if attempt > 0 {
-			c.stats.incrementRetries()
-
-			delay := c.calculateRetryDelay(attempt - 1)
-			if c.config.EnableLogging {
-				c.logger.Printf("Retry attempt %d/%d after %v", attempt, c.config.MaxRetries, delay)
-			}
-
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(delay):
-			}
-		}
-
-		if err := fn(); err != nil {
-			lastErr = err
-
-			// Проверяем, нужно ли retry
-			if !c.shouldRetry(err) || attempt == c.config.MaxRetries {
-				break
-			}
-
-			continue
-		}
-
-		// Успешное выполнение
-		return nil
+	// Создаем retry конфигурацию
+	retryConfig := connection.RetryConfig{
+		MaxAttempts:  c.config.MaxRetries + 1, // +1 для начальной попытки
+		InitialDelay: c.config.InitialDelay,
+		MaxDelay:     c.config.MaxDelay,
+		Multiplier:   c.config.RetryMultiplier,
+		Jitter:       true,
 	}
 
-	return fmt.Errorf("max retries exceeded: %w", lastErr)
+	// Используем WithRetry из pkg/connection
+	err := connection.WithRetry(ctx, retryConfig, func(ctx context.Context) error {
+		if err := fn(); err != nil {
+			if !c.shouldRetry(err) {
+				return err
+			}
+
+			if c.logger != nil {
+				c.logger.Warn("Operation failed, will retry",
+					logger.Error(err),
+					logger.String("component", "incident_client"))
+			}
+			
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("max retries exceeded: %w", err)
+	}
+
+	return nil
 }
 
 // shouldRetry проверяет, нужно ли повторять операцию
@@ -435,13 +445,24 @@ func (c *incidentClient) CreateIncident(ctx context.Context, result *domain.Chec
 	c.stats.updateStats(err == nil, responseTime, err)
 
 	if err != nil {
+		if c.logger != nil {
+			c.logger.Error("Failed to create incident",
+				logger.Error(err),
+				logger.String("check_id", result.CheckID),
+				logger.String("tenant_id", tenantID),
+				logger.String("component", "incident_client"))
+		}
 		return nil, err
 	}
 
 	c.stats.incrementCreated()
 
-	if c.config.EnableLogging {
-		c.logger.Printf("Created incident %s for check %s", incident.Id, result.CheckID)
+	if c.logger != nil {
+		c.logger.Info("Created incident",
+			logger.String("incident_id", incident.Id),
+			logger.String("check_id", result.CheckID),
+			logger.String("tenant_id", tenantID),
+			logger.String("component", "incident_client"))
 	}
 
 	return incident, nil
@@ -476,13 +497,23 @@ func (c *incidentClient) UpdateIncident(ctx context.Context, incidentID string, 
 	c.stats.updateStats(err == nil, responseTime, err)
 
 	if err != nil {
+		if c.logger != nil {
+			c.logger.Error("Failed to update incident",
+				logger.Error(err),
+				logger.String("incident_id", incidentID),
+				logger.String("component", "incident_client"))
+		}
 		return nil, err
 	}
 
 	c.stats.incrementUpdated()
 
-	if c.config.EnableLogging {
-		c.logger.Printf("Updated incident %s", incidentID)
+	if c.logger != nil {
+		c.logger.Info("Updated incident",
+			logger.String("incident_id", incidentID),
+			logger.String("status", status.String()),
+			logger.String("severity", severity.String()),
+			logger.String("component", "incident_client"))
 	}
 
 	return incident, nil
@@ -513,13 +544,21 @@ func (c *incidentClient) ResolveIncident(ctx context.Context, incidentID string)
 	c.stats.updateStats(err == nil, responseTime, err)
 
 	if err != nil {
+		if c.logger != nil {
+			c.logger.Error("Failed to resolve incident",
+				logger.Error(err),
+				logger.String("incident_id", incidentID),
+				logger.String("component", "incident_client"))
+		}
 		return err
 	}
 
 	c.stats.incrementResolved()
 
-	if c.config.EnableLogging {
-		c.logger.Printf("Resolved incident %s", incidentID)
+	if c.logger != nil {
+		c.logger.Info("Resolved incident",
+			logger.String("incident_id", incidentID),
+			logger.String("component", "incident_client"))
 	}
 
 	return nil
@@ -603,8 +642,9 @@ func (c *incidentClient) Close() error {
 		c.conn = nil
 		c.client = nil
 
-		if c.config.EnableLogging {
-			c.logger.Printf("Disconnected from Incident Manager")
+		if c.logger != nil {
+			c.logger.Info("Disconnected from Incident Manager",
+				logger.String("component", "incident_client"))
 		}
 
 		return err

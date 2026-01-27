@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"UptimePingPlatform/pkg/config"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/notification-service/internal/domain"
 )
@@ -18,8 +19,9 @@ type NotificationGrouperInterface interface {
 
 // NotificationGrouper группирует уведомления
 type NotificationGrouper struct {
-	config GrouperConfig
-	logger logger.Logger
+	config     GrouperConfig
+	recipients config.RecipientsConfig
+	logger     logger.Logger
 }
 
 // GrouperConfig конфигурация группировщика
@@ -50,10 +52,11 @@ const (
 )
 
 // NewNotificationGrouper создает новый группировщик
-func NewNotificationGrouper(config GrouperConfig, logger logger.Logger) *NotificationGrouper {
+func NewNotificationGrouper(config GrouperConfig, recipients config.RecipientsConfig, logger logger.Logger) *NotificationGrouper {
 	return &NotificationGrouper{
-		config: config,
-		logger: logger,
+		config:     config,
+		recipients: recipients,
+		logger:     logger,
 	}
 }
 
@@ -186,31 +189,106 @@ func (g *NotificationGrouper) getChannelsForEvent(event *domain.Event) []string 
 
 // getRecipientsForChannel определяет получателей для канала
 func (g *NotificationGrouper) getRecipientsForChannel(ctx context.Context, event *domain.Event, channel string) []string {
-	//todo Здесь должна быть логика определения получателей из конфигурации или БД
-	// Для примера используем базовую логику
+	var recipients []string
+	
+	// 1. Получаем получателей по серьезности
+	if severityRecipients, exists := g.recipients.SeverityRecipients[event.Severity]; exists {
+		switch channel {
+		case domain.ChannelEmail:
+			recipients = append(recipients, severityRecipients.Emails...)
+		case domain.ChannelSlack:
+			recipients = append(recipients, severityRecipients.Slack...)
+		case domain.ChannelSMS:
+			recipients = append(recipients, severityRecipients.SMS...)
+		case domain.ChannelWebhook:
+			recipients = append(recipients, severityRecipients.Webhooks...)
+		}
+	}
+	
+	// 2. Получаем получателей для конкретного tenant
+	if tenantRecipients, exists := g.recipients.TenantRecipients[event.TenantID]; exists {
+		switch channel {
+		case domain.ChannelEmail:
+			recipients = append(recipients, tenantRecipients.Emails...)
+		case domain.ChannelSlack:
+			recipients = append(recipients, tenantRecipients.Slack...)
+		case domain.ChannelSMS:
+			recipients = append(recipients, tenantRecipients.SMS...)
+		case domain.ChannelWebhook:
+			recipients = append(recipients, tenantRecipients.Webhooks...)
+		}
+	}
+	
+	// 3. Если нет специфичных получателей, используем получателей по умолчанию
+	if len(recipients) == 0 {
+		switch channel {
+		case domain.ChannelEmail:
+			recipients = append(recipients, g.recipients.DefaultEmails...)
+		case domain.ChannelSlack:
+			recipients = append(recipients, g.recipients.DefaultSlack...)
+		case domain.ChannelSMS:
+			recipients = append(recipients, g.recipients.DefaultSMS...)
+		case domain.ChannelWebhook:
+			recipients = append(recipients, g.recipients.DefaultWebhooks...)
+		}
+	}
+	
+	// 4. Форматируем получателей для tenant-specific форматов
+	formattedRecipients := make([]string, 0, len(recipients))
+	for _, recipient := range recipients {
+		formattedRecipients = append(formattedRecipients, g.formatRecipient(recipient, event.TenantID, channel))
+	}
+	
+	// 5. Удаляем дубликаты и возвращаем результат
+	return g.removeDuplicates(formattedRecipients)
+}
 
+// formatRecipient форматирует получателя в зависимости от канала и tenant
+func (g *NotificationGrouper) formatRecipient(recipient, tenantID, channel string) string {
 	switch channel {
 	case domain.ChannelEmail:
-		return []string{
-			fmt.Sprintf("admin@%s.com", event.TenantID),
-			fmt.Sprintf("ops@%s.com", event.TenantID),
+		// Если это шаблон, заменяем на tenant-specific email
+		if strings.Contains(recipient, "@{tenant}") {
+			return strings.Replace(recipient, "@{tenant}", "@"+tenantID, -1)
 		}
+		return recipient
+		
 	case domain.ChannelSlack:
-		return []string{
-			fmt.Sprintf("#alerts-%s", event.TenantID),
-			fmt.Sprintf("#incidents-%s", event.TenantID),
+		// Если это шаблон канала, заменяем на tenant-specific
+		if strings.Contains(recipient, "#{tenant}") {
+			return strings.Replace(recipient, "#{tenant}", "#"+tenantID, -1)
 		}
+		return recipient
+		
 	case domain.ChannelSMS:
-		return []string{
-			"+1234567890", // Администратор
-		}
+		// Для SMS просто возвращаем как есть
+		return recipient
+		
 	case domain.ChannelWebhook:
-		return []string{
-			fmt.Sprintf("https://webhook.%s.com/notifications", event.TenantID),
+		// Если это шаблон URL, заменяем на tenant-specific
+		if strings.Contains(recipient, "{tenant}") {
+			return strings.Replace(recipient, "{tenant}", tenantID, -1)
 		}
+		return recipient
+		
 	default:
-		return []string{}
+		return recipient
 	}
+}
+
+// removeDuplicates удаляет дубликаты из списка получателей
+func (g *NotificationGrouper) removeDuplicates(recipients []string) []string {
+	seen := make(map[string]bool)
+	result := make([]string, 0, len(recipients))
+	
+	for _, recipient := range recipients {
+		if !seen[recipient] {
+			seen[recipient] = true
+			result = append(result, recipient)
+		}
+	}
+	
+	return result
 }
 
 // generateSubject генерирует тему уведомления
