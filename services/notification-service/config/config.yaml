@@ -1,0 +1,49 @@
+server:
+  host: "0.0.0.0"
+  port: 50056
+
+database:
+  host: "localhost"
+  port: 5432
+  name: "uptimeping"
+  user: "uptimeping"
+  password: "uptimeping"
+
+logger:
+  level: "info"
+  format: "json"
+
+# Конфигурация провайдеров уведомлений
+providers:
+  telegram:
+    bot_token: "${TELEGRAM_BOT_TOKEN}"
+    api_url: "https://api.telegram.org"
+    timeout: 30s
+    retry_attempts: 3
+  
+  slack:
+    bot_token: "${SLACK_BOT_TOKEN}"
+    webhook_url: "${SLACK_WEBHOOK_URL}"
+    api_url: "https://slack.com/api"
+    timeout: 30s
+    retry_attempts: 3
+  
+  email:
+    smtp_host: "${SMTP_HOST:smtp.gmail.com}"
+    smtp_port: ${SMTP_PORT:587}
+    username: "${SMTP_USERNAME}"
+    password: "${SMTP_PASSWORD}"
+    from_address: "${SMTP_FROM_ADDRESS:noreply@uptimeping.com}"
+    from_name: "UptimePing Platform"
+    use_starttls: true
+    timeout: 30s
+    retry_attempts: 3
+
+  retry:
+    max_attempts: 3
+    initial_delay: 1s
+    max_delay: 30s
+    multiplier: 2.0
+    jitter: true
+
+environment: "dev"
