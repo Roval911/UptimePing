@@ -12,6 +12,7 @@ import (
 
 	"UptimePingPlatform/pkg/config"
 	"UptimePingPlatform/pkg/connection"
+	"UptimePingPlatform/pkg/health"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
 	"UptimePingPlatform/pkg/ratelimit"
@@ -19,6 +20,7 @@ import (
 	"UptimePingPlatform/services/api-gateway/internal/client"
 	httphandler "UptimePingPlatform/services/api-gateway/internal/handler/http" // алиас для вашего пакета http
 	"UptimePingPlatform/services/api-gateway/internal/middleware"
+	"UptimePingPlatform/services/api-gateway/internal/service"
 )
 
 func main() {
@@ -102,11 +104,25 @@ func main() {
 	}
 	defer schedulerClient.Close()
 
+	// Создаем gRPC клиент для forge-service
+	forgeServiceAddr := os.Getenv("FORGE_SERVICE_ADDR")
+	if forgeServiceAddr == "" {
+		forgeServiceAddr = "localhost:50053"
+	}
+	forgeClient, err := client.NewGRPCForgeClient(forgeServiceAddr, 5*time.Second, appLogger)
+	if err != nil {
+		appLogger.Error("Failed to connect to forge service", logger.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer forgeClient.Close()
+
 	// Настройка HTTP сервера
-	//todo Временные моки для разработки
-	mockAuthService := &httphandler.MockAuthService{}
-	mockHealthHandler := &httphandler.MockHealthHandler{}
-	baseHandler := httphandler.NewHandler(mockAuthService, mockHealthHandler, schedulerClient, appLogger)
+	// Создаем реальные сервисы
+	authAdapter := service.NewAuthAdapter(authClient)
+	healthChecker := health.NewSimpleHealthChecker("1.0.0")
+	healthHandler := httphandler.NewHealthHandler(healthChecker)
+	
+	baseHandler := httphandler.NewHandler(authAdapter, healthHandler, schedulerClient, forgeClient, appLogger)
 
 	// Обертываем хендлер в middleware
 	var httpHandler http.Handler = baseHandler

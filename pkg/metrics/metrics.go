@@ -9,7 +9,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/resource"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -19,6 +21,10 @@ type Metrics struct {
 	RequestCount    *prometheus.CounterVec
 	RequestDuration *prometheus.HistogramVec
 	ErrorsCount     *prometheus.CounterVec
+
+	// Дополнительные метрики
+	ActiveConnections *prometheus.GaugeVec
+	QueueSize         *prometheus.GaugeVec
 
 	// OpenTelemetry Tracer
 	Tracer trace.Tracer `json:"-"`
@@ -58,6 +64,27 @@ func NewMetrics(serviceName string) *Metrics {
 		[]string{"method", "endpoint", "error_type"},
 	)
 
+	// Дополнительные метрики
+	activeConnections := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: serviceName,
+			Subsystem: "system",
+			Name:      "active_connections",
+			Help:      "Number of active connections",
+		},
+		[]string{"type"},
+	)
+
+	queueSize := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: serviceName,
+			Subsystem: "queue",
+			Name:      "size",
+			Help:      "Current queue size",
+		},
+		[]string{"name"},
+	)
+
 	// Регистрируем метрики в Prometheus
 	if err := prometheus.Register(requestCount); err != nil {
 		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
@@ -74,15 +101,27 @@ func NewMetrics(serviceName string) *Metrics {
 			panic(err)
 		}
 	}
+	if err := prometheus.Register(activeConnections); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			panic(err)
+		}
+	}
+	if err := prometheus.Register(queueSize); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			panic(err)
+		}
+	}
 
 	// Создаем OpenTelemetry Tracer
 	tracer := otel.Tracer(serviceName)
 
 	return &Metrics{
-		RequestCount:    requestCount,
-		RequestDuration: requestDuration,
-		ErrorsCount:     errorsCount,
-		Tracer:          tracer,
+		RequestCount:      requestCount,
+		RequestDuration:   requestDuration,
+		ErrorsCount:       errorsCount,
+		ActiveConnections: activeConnections,
+		QueueSize:         queueSize,
+		Tracer:            tracer,
 	}
 }
 
@@ -148,24 +187,50 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// InitializeOpenTelemetry инициализирует OpenTelemetry (опционально)
-// TODO В реальном приложении здесь будет настройка экспортеров (Jaeger, Zipkin и т.д.)
+// InitializeOpenTelemetry инициализирует OpenTelemetry с экспортером
 func InitializeOpenTelemetry(serviceName string) error {
-	// В реальном приложении здесь будет настройка провайдера трассировки
-	// Например:
-	//
-	// tp := tracesdk.NewTracerProvider(
-	// 	tracesdk.WithSampler(tracesdk.AlwaysSample()),
-	// 	tracesdk.WithBatcher(exporter),
-	// 	tracesdk.WithResource(resource.NewWithAttributes(
-	// 		semconv.SchemaURL,
-	// 		semconv.ServiceNameKey.String(serviceName),
-	// 	)),
-	// )
-	// otel.SetTracerProvider(tp)
+	// Создаем базовый провайдер трассировки
+	tp := tracesdk.NewTracerProvider(
+		tracesdk.WithSampler(tracesdk.AlwaysSample()),
+		tracesdk.WithResource(resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceNameKey.String(serviceName),
+			semconv.ServiceVersionKey.String("1.0.0"),
+		)),
+	)
 
-	// Для примера просто устанавливаем базовый трейсер
-	otel.SetTracerProvider(tracesdk.NewTracerProvider())
+	// Устанавливаем глобальный провайдер трассировки
+	otel.SetTracerProvider(tp)
 
 	return nil
+}
+
+// SetActiveConnections устанавливает количество активных подключений
+func (m *Metrics) SetActiveConnections(connectionType string, count float64) {
+	m.ActiveConnections.WithLabelValues(connectionType).Set(count)
+}
+
+// IncrementActiveConnections увеличивает счетчик активных подключений
+func (m *Metrics) IncrementActiveConnections(connectionType string) {
+	m.ActiveConnections.WithLabelValues(connectionType).Inc()
+}
+
+// DecrementActiveConnections уменьшает счетчик активных подключений
+func (m *Metrics) DecrementActiveConnections(connectionType string) {
+	m.ActiveConnections.WithLabelValues(connectionType).Dec()
+}
+
+// SetQueueSize устанавливает размер очереди
+func (m *Metrics) SetQueueSize(queueName string, size float64) {
+	m.QueueSize.WithLabelValues(queueName).Set(size)
+}
+
+// IncrementQueueSize увеличивает размер очереди
+func (m *Metrics) IncrementQueueSize(queueName string) {
+	m.QueueSize.WithLabelValues(queueName).Inc()
+}
+
+// DecrementQueueSize уменьшает размер очереди
+func (m *Metrics) DecrementQueueSize(queueName string) {
+	m.QueueSize.WithLabelValues(queueName).Dec()
 }

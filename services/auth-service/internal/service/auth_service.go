@@ -56,6 +56,7 @@ type AuthService interface {
 	CreateAPIKey(ctx context.Context, tenantID, name string) (*APIKeyPair, error)
 	ValidateAPIKey(ctx context.Context, key, secret string) (*Claims, error)
 	RevokeAPIKey(ctx context.Context, keyID string) error
+	GetUserByID(ctx context.Context, userID string) (*domain.User, error)
 }
 
 // Service реализация AuthService
@@ -501,4 +502,22 @@ func generateSlug(name string) string {
 	slug = strings.ReplaceAll(slug, " ", "-")
 	// Удаление или замена других символов может быть добавлена по необходимости
 	return slug
+}
+
+// GetUserByID получает пользователя по ID
+func (s *Service) GetUserByID(ctx context.Context, userID string) (*domain.User, error) {
+	if userID == "" {
+		return nil, errors.New(errors.ErrValidation, "user ID is required")
+	}
+
+	user, err := s.userRepository.FindByID(ctx, userID)
+	if err != nil {
+		return nil, errors.Wrap(err, errors.ErrInternal, "failed to get user by ID")
+	}
+
+	if user == nil {
+		return nil, ErrNotFound
+	}
+
+	return user, nil
 }

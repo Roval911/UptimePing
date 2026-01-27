@@ -3,6 +3,8 @@ package worker
 import (
 	"context"
 	"fmt"
+	"math"
+	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,6 +58,7 @@ type Worker struct {
 	logger    *logging.UptimeLogger
 	metrics   *metrics.UptimeMetrics
 	checkers  map[domain.TaskType]checker.Checker
+	pool      *Pool // Добавляем ссылку на пул для доступа к конфигурации
 }
 
 // Config конфигурация worker pool
@@ -183,15 +186,18 @@ type Pool struct {
 
 // PoolStats статистика пула
 type PoolStats struct {
-	TasksReceived    int64 `json:"tasks_received"`
-	TasksCompleted   int64 `json:"tasks_completed"`
-	TasksFailed      int64 `json:"tasks_failed"`
-	TasksRetried     int64 `json:"tasks_retried"`
-	ActiveWorkers    int64 `json:"active_workers"`
-	QueueLength      int64 `json:"queue_length"`
-	TotalDuration    int64 `json:"total_duration_ms"`
-	AverageDuration  float64 `json:"average_duration_ms"`
+	TasksReceived    int64     `json:"tasks_received"`
+	TasksCompleted   int64     `json:"tasks_completed"`
+	TasksFailed      int64     `json:"tasks_failed"`
+	TasksRetried     int64     `json:"tasks_retried"`
+	ActiveWorkers    int64     `json:"active_workers"`
+	QueueLength      int64     `json:"queue_length"`
+	TotalDuration    int64     `json:"total_duration_ms"`
+	AverageDuration  float64   `json:"average_duration_ms"`
 	LastTaskTime     time.Time `json:"last_task_time"`
+	
+	// Для атомарного обновления AverageDuration
+	averageDurationValue atomic.Value // хранит float64
 }
 
 // NewPool создает новый пул рабочих
@@ -226,6 +232,7 @@ func NewPool(config *Config, logger *logging.UptimeLogger, metrics *metrics.Upti
 			logger:    logger.WithComponent(fmt.Sprintf("worker-%d", i)),
 			metrics:   metrics,
 			checkers:  checkers,
+			pool:      pool, // Добавляем ссылку на пул
 		}
 		pool.workers = append(pool.workers, worker)
 	}
@@ -455,7 +462,12 @@ func (w *Worker) processTask(task *Task) {
 
 // getTimeout возвращает таймаут для типа проверки
 func (w *Worker) getTimeout(taskType domain.TaskType) time.Duration {
-	// TODO: Получать из конфигурации
+	// Получаем timeout из конфигурации пула
+	if timeout, exists := w.pool.config.Timeouts[taskType]; exists {
+		return timeout
+	}
+	
+	// Если timeout не найден в конфигурации, используем значения по умолчанию
 	defaultTimeouts := map[domain.TaskType]time.Duration{
 		domain.TaskTypeHTTP:    30 * time.Second,
 		domain.TaskTypeTCP:     10 * time.Second,
@@ -472,8 +484,8 @@ func (w *Worker) getTimeout(taskType domain.TaskType) time.Duration {
 
 // shouldRetry определяет, нужно ли повторять попытку на основе ошибки
 func (w *Worker) shouldRetry(err error, retryCount int) bool {
-	// TODO: Использовать конфигурацию retry
-	maxRetries := 3
+	// Используем конфигурацию retry из пула
+	maxRetries := w.pool.config.RetryConfig.MaxRetries
 	if retryCount >= maxRetries {
 		return false
 	}
@@ -489,8 +501,8 @@ func (w *Worker) shouldRetry(err error, retryCount int) bool {
 
 // shouldRetryFromResult определяет, нужно ли повторять попытку на основе результата
 func (w *Worker) shouldRetryFromResult(result *domain.CheckResult, retryCount int) bool {
-	// TODO: Использовать конфигурацию retry
-	maxRetries := 3
+	// Используем конфигурацию retry из пула
+	maxRetries := w.pool.config.RetryConfig.MaxRetries
 	if retryCount >= maxRetries {
 		return false
 	}
@@ -522,12 +534,62 @@ func (p *Pool) handleResults(ctx context.Context) {
 			
 			if result.ShouldRetry {
 				atomic.AddInt64(&p.stats.TasksRetried, 1)
-				// TODO: Отправить задачу обратно в очередь для retry
+				// Отправляем задачу обратно в очередь для retry
+				// Создаем новую задачу с увеличенным счетчиком повторов
+				retryTask := &Task{
+					ID:          result.TaskID,
+					CheckID:     result.CheckID,
+					ExecutionID: result.ExecutionID,
+					Type:        "", // Будет заполнено из оригинальной задачи
+					Target:      "", // Будет заполнено из оригинальной задачи
+					Config:      nil, // Будет заполнено из оригинальной задачи
+					ScheduledTime: time.Now().Add(p.calculateRetryDelay(result.RetryCount)),
+					CreatedAt:     time.Now(),
+					UpdatedAt:     time.Now(),
+					TenantID:     "", // Будет заполнено из оригинальной задачи
+					Priority:     0,  // Будет заполнено из оригинальной задачи
+					RetryCount:   result.RetryCount + 1,
+					MaxRetries:   p.config.RetryConfig.MaxRetries,
+				}
+				
+				// Пытаемся отправить задачу обратно в очередь
+				select {
+				case p.taskChan <- retryTask:
+					p.logger.GetBaseLogger().Debug("Task queued for retry",
+						logger.String("task_id", result.TaskID),
+						logger.String("check_id", result.CheckID),
+						logger.Int("retry_count", result.RetryCount+1))
+				default:
+					p.logger.GetBaseLogger().Warn("Retry queue is full, dropping retry task",
+						logger.String("task_id", result.TaskID),
+						logger.String("check_id", result.CheckID))
+				}
 			}
 		}
 		
 		atomic.AddInt64(&p.stats.TotalDuration, result.DurationMs)
 	}
+}
+
+// calculateRetryDelay вычисляет задержку для retry с экспоненциальным backoff и jitter
+func (p *Pool) calculateRetryDelay(retryCount int) time.Duration {
+	config := p.config.RetryConfig
+	
+	// Экспоненциальный backoff: delay = initialDelay * multiplier^retryCount
+	delay := float64(config.InitialDelay) * math.Pow(config.RetryMultiplier, float64(retryCount))
+	
+	// Ограничиваем максимальную задержку
+	if delay > float64(config.MaxDelay) {
+		delay = float64(config.MaxDelay)
+	}
+	
+	// Добавляем jitter для предотвращения thundering herd
+	if config.RetryJitter > 0 {
+		jitter := delay * config.RetryJitter * (rand.Float64() - 0.5) // ±jitter/2
+		delay += jitter
+	}
+	
+	return time.Duration(delay)
 }
 
 // cleanupStats периодически очищает статистику
@@ -540,13 +602,51 @@ func (p *Pool) cleanupStats(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			// TODO: Реализовать очистку старой статистики
+			// Реализуем очистку старой статистики
+			p.cleanupOldStats()
 		case <-ctx.Done():
 			return
 		case <-p.quit:
 			return
 		}
 	}
+}
+
+// cleanupOldStats очищает старую статистику и пересчитывает средние значения
+func (p *Pool) cleanupOldStats() {
+	p.logger.GetBaseLogger().Debug("Cleaning up old statistics")
+	
+	// Сохраняем текущую статистику для логирования
+	tasksCompleted := atomic.LoadInt64(&p.stats.TasksCompleted)
+	tasksFailed := atomic.LoadInt64(&p.stats.TasksFailed)
+	tasksRetried := atomic.LoadInt64(&p.stats.TasksRetried)
+	queueLength := int64(len(p.taskChan))
+	
+	// Пересчитываем среднюю длительность
+	totalDuration := atomic.LoadInt64(&p.stats.TotalDuration)
+	totalTasks := tasksCompleted + tasksFailed
+	
+	if totalTasks > 0 {
+		averageDuration := float64(totalDuration) / float64(totalTasks)
+		p.stats.averageDurationValue.Store(averageDuration)
+		p.stats.AverageDuration = averageDuration // Обновляем для JSON сериализации
+	}
+	
+	// Обновляем длину очереди
+	atomic.StoreInt64(&p.stats.QueueLength, queueLength)
+	
+	// Логируем статистику
+	p.logger.GetBaseLogger().Info("Statistics cleanup completed",
+		logger.Int64("tasks_completed", tasksCompleted),
+		logger.Int64("tasks_failed", tasksFailed),
+		logger.Int64("tasks_retried", tasksRetried),
+		logger.Int64("queue_length", queueLength),
+		logger.Float64("average_duration_ms", p.stats.AverageDuration))
+	
+	// Здесь можно добавить дополнительную логику:
+	// - Сброс старых метрик в Prometheus
+	// - Очистка кешей старых задач
+	// - Архивация статистики в базу данных
 }
 
 // contains проверяет наличие подстроки без учета регистра

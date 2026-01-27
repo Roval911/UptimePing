@@ -22,9 +22,14 @@ import (
 	"UptimePingPlatform/pkg/ratelimit"
 	pkg_redis "UptimePingPlatform/pkg/redis"
 	consumerRabbitMQ "UptimePingPlatform/services/core-service/internal/consumer/rabbitmq"
+	"UptimePingPlatform/services/core-service/internal/domain"
 	"UptimePingPlatform/services/core-service/internal/logging"
 	"UptimePingPlatform/services/core-service/internal/metrics"
+	"UptimePingPlatform/services/core-service/internal/repository/postgres"
+	"UptimePingPlatform/services/core-service/internal/service"
+	"UptimePingPlatform/services/core-service/internal/service/checker"
 	"UptimePingPlatform/services/core-service/internal/worker"
+	"UptimePingPlatform/services/core-service/internal/client"
 )
 
 const (
@@ -181,10 +186,28 @@ func mainCmd() {
 	// Инициализируем rate limiter для проверок
 	rateLimiter := ratelimit.NewRedisRateLimiter(redisClient.Client)
 
+	// Создаем фабрику checker'ов
+	httpClient := checker.NewDefaultHTTPClient(30 * time.Second)
+	checkerFactory := checker.NewDefaultCheckerFactory(appLogger, httpClient)
+
+	// Создаем checker'ы для всех поддерживаемых типов
+	checkers := make(map[domain.TaskType]checker.Checker)
+	for _, taskType := range checkerFactory.GetSupportedTypes() {
+		checker, err := checkerFactory.CreateChecker(taskType)
+		if err != nil {
+			appLogger.Error("Failed to create checker", 
+				logger.String("task_type", string(taskType)),
+				logger.Error(err))
+			os.Exit(1)
+		}
+		checkers[taskType] = checker
+		appLogger.Info("Created checker", logger.String("task_type", string(taskType)))
+	}
+
 	// Инициализируем worker pool
 	uptimeLogger := logging.NewUptimeLogger(appLogger)
 	uptimeMetrics := metrics.NewUptimeMetrics(serviceName)
-	workerPool, err := worker.NewPool(worker.DefaultConfig(), uptimeLogger, uptimeMetrics, nil) // TODO: implement checkers
+	workerPool, err := worker.NewPool(worker.DefaultConfig(), uptimeLogger, uptimeMetrics, checkers)
 	if err != nil {
 		appLogger.Error("Failed to create worker pool", logger.Error(err))
 		os.Exit(1)
@@ -197,13 +220,41 @@ func mainCmd() {
 	}
 
 	// Инициализируем consumer
+	checkResultRepository := postgres.NewCheckResultRepository(db.Pool, appLogger)
+	
+	// Создаем Incident Manager клиент
+	incidentClientConfig := &client.Config{
+		Address:         cfg.IncidentManager.Address,
+		Timeout:         30 * time.Second,
+		MaxRetries:      3,
+		InitialDelay:    1 * time.Second,
+		MaxDelay:        10 * time.Second,
+		RetryMultiplier: 2.0,
+		RetryJitter:     0.1,
+	}
+	
+	incidentClient, err := client.NewIncidentClient(incidentClientConfig)
+	if err != nil {
+		appLogger.Warn("Failed to create incident client, using nil", logger.Error(err))
+		incidentClient = nil
+	}
+	defer func() {
+		if incidentClient != nil {
+			incidentClient.Close()
+		}
+	}()
+	
+	incidentManager := service.NewGRPCIncidentManager(incidentClient, appLogger)
+	
+	checkService := service.NewCheckService(appLogger, checkerFactory, checkResultRepository, redisClient, incidentManager)
 	consumer, err := consumerRabbitMQ.NewConsumer(
 		consumerRabbitMQ.ConsumerConfig{
 			QueueName:   rabbitConfig.Queue,
 			ConsumerTag: "core-service-consumer",
 		},
 		appLogger,
-		nil, // TODO: implement CheckServiceInterface
+		checkService,
+		rabbitConn,
 	)
 	if err != nil {
 		appLogger.Error("Failed to create consumer", logger.Error(err))

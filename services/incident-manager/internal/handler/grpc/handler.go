@@ -196,14 +196,24 @@ func (h *IncidentHandler) ListIncidents(ctx context.Context, req *pb.ListInciden
 		pbIncidents[i] = h.incidentToProto(incident)
 	}
 
+	// Вычисляем NextPageToken для пагинации
+	nextPageToken := int32(0)
+	if req.PageSize > 0 && len(incidents) == int(req.PageSize) {
+		// Если вернули полное количество записей, возможно есть следующая страница
+		nextPageToken = int32(req.PageToken + req.PageSize)
+	}
+
 	h.LogOperationSuccess(ctx, "ListIncidents", map[string]interface{}{
-		"tenant_id": req.TenantId,
-		"count":     len(incidents),
+		"tenant_id":     req.TenantId,
+		"count":         len(incidents),
+		"page_size":     req.PageSize,
+		"page_token":    req.PageToken,
+		"next_page_token": nextPageToken,
 	})
 
 	return &pb.ListIncidentsResponse{
 		Incidents:      pbIncidents,
-		NextPageToken:  0, // TODO: Implement proper pagination
+		NextPageToken:  nextPageToken,
 	}, nil
 }
 
@@ -237,7 +247,7 @@ func (h *IncidentHandler) GetIncident(ctx context.Context, req *pb.GetIncidentRe
 	pbIncident := h.incidentToProto(incident)
 	pbHistory := make([]*pb.IncidentEvent, len(history))
 	for i, event := range history {
-		pbHistory[i] = h.incidentEventToProto(event)
+		pbHistory[i] = h.incidentEventToProto(ctx, event)
 	}
 
 	h.LogOperationSuccess(ctx, "GetIncident", map[string]interface{}{

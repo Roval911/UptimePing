@@ -110,6 +110,117 @@ func (c *GRPCAuthClient) ValidateAPIKey(ctx context.Context, key, secret string)
 	}, nil
 }
 
+// Login выполняет вход пользователя
+func (c *GRPCAuthClient) Login(ctx context.Context, email, password string) (*TokenPair, error) {
+	c.baseHandler.LogOperationStart(ctx, "grpc_login", map[string]interface{}{
+		"email": email,
+	})
+
+	req := &authv1.LoginRequest{
+		Email:    email,
+		Password: password,
+	}
+
+	resp, err := c.client.Login(ctx, req)
+	if err != nil {
+		c.baseHandler.LogError(ctx, err, "grpc_login_failed", "")
+		return nil, fmt.Errorf("failed to login: %w", err)
+	}
+
+	c.baseHandler.LogOperationSuccess(ctx, "grpc_login", map[string]interface{}{
+		"email": email,
+	})
+
+	return &TokenPair{
+		AccessToken:  resp.AccessToken,
+		RefreshToken: resp.RefreshToken,
+	}, nil
+}
+
+// Register выполняет регистрацию пользователя
+func (c *GRPCAuthClient) Register(ctx context.Context, email, password, tenantName string) (*TokenPair, error) {
+	c.baseHandler.LogOperationStart(ctx, "grpc_register", map[string]interface{}{
+		"email":       email,
+		"tenant_name": tenantName,
+	})
+
+	req := &authv1.RegisterRequest{
+		Email:      email,
+		Password:   password,
+		TenantName: tenantName,
+	}
+
+	resp, err := c.client.Register(ctx, req)
+	if err != nil {
+		c.baseHandler.LogError(ctx, err, "grpc_register_failed", "")
+		return nil, fmt.Errorf("failed to register: %w", err)
+	}
+
+	c.baseHandler.LogOperationSuccess(ctx, "grpc_register", map[string]interface{}{
+		"email":       email,
+		"tenant_name": tenantName,
+	})
+
+	return &TokenPair{
+		AccessToken:  resp.AccessToken,
+		RefreshToken: resp.RefreshToken,
+	}, nil
+}
+
+// RefreshToken обновляет токен доступа
+func (c *GRPCAuthClient) RefreshToken(ctx context.Context, refreshToken string) (*TokenPair, error) {
+	c.baseHandler.LogOperationStart(ctx, "grpc_refresh_token", map[string]interface{}{})
+
+	req := &authv1.RefreshTokenRequest{
+		RefreshToken: refreshToken,
+	}
+
+	resp, err := c.client.RefreshToken(ctx, req)
+	if err != nil {
+		c.baseHandler.LogError(ctx, err, "grpc_refresh_token_failed", "")
+		return nil, fmt.Errorf("failed to refresh token: %w", err)
+	}
+
+	c.baseHandler.LogOperationSuccess(ctx, "grpc_refresh_token", map[string]interface{}{})
+
+	return &TokenPair{
+		AccessToken:  resp.AccessToken,
+		RefreshToken: resp.RefreshToken,
+	}, nil
+}
+
+// Logout выполняет выход пользователя
+func (c *GRPCAuthClient) Logout(ctx context.Context, userID, tokenID string) error {
+	c.baseHandler.LogOperationStart(ctx, "grpc_logout", map[string]interface{}{
+		"user_id":  userID,
+		"token_id": tokenID,
+	})
+
+	req := &authv1.LogoutRequest{
+		UserId:       userID,
+		RefreshToken: tokenID, // Используем refreshToken как tokenId
+	}
+
+	_, err := c.client.Logout(ctx, req)
+	if err != nil {
+		c.baseHandler.LogError(ctx, err, "grpc_logout_failed", "")
+		return fmt.Errorf("failed to logout: %w", err)
+	}
+
+	c.baseHandler.LogOperationSuccess(ctx, "grpc_logout", map[string]interface{}{
+		"user_id":  userID,
+		"token_id": tokenID,
+	})
+
+	return nil
+}
+
+// TokenPair структура для хранения пары токенов
+type TokenPair struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+}
+
 // TokenClaims структура для данных JWT токена
 type TokenClaims struct {
 	UserID   string `json:"user_id"`

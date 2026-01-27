@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 
 	"google.golang.org/grpc/codes"
@@ -130,15 +131,30 @@ func (e *Error) ToGRPCErr() error {
 	status := status.New(grpcCode, e.Message)
 
 	// Добавляем детали, если есть
-	//TODO В реальной реализации нужно реализовать proper proto message handling
-	// if e.Details != "" {
-	// 	withDetails, err := status.WithDetails(&ErrorDetails{
-	// 		Details: e.Details,
-	// 	})
-	// 	if err == nil {
-	// 		status = withDetails
-	// 	}
-	// }
+	if e.Details != "" {
+		errorDetails := &ErrorDetails{
+			Details: e.Details,
+		}
+		
+		// Добавляем контекстную информацию, если она есть
+		if e.Context != nil {
+			// Извлекаем trace_id из контекста, если он есть
+			if traceID := e.Context.Value("trace_id"); traceID != nil {
+				if traceIDStr, ok := traceID.(string); ok {
+					errorDetails.Details += fmt.Sprintf(" (trace_id: %s)", traceIDStr)
+				}
+			}
+		}
+		
+		// Добавляем детали к статусу
+		withDetails, err := status.WithDetails(errorDetails)
+		if err == nil {
+			status = withDetails
+		} else {
+			// Логируем ошибку, но не прерываем выполнение
+			log.Printf("Failed to add error details: %v", err)
+		}
+	}
 
 	return status.Err()
 }
@@ -180,6 +196,25 @@ func FromGRPCErr(err error) *Error {
 	return Wrap(err, ErrInternal, "internal error")
 }
 
+// ExtractErrorDetails извлекает детали из gRPC ошибки
+func ExtractErrorDetails(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	// Проверяем, является ли ошибка gRPC статусом
+	if grpcStatus, ok := status.FromError(err); ok {
+		// Получаем детали из статуса
+		for _, detail := range grpcStatus.Details() {
+			if errorDetails, ok := detail.(*ErrorDetails); ok {
+				return errorDetails.Details
+			}
+		}
+	}
+
+	return ""
+}
+
 // HTTPStatus возвращает соответствующий HTTP статус для ошибки
 func (e *Error) HTTPStatus() int {
 	if e == nil {
@@ -205,21 +240,23 @@ func (e *Error) HTTPStatus() int {
 }
 
 // ErrorDetails представляет детали ошибки для gRPC
-//
-//go:generate protoc -I=. --go_out=. --go_opt=paths=source_relative error_details.proto
-type ErrorDetails struct {
-	Details string `protobuf:"bytes,1,opt,name=details,proto3" json:"details,omitempty"`
-}
+// Этот тип генерируется из error_details.proto
 
 // GetUserMessage возвращает пользовательское сообщение об ошибке
-// В реальной реализации здесь будет интеграция с системой локализации
+// Поддерживает локализацию через контекст
 func (e *Error) GetUserMessage() string {
 	if e == nil {
 		return ""
 	}
 
-	// В реальном приложении здесь будет локализация сообщений
-	// Например, через сервис перевода или файлы локализации
+	// Проверяем, есть ли локализованное сообщение в контексте
+	if e.Context != nil {
+		if localizedMsg, ok := e.Context.Value("localized_message").(string); ok {
+			return localizedMsg
+		}
+	}
+
+	// Возвращаем сообщения на русском по умолчанию
 	switch e.Code {
 	case ErrNotFound:
 		return "Ресурс не найден"
@@ -244,6 +281,18 @@ func Middleware(next http.Handler) http.Handler {
 		// Создаем обертку для ResponseWriter для перехвата статуса
 		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 
+		// Выполняем следующий обработчик с восстановлением от паники
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				// Создаем ошибку для паники
+				err := New(ErrInternal, "Internal server error").
+					WithDetails(fmt.Sprintf("panic: %v", recovered))
+				
+				// Отправляем ответ об ошибке
+				sendErrorResponse(w, err)
+			}
+		}()
+
 		// Выполняем следующий обработчик
 		next.ServeHTTP(wrapped, r)
 
@@ -254,24 +303,35 @@ func Middleware(next http.Handler) http.Handler {
 
 		// Если есть ошибка в контексте, используем ее
 		if err, ok := r.Context().Value(errorContextKey{}).(*Error); ok {
-			// Отправляем JSON ответ с ошибкой
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(err.HTTPStatus())
-
-			// Формируем ответ
-			response := map[string]interface{}{
-				"error": map[string]interface{}{
-					"code":    err.Code,
-					"message": err.GetUserMessage(),
-					"details": err.Details,
-				},
-			}
-
-			// Отправляем ответ
-			jsonData, _ := json.Marshal(response)
-			w.Write(jsonData)
+			sendErrorResponse(w, err)
 		}
 	})
+}
+
+// sendErrorResponse отправляет JSON ответ с ошибкой
+func sendErrorResponse(w http.ResponseWriter, err *Error) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(err.HTTPStatus())
+
+	// Формируем ответ
+	response := map[string]interface{}{
+		"error": map[string]interface{}{
+			"code":    err.Code,
+			"message": err.GetUserMessage(),
+			"details": err.Details,
+		},
+	}
+
+	// Отправляем ответ
+	jsonData, jsonErr := json.Marshal(response)
+	if jsonErr != nil {
+		// Если не удалось сериализовать ответ, отправляем базовую ошибку
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":{"code":"INTERNAL_ERROR","message":"Internal server error"}}`))
+		return
+	}
+	
+	w.Write(jsonData)
 }
 
 // errorContextKey ключ для хранения ошибки в контексте
@@ -288,6 +348,29 @@ func GetError(ctx context.Context) *Error {
 		return err
 	}
 	return nil
+}
+
+// NewLocalized создает ошибку с локализованным сообщением
+func NewLocalized(code ErrorCode, message, localizedMessage string) *Error {
+	return &Error{
+		Code:    code,
+		Message: message,
+		Details: localizedMessage,
+	}
+}
+
+// WithLocalizedMessage добавляет локализованное сообщение в контекст
+func WithLocalizedMessage(ctx context.Context, localizedMessage string) context.Context {
+	return context.WithValue(ctx, "localized_message", localizedMessage)
+}
+
+// NewWithLocalizedMessage создает ошибку с контекстом локализации
+func NewWithLocalizedMessage(ctx context.Context, code ErrorCode, message string) *Error {
+	return &Error{
+		Code:    code,
+		Message: message,
+		Context: ctx,
+	}
 }
 
 // responseWriter обертка для перехвата статуса ответа

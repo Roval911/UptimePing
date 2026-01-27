@@ -10,16 +10,33 @@ import (
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/validation"
-	"UptimePingPlatform/services/api-gateway/internal/client"
 	schedulerv1 "UptimePingPlatform/gen/go/proto/api/scheduler/v1"
+	forgev1 "UptimePingPlatform/gen/go/proto/api/forge/v1"
 )
+
+// ForgeServiceClient интерфейс для Forge Service клиента
+type ForgeServiceClient interface {
+	GenerateConfig(ctx context.Context, protoContent string, options *forgev1.ConfigOptions) (*forgev1.GenerateConfigResponse, error)
+	ParseProto(ctx context.Context, protoContent, fileName string) (*forgev1.ParseProtoResponse, error)
+	GenerateCode(ctx context.Context, protoContent string, options *forgev1.CodeOptions) (*forgev1.GenerateCodeResponse, error)
+	ValidateProto(ctx context.Context, protoContent string) (*forgev1.ValidateProtoResponse, error)
+	Close() error
+}
+
+// SchedulerServiceClient интерфейс для Scheduler Service клиента
+type SchedulerServiceClient interface {
+	ListChecks(ctx context.Context, req *schedulerv1.ListChecksRequest) (*schedulerv1.ListChecksResponse, error)
+	CreateCheck(ctx context.Context, req *schedulerv1.CreateCheckRequest) (*schedulerv1.Check, error)
+	Close() error
+}
 
 // Handler структура для управления HTTP обработчиками
 type Handler struct {
 	mux             *http.ServeMux
 	authService     AuthService
 	healthHandler   HealthHandler
-	schedulerClient *client.SchedulerClient
+	schedulerClient SchedulerServiceClient
+	forgeClient     ForgeServiceClient
 	baseHandler     *grpcBase.BaseHandler
 	validator       *validation.Validator
 }
@@ -46,12 +63,13 @@ type HealthHandler interface {
 }
 
 // NewHandler создает новый экземпляр Handler
-func NewHandler(authService AuthService, healthHandler HealthHandler, schedulerClient *client.SchedulerClient, logger logger.Logger) *Handler {
+func NewHandler(authService AuthService, healthHandler HealthHandler, schedulerClient SchedulerServiceClient, forgeClient ForgeServiceClient, logger logger.Logger) *Handler {
 	h := &Handler{
 		mux:             http.NewServeMux(),
 		authService:     authService,
 		healthHandler:   healthHandler,
 		schedulerClient: schedulerClient,
+		forgeClient:     forgeClient,
 		baseHandler:     grpcBase.NewBaseHandler(logger),
 		validator:       validation.NewValidator(),
 	}
@@ -381,18 +399,206 @@ func (h *Handler) handleForgeProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Проверка аутентификации
-	if !h.isAuthenticated(r) {
-		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "unauthorized"), http.StatusUnauthorized)
+	// Декодирование запроса
+	var req struct {
+		ProtoContent string                 `json:"proto_content"`
+		FileName     string                 `json:"file_name,omitempty"`
+		Options      map[string]interface{} `json:"options,omitempty"`
+		Action       string                 `json:"action"` // "generate_config", "parse_proto", "generate_code", "validate_proto"
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
 		return
 	}
 
-	//TODO Прокси запроса к Forge Service
-	// Пока возвращаем заглушку
+	// Валидация обязательных полей
+	requiredFields := map[string]interface{}{
+		"proto_content": req.ProtoContent,
+		"action":       req.Action,
+	}
+	
+	if err := h.validator.ValidateRequiredFields(requiredFields, map[string]string{
+		"proto_content": "Proto content",
+		"action":       "Action",
+	}); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "validation failed"), http.StatusBadRequest)
+		return
+	}
+
+	// Валидация действия
+	validActions := []string{"generate_config", "parse_proto", "generate_code", "validate_proto"}
+	if err := h.validator.ValidateEnum(req.Action, validActions, "action"); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid action"), http.StatusBadRequest)
+		return
+	}
+
+	// Валидация длины proto контента
+	if err := h.validator.ValidateStringLength(req.ProtoContent, "proto_content", 10, 1000000); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "proto content too long or too short"), http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	// Выполнение действия в зависимости от типа
+	switch req.Action {
+	case "generate_config":
+		h.handleGenerateConfig(ctx, w, req)
+	case "parse_proto":
+		h.handleParseProto(ctx, w, req)
+	case "generate_code":
+		h.handleGenerateCode(ctx, w, req)
+	case "validate_proto":
+		h.handleValidateProto(ctx, w, req)
+	default:
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "unsupported action"), http.StatusBadRequest)
+	}
+}
+
+// handleGenerateConfig обрабатывает генерацию конфигурации
+func (h *Handler) handleGenerateConfig(ctx context.Context, w http.ResponseWriter, req struct {
+	ProtoContent string                 `json:"proto_content"`
+	FileName     string                 `json:"file_name,omitempty"`
+	Options      map[string]interface{} `json:"options,omitempty"`
+	Action       string                 `json:"action"`
+}) {
+	// Создаем опции конфигурации
+	options := &forgev1.ConfigOptions{}
+	if req.Options != nil {
+		if targetHost, ok := req.Options["target_host"].(string); ok {
+			options.TargetHost = targetHost
+		}
+		if targetPort, ok := req.Options["target_port"].(float64); ok {
+			options.TargetPort = int32(targetPort)
+		}
+		if checkInterval, ok := req.Options["check_interval"].(float64); ok {
+			options.CheckInterval = int32(checkInterval)
+		}
+		if timeout, ok := req.Options["timeout"].(float64); ok {
+			options.Timeout = int32(timeout)
+		}
+		if tenantID, ok := req.Options["tenant_id"].(string); ok {
+			options.TenantId = tenantID
+		}
+		if metadata, ok := req.Options["metadata"].(map[string]interface{}); ok {
+			options.Metadata = make(map[string]string)
+			for k, v := range metadata {
+				if str, ok := v.(string); ok {
+					options.Metadata[k] = str
+				}
+			}
+		}
+	}
+
+	// Вызываем Forge Service
+	resp, err := h.forgeClient.GenerateConfig(ctx, req.ProtoContent, options)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	// Формирование ответа
 	response := map[string]interface{}{
-		"success": true,
-		"message": "Configuration generated",
-		"config":  "dummy config content",
+		"success":     true,
+		"message":     "Configuration generated successfully",
+		"config_yaml": resp.ConfigYaml,
+		"check_config": resp.CheckConfig,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleParseProto обрабатывает парсинг proto файла
+func (h *Handler) handleParseProto(ctx context.Context, w http.ResponseWriter, req struct {
+	ProtoContent string                 `json:"proto_content"`
+	FileName     string                 `json:"file_name,omitempty"`
+	Options      map[string]interface{} `json:"options,omitempty"`
+	Action       string                 `json:"action"`
+}) {
+	resp, err := h.forgeClient.ParseProto(ctx, req.ProtoContent, req.FileName)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	// Формирование ответа
+	response := map[string]interface{}{
+		"success":      true,
+		"message":      "Proto parsed successfully",
+		"service_info": resp.ServiceInfo,
+		"is_valid":     resp.IsValid,
+		"warnings":     resp.Warnings,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleGenerateCode обрабатывает генерацию кода
+func (h *Handler) handleGenerateCode(ctx context.Context, w http.ResponseWriter, req struct {
+	ProtoContent string                 `json:"proto_content"`
+	FileName     string                 `json:"file_name,omitempty"`
+	Options      map[string]interface{} `json:"options,omitempty"`
+	Action       string                 `json:"action"`
+}) {
+	// Создаем опции генерации кода
+	options := &forgev1.CodeOptions{}
+	if req.Options != nil {
+		if language, ok := req.Options["language"].(string); ok {
+			options.Language = language
+		}
+		if framework, ok := req.Options["framework"].(string); ok {
+			options.Framework = framework
+		}
+		if template, ok := req.Options["template"].(string); ok {
+			options.Template = template
+		}
+	}
+
+	resp, err := h.forgeClient.GenerateCode(ctx, req.ProtoContent, options)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	// Формирование ответа
+	response := map[string]interface{}{
+		"success":  true,
+		"message":  "Code generated successfully",
+		"code":     resp.Code,
+		"filename": resp.Filename,
+		"language": resp.Language,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleValidateProto обрабатывает валидацию proto файла
+func (h *Handler) handleValidateProto(ctx context.Context, w http.ResponseWriter, req struct {
+	ProtoContent string                 `json:"proto_content"`
+	FileName     string                 `json:"file_name,omitempty"`
+	Options      map[string]interface{} `json:"options,omitempty"`
+	Action       string                 `json:"action"`
+}) {
+	resp, err := h.forgeClient.ValidateProto(ctx, req.ProtoContent)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	// Формирование ответа
+	response := map[string]interface{}{
+		"success":  true,
+		"message":  "Proto validated successfully",
+		"is_valid": resp.IsValid,
+		"errors":   resp.Errors,
+		"warnings": resp.Warnings,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -1157,8 +1158,28 @@ func (s *incidentService) GetIncidentHistory(ctx context.Context, incidentID str
 
 // removeTimestamps удаляет временные метки из сообщения
 func removeTimestamps(message string) string {
-	// Простая реализация - удаляем распространенные форматы времени
-	//TODO В реальной реализации здесь была бы regex замена
-	// Для простоты оставляем как есть
-	return message
+	// Regex паттерны для различных форматов временных меток
+	timestampPatterns := []*regexp.Regexp{
+		// ISO 8601: 2023-12-25T14:30:45Z, 2023-12-25T14:30:45+03:00
+		regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})`),
+		// RFC 3339: 2023-12-25 14:30:45, 2023-12-25 14:30:45+03:00
+		regexp.MustCompile(`\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\s*[+-]\d{2}:\d{2})?`),
+		// Дата и время: 25/12/2023 14:30:45, 12/25/2023 14:30:45
+		regexp.MustCompile(`\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2}`),
+		// Время: 14:30:45, 14:30
+		regexp.MustCompile(`\d{1,2}:\d{2}(?::\d{2})?`),
+		// Unix timestamp в миллисекундах: 1703506645123
+		regexp.MustCompile(`\b\d{10,13}\b`),
+		// Месяц день, год: Dec 25, 2023
+		regexp.MustCompile(`\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}\b`),
+		// День месяц: 25 Dec 2023
+		regexp.MustCompile(`\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\b`),
+	}
+
+	result := message
+	for _, pattern := range timestampPatterns {
+		result = pattern.ReplaceAllString(result, "TIMESTAMP")
+	}
+
+	return result
 }

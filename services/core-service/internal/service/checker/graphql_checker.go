@@ -197,7 +197,23 @@ func (g *GraphQLChecker) ValidateConfig(config map[string]interface{}) error {
 					logger.String("timeout", timeoutStr))
 				return errors.New(errors.ErrValidation, "invalid timeout")
 			}
-			// Для других строковых значений пока пропускаем (TODO: добавить парсинг duration)
+			
+			// Парсинг duration
+			duration, err := time.ParseDuration(timeoutStr)
+			if err != nil {
+				g.logger.Debug("GraphQL config validation failed: invalid timeout format",
+					logger.String("timeout", timeoutStr),
+					logger.Error(err))
+				return errors.Wrap(err, errors.ErrValidation, "invalid timeout format")
+			}
+			
+			// Проверка диапазона (1ms - 5 минут)
+			if duration < time.Millisecond || duration > 5*time.Minute {
+				g.logger.Debug("GraphQL config validation failed: timeout out of range",
+					logger.String("timeout", timeoutStr),
+					logger.Duration("duration", duration))
+				return errors.New(errors.ErrValidation, "timeout must be between 1ms and 5 minutes")
+			}
 		}
 	}
 

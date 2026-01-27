@@ -3,6 +3,8 @@ package http
 import (
 	"context"
 	"net/http"
+
+	schedulerv1 "UptimePingPlatform/gen/go/proto/api/scheduler/v1"
 )
 
 // MockAuthService мок для сервиса аутентификации
@@ -49,4 +51,24 @@ func (m *MockHealthHandler) ReadyCheck(w http.ResponseWriter, r *http.Request) {
 func (m *MockHealthHandler) LiveCheck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Live"))
+}
+
+// MockSchedulerClient мок для SchedulerClient
+type MockSchedulerClient struct{}
+
+func (m *MockSchedulerClient) ListChecks(ctx context.Context, req *schedulerv1.ListChecksRequest) (*schedulerv1.ListChecksResponse, error) {
+	return &schedulerv1.ListChecksResponse{
+		Checks: []*schedulerv1.Check{},
+	}, nil
+}
+
+func (m *MockSchedulerClient) CreateCheck(ctx context.Context, req *schedulerv1.CreateCheckRequest) (*schedulerv1.Check, error) {
+	return &schedulerv1.Check{
+		Id:   "mock-check-id",
+		Name: req.Name,
+	}, nil
+}
+
+func (m *MockSchedulerClient) Close() error {
+	return nil
 }

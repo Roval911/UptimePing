@@ -1,7 +1,11 @@
 package logger
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -78,15 +82,42 @@ func NewLogger(environment, level, serviceName string, enableLoki bool) (Logger,
 	}
 
 	// Создаем core для zap
-	core := zapcore.NewCore(
-		encoder,
-		zapcore.AddSync(os.Stdout),
-		zap.NewAtomicLevelAt(zapLevel),
-	)
+	var core zapcore.Core
+	
+	if enableLoki {
+		// Создаем multi-writer для отправки логов и в stdout, и в Loki
+		lokiURL := os.Getenv("LOKI_URL") // Получаем URL из переменной окружения
+		lokiWriter := &LokiWriter{
+			serviceName: serviceName,
+			environment: environment,
+			lokiURL:     lokiURL,
+			client: &http.Client{
+				Timeout: 10 * time.Second,
+			},
+		}
+		
+		core = zapcore.NewTee(
+			zapcore.NewCore(
+				encoder,
+				zapcore.AddSync(os.Stdout),
+				zap.NewAtomicLevelAt(zapLevel),
+			),
+			zapcore.NewCore(
+				zapcore.NewJSONEncoder(encoderConfig),
+				zapcore.AddSync(lokiWriter),
+				zap.NewAtomicLevelAt(zapLevel),
+			),
+		)
+	} else {
+		core = zapcore.NewCore(
+			encoder,
+			zapcore.AddSync(os.Stdout),
+			zap.NewAtomicLevelAt(zapLevel),
+		)
+	}
 
 	// Создаем логгер
 	zapLogger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zap.ErrorLevel))
-	defer zapLogger.Sync()
 
 	// Добавляем поля по умолчанию
 	zapLogger = zapLogger.With(
@@ -94,12 +125,12 @@ func NewLogger(environment, level, serviceName string, enableLoki bool) (Logger,
 		zap.String("environment", environment),
 	)
 
-	// Если включена интеграция с Loki, добавляем дополнительные настройки
-	// В реальной реализации здесь будет настройка отправки логов в Loki
+	// Логируем статус интеграции с Loki
 	if enableLoki {
-		// TODO: Добавить интеграцию с Loki
-		// Например, настройка Loki через promtail или прямое API
-		zapLogger.Info("Loki integration enabled")
+		zapLogger.Info("Loki integration enabled", 
+			zap.String("service", serviceName),
+			zap.String("environment", environment),
+		)
 	}
 
 	return &LoggerImpl{zapLogger: zapLogger}, nil
@@ -209,4 +240,97 @@ func Duration(key string, val time.Duration) Field {
 // Any создает поле с любым значением
 func Any(key string, val interface{}) Field {
 	return Field{zap.Any(key, val)}
+}
+
+// LokiWriter реализует io.Writer для отправки логов в Loki
+type LokiWriter struct {
+	serviceName string
+	environment string
+	lokiURL     string
+	client      *http.Client
+}
+
+// Write отправляет лог в Loki через HTTP API
+func (lw *LokiWriter) Write(p []byte) (n int, err error) {
+	// Парсим JSON лог
+	var logEntry map[string]interface{}
+	if err := json.Unmarshal(p, &logEntry); err != nil {
+		// Если не удалось распарсить, отправляем как строку
+		logEntry = map[string]interface{}{
+			"message": string(p),
+			"level":   "info",
+			"time":    time.Now().UnixNano(),
+		}
+	}
+
+	// Создаем Loki push request
+	pushRequest := map[string]interface{}{
+		"streams": []map[string]interface{}{
+			{
+				"stream": map[string]string{
+					"service":     lw.serviceName,
+					"environment": lw.environment,
+					"level":       getLogLevel(logEntry),
+				},
+				"values": [][]string{
+					{
+						fmt.Sprintf("%d", time.Now().UnixNano()),
+						string(p),
+					},
+				},
+			},
+		},
+	}
+
+	// Сериализуем запрос
+	jsonData, err := json.Marshal(pushRequest)
+	if err != nil {
+		os.Stderr.Write([]byte(fmt.Sprintf("[LOKI ERROR] Failed to marshal log: %v\n", err)))
+		return len(p), nil
+	}
+
+	// Отправляем в Loki
+	if lw.lokiURL != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		
+		req, err := http.NewRequestWithContext(ctx, "POST", lw.lokiURL+"/loki/api/v1/push", bytes.NewBuffer(jsonData))
+		if err != nil {
+			os.Stderr.Write([]byte(fmt.Sprintf("[LOKI ERROR] Failed to create request: %v\n", err)))
+			return len(p), nil
+		}
+		
+		req.Header.Set("Content-Type", "application/json")
+		
+		resp, err := lw.client.Do(req)
+		if err != nil {
+			os.Stderr.Write([]byte(fmt.Sprintf("[LOKI ERROR] Failed to send log: %v\n", err)))
+			return len(p), nil
+		}
+		defer resp.Body.Close()
+		
+		if resp.StatusCode >= 400 {
+			os.Stderr.Write([]byte(fmt.Sprintf("[LOKI ERROR] Loki returned status: %d\n", resp.StatusCode)))
+		}
+	}
+
+	return len(p), nil
+}
+
+// getLogLevel извлекает уровень лога из записи
+func getLogLevel(logEntry map[string]interface{}) string {
+	if level, ok := logEntry["level"].(string); ok {
+		return level
+	}
+	return "info"
+}
+
+// Sync синхронизирует буферы (для совместимости с zap)
+func (lw *LokiWriter) Sync() error {
+	return nil
+}
+
+// Close закрывает writer (для совместимости с zap)
+func (lw *LokiWriter) Close() error {
+	return nil
 }

@@ -3,6 +3,8 @@ package redis
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -99,8 +101,60 @@ func (r *Client) HealthCheck(ctx context.Context) error {
 }
 
 // GetConfig возвращает конфигурацию из переменных окружения
-// TODO В реальном приложении здесь будет интеграция с системой конфигурации
 func GetConfig() *Config {
-	// TODO: Реализовать загрузку из переменных окружения
-	return NewConfig()
+	config := NewConfig()
+	
+	// Загружаем адрес сервера
+	if addr := os.Getenv("REDIS_ADDR"); addr != "" {
+		config.Addr = addr
+	}
+	
+	// Загружаем пароль
+	if password := os.Getenv("REDIS_PASSWORD"); password != "" {
+		config.Password = password
+	}
+	
+	// Загружаем номер базы данных
+	if db := os.Getenv("REDIS_DB"); db != "" {
+		if dbNum, err := strconv.Atoi(db); err == nil {
+			config.DB = dbNum
+		}
+	}
+	
+	// Загружаем размер пула соединений
+	if poolSize := os.Getenv("REDIS_POOL_SIZE"); poolSize != "" {
+		if size, err := strconv.Atoi(poolSize); err == nil {
+			config.PoolSize = size
+		}
+	}
+	
+	// Загружаем минимальное количество неактивных соединений
+	if minIdleConn := os.Getenv("REDIS_MIN_IDLE_CONN"); minIdleConn != "" {
+		if count, err := strconv.Atoi(minIdleConn); err == nil {
+			config.MinIdleConn = count
+		}
+	}
+	
+	// Загружаем максимальное количество попыток
+	if maxRetries := os.Getenv("REDIS_MAX_RETRIES"); maxRetries != "" {
+		if retries, err := strconv.Atoi(maxRetries); err == nil {
+			config.MaxRetries = retries
+		}
+	}
+	
+	// Загружаем интервал между попытками
+	if retryInterval := os.Getenv("REDIS_RETRY_INTERVAL"); retryInterval != "" {
+		if interval, err := time.ParseDuration(retryInterval); err == nil {
+			config.RetryInterval = interval
+		}
+	}
+	
+	// Загружаем интервал health check
+	if healthCheck := os.Getenv("REDIS_HEALTH_CHECK"); healthCheck != "" {
+		if interval, err := time.ParseDuration(healthCheck); err == nil {
+			config.HealthCheck = interval
+		}
+	}
+	
+	return config
 }

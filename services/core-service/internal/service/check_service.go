@@ -7,29 +7,36 @@ import (
 	"time"
 
 	"UptimePingPlatform/services/core-service/internal/domain"
+	"UptimePingPlatform/services/core-service/internal/repository"
 	"UptimePingPlatform/services/core-service/internal/service/checker"
 	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/logger"
+	pkg_redis "UptimePingPlatform/pkg/redis"
 )
 
 // CheckService предоставляет бизнес-логику для выполнения проверок
 type CheckService struct {
-	logger      logger.Logger
-	checkerFactory checker.CheckerFactory
-	// TODO: Добавить зависимости для БД, Redis, Incident Manager
-	// repository      repository.CheckResultRepository
-	// redisClient     redis.Client
-	// incidentManager incident.Manager
+	logger          logger.Logger
+	checkerFactory  checker.CheckerFactory
+	repository      repository.CheckResultRepository
+	redisClient     *pkg_redis.Client
+	incidentManager IncidentManager
 }
 
 // NewCheckService создает новый экземпляр CheckService
 func NewCheckService(
 	log logger.Logger,
 	factory checker.CheckerFactory,
+	repository repository.CheckResultRepository,
+	redisClient *pkg_redis.Client,
+	incidentManager IncidentManager,
 ) *CheckService {
 	return &CheckService{
-		logger:         log,
-		checkerFactory: factory,
+		logger:          log,
+		checkerFactory:  factory,
+		repository:      repository,
+		redisClient:     redisClient,
+		incidentManager: incidentManager,
 	}
 }
 
@@ -41,6 +48,7 @@ type TaskMessage struct {
 	Type         string                 `json:"type"`
 	Config       map[string]interface{} `json:"config"`
 	ScheduledAt  time.Time              `json:"scheduled_at"`
+	TenantID     string                 `json:"tenant_id"`
 	Metadata     map[string]interface{} `json:"metadata,omitempty"`
 }
 
@@ -64,6 +72,7 @@ func (cs *CheckService) ProcessTask(ctx context.Context, message []byte) error {
 		logger.String("execution_id", taskMessage.ExecutionID),
 		logger.String("type", taskMessage.Type),
 		logger.String("target", taskMessage.Target),
+		logger.String("tenant_id", taskMessage.TenantID),
 	)
 
 	// Создание доменной модели Task
@@ -84,10 +93,11 @@ func (cs *CheckService) ProcessTask(ctx context.Context, message []byte) error {
 	)
 
 	// Вызов соответствующего checker'а
-	result, err := cs.executeCheck(ctx, checker, task)
+	result, err := cs.executeCheck(ctx, checker, task, taskMessage.TenantID)
 	if err != nil {
 		cs.logger.Error("Check execution failed",
 			logger.String("check_id", task.CheckID),
+			logger.String("tenant_id", taskMessage.TenantID),
 			logger.Error(err),
 		)
 		return errors.Wrap(err, errors.ErrInternal, "check execution failed")
@@ -119,9 +129,10 @@ func (cs *CheckService) ProcessTask(ctx context.Context, message []byte) error {
 
 	// Если проверка неудачна → отправка в Incident Manager
 	if !result.Success {
-		if err := cs.sendToIncidentManager(ctx, result); err != nil {
+		if err := cs.sendToIncidentManager(ctx, result, taskMessage.TenantID); err != nil {
 			cs.logger.Error("Failed to send to incident manager",
 				logger.String("check_id", task.CheckID),
+				logger.String("tenant_id", taskMessage.TenantID),
 				logger.Error(err),
 			)
 			// Не прерываем обработку, так как это уведомление
@@ -173,10 +184,11 @@ func (cs *CheckService) createTask(message *TaskMessage) *domain.Task {
 }
 
 // executeCheck выполняет проверку
-func (cs *CheckService) executeCheck(ctx context.Context, checker checker.Checker, task *domain.Task) (*domain.CheckResult, error) {
+func (cs *CheckService) executeCheck(ctx context.Context, checker checker.Checker, task *domain.Task, tenantID string) (*domain.CheckResult, error) {
 	cs.logger.Debug("Executing check",
 		logger.String("check_id", task.CheckID),
 		logger.String("type", task.Type),
+		logger.String("tenant_id", tenantID),
 	)
 
 	// Выполнение проверки
@@ -205,13 +217,24 @@ func (cs *CheckService) saveResult(ctx context.Context, result *domain.CheckResu
 		logger.String("check_id", result.CheckID),
 	)
 
-	// TODO: Реализовать сохранение в БД через repository
-	// err := cs.repository.Save(ctx, result)
-	// if err != nil {
-	//     return errors.Wrap(err, errors.ErrInternal, "failed to save result to database")
-	// }
+	if cs.repository == nil {
+		cs.logger.Warn("Repository is not initialized, skipping database save")
+		return nil
+	}
 
-	cs.logger.Debug("Result saved to database (mock)")
+	err := cs.repository.Save(ctx, result)
+	if err != nil {
+		cs.logger.Error("Failed to save result to database",
+			logger.String("check_id", result.CheckID),
+			logger.Error(err),
+		)
+		return errors.Wrap(err, errors.ErrInternal, "failed to save result to database")
+	}
+
+	cs.logger.Debug("Result saved to database successfully",
+		logger.String("check_id", result.CheckID),
+	)
+
 	return nil
 }
 
@@ -221,44 +244,75 @@ func (cs *CheckService) cacheResult(ctx context.Context, result *domain.CheckRes
 		logger.String("check_id", result.CheckID),
 	)
 
-	// TODO: Реализовать кеширование в Redis
-	// key := fmt.Sprintf("check_result:%s", result.CheckID)
-	// data, err := json.Marshal(result)
-	// if err != nil {
-	//     return errors.Wrap(err, errors.ErrInternal, "failed to marshal result for caching")
-	// }
-	// 
-	// err = cs.redisClient.Set(ctx, key, data, 5*time.Minute).Err()
-	// if err != nil {
-	//     return errors.Wrap(err, errors.ErrInternal, "failed to cache result in Redis")
-	// }
+	if cs.redisClient == nil {
+		cs.logger.Warn("Redis client is not initialized, skipping cache")
+		return nil
+	}
 
-	cs.logger.Debug("Result cached in Redis (mock)")
+	key := fmt.Sprintf("check_result:%s", result.CheckID)
+	data, err := json.Marshal(result)
+	if err != nil {
+		cs.logger.Error("Failed to marshal result for caching",
+			logger.String("check_id", result.CheckID),
+			logger.Error(err),
+		)
+		return errors.Wrap(err, errors.ErrInternal, "failed to marshal result for caching")
+	}
+
+	// Устанавливаем в Redis с TTL 5 минут
+	err = cs.redisClient.Client.Set(ctx, key, data, 5*time.Minute).Err()
+	if err != nil {
+		cs.logger.Error("Failed to cache result in Redis",
+			logger.String("check_id", result.CheckID),
+			logger.String("key", key),
+			logger.Error(err),
+		)
+		return errors.Wrap(err, errors.ErrInternal, "failed to cache result in Redis")
+	}
+
+	cs.logger.Debug("Result cached in Redis successfully",
+		logger.String("check_id", result.CheckID),
+		logger.String("key", key),
+	)
+
 	return nil
 }
 
 // sendToIncidentManager отправляет инцидент в Incident Manager
-func (cs *CheckService) sendToIncidentManager(ctx context.Context, result *domain.CheckResult) error {
+func (cs *CheckService) sendToIncidentManager(ctx context.Context, result *domain.CheckResult, tenantID string) error {
 	cs.logger.Info("Sending incident to incident manager",
 		logger.String("check_id", result.CheckID),
+		logger.String("tenant_id", tenantID),
 		logger.String("error", result.Error),
 	)
 
-	// TODO: Реализовать отправку в Incident Manager
-	// incident := incident.Incident{
-	//     CheckID:     result.CheckID,
-	//     ExecutionID: result.ExecutionID,
-	//     Error:       result.Error,
-	//     StatusCode:  result.StatusCode,
-	//     CreatedAt:   result.CheckedAt,
-	// }
-	// 
-	// err := cs.incidentManager.Create(ctx, incident)
-	// if err != nil {
-	//     return errors.Wrap(err, errors.ErrInternal, "failed to send incident")
-	// }
+	if cs.incidentManager == nil {
+		cs.logger.Warn("Incident manager is not initialized, skipping incident creation")
+		return nil
+	}
 
-	cs.logger.Info("Incident sent to incident manager (mock)")
+	// Создаем инцидент из результата проверки
+	incident := CreateIncidentFromCheckResult(result, tenantID)
+
+	// Отправляем в Incident Manager
+	createdIncident, err := cs.incidentManager.CreateIncident(ctx, incident)
+	if err != nil {
+		cs.logger.Error("Failed to send incident to incident manager",
+			logger.String("check_id", result.CheckID),
+			logger.String("tenant_id", tenantID),
+			logger.Error(err),
+		)
+		return errors.Wrap(err, errors.ErrInternal, "failed to send incident")
+	}
+
+	cs.logger.Info("Incident sent to incident manager successfully",
+		logger.String("check_id", result.CheckID),
+		logger.String("tenant_id", tenantID),
+		logger.String("incident_id", createdIncident.ID),
+		logger.String("incident_status", string(createdIncident.Status)),
+		logger.String("incident_severity", string(createdIncident.Severity)),
+	)
+
 	return nil
 }
 
@@ -268,22 +322,44 @@ func (cs *CheckService) GetCachedResult(ctx context.Context, checkID string) (*d
 		logger.String("check_id", checkID),
 	)
 
-	// TODO: Реализовать получение из Redis
-	// key := fmt.Sprintf("check_result:%s", checkID)
-	// data, err := cs.redisClient.Get(ctx, key).Result()
-	// if err != nil {
-	//     if err == redis.Nil {
-	//         return nil, nil // Не найдено в кеше
-	//     }
-	//     return nil, errors.Wrap(err, errors.ErrInternal, "failed to get cached result")
-	// }
-	// 
-	// var result domain.CheckResult
-	// err = json.Unmarshal([]byte(data), &result)
-	// if err != nil {
-	//     return nil, errors.Wrap(err, errors.ErrInternal, "failed to unmarshal cached result")
-	// }
+	if cs.redisClient == nil {
+		cs.logger.Warn("Redis client is not initialized, returning nil")
+		return nil, nil
+	}
 
-	cs.logger.Debug("No cached result found (mock)")
-	return nil, nil
+	key := fmt.Sprintf("check_result:%s", checkID)
+	data, err := cs.redisClient.Client.Get(ctx, key).Result()
+	if err != nil {
+		if err.Error() == "redis: nil" {
+			cs.logger.Debug("No cached result found",
+				logger.String("check_id", checkID),
+				logger.String("key", key),
+			)
+			return nil, nil // Не найдено в кеше
+		}
+		cs.logger.Error("Failed to get cached result",
+			logger.String("check_id", checkID),
+			logger.String("key", key),
+			logger.Error(err),
+		)
+		return nil, errors.Wrap(err, errors.ErrInternal, "failed to get cached result")
+	}
+
+	var result domain.CheckResult
+	err = json.Unmarshal([]byte(data), &result)
+	if err != nil {
+		cs.logger.Error("Failed to unmarshal cached result",
+			logger.String("check_id", checkID),
+			logger.String("key", key),
+			logger.Error(err),
+		)
+		return nil, errors.Wrap(err, errors.ErrInternal, "failed to unmarshal cached result")
+	}
+
+	cs.logger.Debug("Cached result retrieved successfully",
+		logger.String("check_id", checkID),
+		logger.String("key", key),
+	)
+
+	return &result, nil
 }

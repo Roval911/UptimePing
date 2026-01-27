@@ -30,16 +30,60 @@ func AuthInterceptor(log logger.Logger) grpc.UnaryClientInterceptor {
 		// Логируем начало вызова
 		log.Debug("gRPC call started", logFields...)
 
-		// Извлекаем JWT токен из контекста
-		//TODO В реальном приложении токен может извлекаться из разных источников
-		// Например, из контекста HTTP запроса, который был передан в gRPC контекст
-		token, ok := ctx.Value("jwt_token").(string)
-		if !ok {
-			log.Warn("JWT token not found in context", logFields...)
+		// Извлекаем JWT токен из различных источников контекста
+		// Приоритет: 1. Прямой jwt_token из контекста, 2. HTTP заголовки, 3. Metadata
+		var token string
+		var found bool
+
+		// 1. Проверяем прямой токен в контексте
+		if directToken, ok := ctx.Value("jwt_token").(string); ok && directToken != "" {
+			token = directToken
+			found = true
+			log.Debug("JWT token found in context", logFields...)
+		}
+
+		// 2. Проверяем HTTP заголовки в контексте (для gateway-to-service вызовов)
+		if !found {
+			if httpHeaders, ok := ctx.Value("http_headers").(map[string][]string); ok {
+				if authHeaders := httpHeaders["authorization"]; len(authHeaders) > 0 {
+					authHeader := authHeaders[0]
+					if len(authHeader) >= 7 && authHeader[:7] == "Bearer " {
+						token = authHeader[7:]
+						found = true
+						log.Debug("JWT token found in HTTP headers", logFields...)
+					}
+				}
+			}
+		}
+
+		// 3. Проверяем существующую metadata (для service-to-service вызовов)
+		if !found {
+			if md, ok := metadata.FromOutgoingContext(ctx); ok {
+				if authHeaders := md["authorization"]; len(authHeaders) > 0 {
+					authHeader := authHeaders[0]
+					if len(authHeader) >= 7 && authHeader[:7] == "Bearer " {
+						token = authHeader[7:]
+						found = true
+						log.Debug("JWT token found in outgoing metadata", logFields...)
+					}
+				}
+			}
+		}
+
+		if !found {
+			log.Warn("JWT token not found in any context source", logFields...)
 			// Продолжаем вызов без токена - некоторые методы могут быть публичными
 		} else {
-			// Добавляем токен в metadata
-			ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+			// Валидация формата токена
+			if len(token) < 10 {
+				log.Warn("JWT token too short", 
+					append(logFields, logger.Int("token_length", len(token)))...)
+			} else {
+				// Добавляем токен в metadata
+				ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+				log.Debug("JWT token added to metadata", 
+					append(logFields, logger.Int("token_length", len(token)))...)
+			}
 		}
 
 		// Выполняем вызов

@@ -3,6 +3,9 @@ package database
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -132,8 +135,149 @@ func (p *Postgres) HealthCheck(ctx context.Context) error {
 }
 
 // GetConfig возвращает конфигурацию из переменных окружения
-// TODO В реальном приложении здесь будет интеграция с системой конфигурации
 func GetConfig() *Config {
-	// TODO: Реализовать загрузку из переменных окружения
-	return NewConfig()
+	config := NewConfig()
+	
+	// Загружаем значения из переменных окружения, если они установлены
+	if host := os.Getenv("DB_HOST"); host != "" {
+		config.Host = host
+	}
+	if port := os.Getenv("DB_PORT"); port != "" {
+		if p, err := strconv.Atoi(port); err == nil {
+			config.Port = p
+		}
+	}
+	if user := os.Getenv("DB_USER"); user != "" {
+		config.User = user
+	}
+	if password := os.Getenv("DB_PASSWORD"); password != "" {
+		config.Password = password
+	}
+	if database := os.Getenv("DB_NAME"); database != "" {
+		config.Database = database
+	}
+	if sslmode := os.Getenv("DB_SSLMODE"); sslmode != "" {
+		config.SSLMode = sslmode
+	}
+	
+	// Пул соединений
+	if maxConns := os.Getenv("DB_MAX_CONNS"); maxConns != "" {
+		if mc, err := strconv.Atoi(maxConns); err == nil {
+			config.MaxConns = mc
+		}
+	}
+	if minConns := os.Getenv("DB_MIN_CONNS"); minConns != "" {
+		if mc, err := strconv.Atoi(minConns); err == nil {
+			config.MinConns = mc
+		}
+	}
+	
+	// Таймауты
+	if maxConnLife := os.Getenv("DB_MAX_CONN_LIFE"); maxConnLife != "" {
+		if mcl, err := time.ParseDuration(maxConnLife); err == nil {
+			config.MaxConnLife = mcl
+		}
+	}
+	if maxConnIdle := os.Getenv("DB_MAX_CONN_IDLE"); maxConnIdle != "" {
+		if mci, err := time.ParseDuration(maxConnIdle); err == nil {
+			config.MaxConnIdle = mci
+		}
+	}
+	if healthCheck := os.Getenv("DB_HEALTH_CHECK"); healthCheck != "" {
+		if hc, err := time.ParseDuration(healthCheck); err == nil {
+			config.HealthCheck = hc
+		}
+	}
+	
+	// Retry настройки
+	if maxRetries := os.Getenv("DB_MAX_RETRIES"); maxRetries != "" {
+		if mr, err := strconv.Atoi(maxRetries); err == nil {
+			config.MaxRetries = mr
+		}
+	}
+	if retryInterval := os.Getenv("DB_RETRY_INTERVAL"); retryInterval != "" {
+		if ri, err := time.ParseDuration(retryInterval); err == nil {
+			config.RetryInterval = ri
+		}
+	}
+	
+	// Поддержка DATABASE_URL для совместимости
+	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
+		// Парсим DATABASE_URL и извлекаем параметры
+		if parsedConfig := parseDatabaseURL(databaseURL); parsedConfig != nil {
+			// Применяем только те параметры, которые не были установлены через переменные окружения
+			if config.Host == "localhost" && parsedConfig.Host != "" {
+				config.Host = parsedConfig.Host
+			}
+			if config.Port == 5432 && parsedConfig.Port != 0 {
+				config.Port = parsedConfig.Port
+			}
+			if config.User == "postgres" && parsedConfig.User != "" {
+				config.User = parsedConfig.User
+			}
+			if config.Password == "postgres" && parsedConfig.Password != "" {
+				config.Password = parsedConfig.Password
+			}
+			if config.Database == "postgres" && parsedConfig.Database != "" {
+				config.Database = parsedConfig.Database
+			}
+			if config.SSLMode == "disable" && parsedConfig.SSLMode != "" {
+				config.SSLMode = parsedConfig.SSLMode
+			}
+		}
+	}
+	
+	return config
+}
+
+// parseDatabaseURL парсит DATABASE_URL и извлекает параметры подключения
+func parseDatabaseURL(databaseURL string) *Config {
+	// Простой парсер для postgres://user:password@host:port/database
+	if !strings.HasPrefix(databaseURL, "postgres://") && !strings.HasPrefix(databaseURL, "postgresql://") {
+		return nil
+	}
+	
+	// Удаляем префикс
+	url := strings.TrimPrefix(databaseURL, "postgres://")
+	url = strings.TrimPrefix(url, "postgresql://")
+	
+	// Разделяем на части
+	parts := strings.Split(url, "@")
+	if len(parts) < 2 {
+		return nil
+	}
+	
+	// Парсим user:password
+	authParts := strings.Split(parts[0], ":")
+	if len(authParts) < 2 {
+		return nil
+	}
+	
+	// Парсим host:port/database
+	hostParts := strings.Split(parts[1], "/")
+	if len(hostParts) < 2 {
+		return nil
+	}
+	
+	hostPort := strings.Split(hostParts[0], ":")
+	host := "localhost"
+	port := 5432
+	
+	if len(hostPort) > 1 {
+		host = hostPort[0]
+		if p, err := strconv.Atoi(hostPort[1]); err == nil {
+			port = p
+		}
+	} else {
+		host = hostPort[0]
+	}
+	
+	return &Config{
+		Host:     host,
+		Port:     port,
+		User:     authParts[0],
+		Password: authParts[1],
+		Database: hostParts[1],
+		SSLMode:  "disable",
+	}
 }

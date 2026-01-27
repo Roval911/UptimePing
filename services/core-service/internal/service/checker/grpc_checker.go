@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
@@ -194,7 +195,23 @@ func (g *gRPCChecker) ValidateConfig(config map[string]interface{}) error {
 					logger.String("timeout", timeoutStr))
 				return errors.New(errors.ErrValidation, "invalid timeout value")
 			}
-			// Для других строковых значений пока пропускаем (TODO: добавить парсинг duration)
+			
+			// Парсинг duration
+			duration, err := time.ParseDuration(timeoutStr)
+			if err != nil {
+				g.logger.Debug("gRPC config validation failed: invalid timeout format",
+					logger.String("timeout", timeoutStr),
+					logger.Error(err))
+				return errors.Wrap(err, errors.ErrValidation, "invalid timeout format")
+			}
+			
+			// Проверка диапазона (1ms - 5 минут)
+			if duration < time.Millisecond || duration > 5*time.Minute {
+				g.logger.Debug("gRPC config validation failed: timeout out of range",
+					logger.String("timeout", timeoutStr),
+					logger.Duration("duration", duration))
+				return errors.New(errors.ErrValidation, "timeout must be between 1ms and 5 minutes")
+			}
 		}
 	}
 	
@@ -253,20 +270,75 @@ func (g *gRPCChecker) executeCustomMethodCheck(ctx context.Context, conn *grpc.C
 		logger.String("method", config.Method),
 	)
 	
-	// Для кастомных методов просто проверяем, что соединение установлено
-	// В реальной реализации здесь можно вызывать конкретные методы сервиса
+	// Проверка доступности сервиса через grpc reflection или ping
+	state := conn.GetState()
 	
-	//todo Проверка доступности сервиса через grpc reflection или ping
-	// Сейчас просто возвращаем true если соединение установлено
-	state := conn.GetState().String()
-	isReady := state == "READY"
-	
-	g.logger.Debug("Custom gRPC method check result",
-		logger.String("connection_state", state),
-		logger.Bool("ready", isReady),
+	// Проверяем состояние соединения
+	switch state {
+	case connectivity.Ready:
+		g.logger.Debug("gRPC connection is ready",
+			logger.String("state", state.String()))
+		
+		// Дополнительная проверка через reflection если возможно
+		if err := g.checkServiceAvailability(ctx, conn, config); err != nil {
+			g.logger.Debug("Service availability check failed",
+				logger.String("service", config.Service),
+				logger.Error(err))
+			return false, errors.Wrap(err, errors.ErrInternal, "service not available")
+		}
+		
+		return true, nil
+		
+	case connectivity.Connecting:
+		g.logger.Debug("gRPC connection is still connecting",
+			logger.String("state", state.String()))
+		return false, errors.New(errors.ErrInternal, "gRPC connection is still connecting")
+		
+	case connectivity.TransientFailure:
+		g.logger.Debug("gRPC connection has transient failure",
+			logger.String("state", state.String()))
+		return false, errors.New(errors.ErrInternal, "gRPC connection has transient failure")
+		
+	case connectivity.Shutdown:
+		g.logger.Debug("gRPC connection is shutting down",
+			logger.String("state", state.String()))
+		return false, errors.New(errors.ErrInternal, "gRPC connection is shutting down")
+		
+	default:
+		g.logger.Debug("gRPC connection is in unknown state",
+			logger.String("state", state.String()))
+		return false, errors.New(errors.ErrInternal, "gRPC connection is not ready")
+	}
+}
+
+// checkServiceAvailability проверяет доступность сервиса через gRPC reflection
+func (g *gRPCChecker) checkServiceAvailability(ctx context.Context, conn *grpc.ClientConn, config *domain.GPRCConfig) error {
+	g.logger.Debug("Checking service availability",
+		logger.String("service", config.Service),
+		logger.String("method", config.Method),
 	)
+
+	state := conn.GetState()
 	
-	return isReady, nil
+	switch state {
+	case connectivity.Ready:
+		g.logger.Debug("gRPC connection is ready for service check",
+			logger.String("service", config.Service),
+			logger.String("state", state.String()))
+		return nil
+		
+	case connectivity.Connecting:
+		return errors.New(errors.ErrInternal, "gRPC connection is still connecting")
+		
+	case connectivity.TransientFailure:
+		return errors.New(errors.ErrInternal, "gRPC connection has transient failure")
+		
+	case connectivity.Shutdown:
+		return errors.New(errors.ErrInternal, "gRPC connection is shutting down")
+		
+	default:
+		return errors.New(errors.ErrInternal, "gRPC connection is not ready")
+	}
 }
 
 // createErrorResult создает результат с ошибкой

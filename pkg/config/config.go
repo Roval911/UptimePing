@@ -30,6 +30,7 @@ type Config struct {
 	Metrics      MetricsConfig   `json:"metrics" yaml:"metrics"`
 	Health       HealthConfig    `json:"health" yaml:"health"`
 	Scheduler    SchedulerConfig `json:"scheduler" yaml:"scheduler"`
+	IncidentManager IncidentManagerConfig `json:"incident_manager" yaml:"incident_manager"`
 }
 
 // ServerConfig представляет конфигурацию сервера. Содержит настройки хоста и порта для HTTP-сервера.

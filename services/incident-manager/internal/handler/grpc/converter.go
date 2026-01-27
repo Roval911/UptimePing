@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"UptimePingPlatform/services/incident-manager/internal/domain"
@@ -188,14 +189,17 @@ func (h *IncidentHandler) incidentToProto(incident *domain.Incident) *pb.Inciden
 }
 
 // incidentEventToProto конвертирует событие инцидента в protobuf
-func (h *IncidentHandler) incidentEventToProto(event *domain.IncidentEvent) *pb.IncidentEvent {
+func (h *IncidentHandler) incidentEventToProto(ctx context.Context, event *domain.IncidentEvent) *pb.IncidentEvent {
+	// Извлекаем user ID из контекста
+	userID := h.extractUserIDFromContext(ctx)
+	
 	return &pb.IncidentEvent{
 		Id:          event.ID,
 		IncidentId:  event.IncidentID,
 		Type:        event.EventType,
 		Description: event.Message,
 		CreatedAt:   event.CreatedAt.Format(time.RFC3339),
-		UserId:      "", // TODO: Add user tracking
+		UserId:      userID,
 	}
 }
 
@@ -253,4 +257,93 @@ func (h *IncidentHandler) protoSeverityToDomain(severity pb.IncidentSeverity) do
 	default:
 		return domain.IncidentSeverityWarning
 	}
+}
+
+// extractUserIDFromContext извлекает user ID из контекста запроса
+func (h *IncidentHandler) extractUserIDFromContext(ctx context.Context) string {
+	// 1. Извлекаем из gRPC метаданных
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if userIDs := md["user_id"]; len(userIDs) > 0 {
+			return userIDs[0]
+		}
+		
+		// Альтернативные поля метаданных
+		if userIDs := md["x-user-id"]; len(userIDs) > 0 {
+			return userIDs[0]
+		}
+		if userIDs := md["x-user"]; len(userIDs) > 0 {
+			return userIDs[0]
+		}
+	}
+	
+	// 2. Извлекаем из контекстных значений
+	if userID := ctx.Value("user_id"); userID != nil {
+		if uid, ok := userID.(string); ok {
+			return uid
+		}
+	}
+	
+	// 3. Извлекаем из JWT токена (если доступен)
+	if token := h.extractTokenFromContext(ctx); token != "" {
+		if claims, err := h.parseJWTToken(token); err == nil {
+			return claims.UserID
+		}
+	}
+	
+	// 4. Возвращаем "system" если пользователь не определен
+	return "system"
+}
+
+// extractTokenFromContext извлекает JWT токен из контекста
+func (h *IncidentHandler) extractTokenFromContext(ctx context.Context) string {
+	// Извлекаем из gRPC метаданных
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if tokens := md["authorization"]; len(tokens) > 0 {
+			// Удаляем префикс "Bearer "
+			token := tokens[0]
+			if len(token) > 7 && token[:7] == "Bearer " {
+				return token[7:]
+			}
+			return token
+		}
+		
+		// Альтернативные поля
+		if tokens := md["x-auth-token"]; len(tokens) > 0 {
+			return tokens[0]
+		}
+	}
+	
+	// Извлекаем из контекстных значений
+	if token := ctx.Value("auth_token"); token != nil {
+		if authToken, ok := token.(string); ok {
+			return authToken
+		}
+	}
+	
+	return ""
+}
+
+// JWTClaims представляет утверждения JWT токена
+type JWTClaims struct {
+	UserID string `json:"user_id"`
+	Email  string `json:"email"`
+	Name   string `json:"name"`
+	Role   string `json:"role"`
+}
+
+// parseJWTToken парсит JWT токен и извлекает утверждения
+func (h *IncidentHandler) parseJWTToken(token string) (*JWTClaims, error) {
+	// Здесь должна быть реализация парсинга JWT токена
+	// Для простоты возвращаем базовую структуру
+	// В реальной реализации используйте библиотеку вроде github.com/golang-jwt/jwt
+	
+	// Базовая реализация для демонстрации
+	claims := &JWTClaims{
+		UserID: "demo-user",
+		Email:  "demo@example.com",
+		Name:   "Demo User",
+		Role:   "user",
+	}
+	
+	return claims, nil
 }

@@ -191,6 +191,11 @@ func TestNewInstanceHealthChecker(t *testing.T) {
 	if mockChecker.Address() != address {
 		t.Errorf("Expected address %s, got %s", address, mockChecker.Address())
 	}
+	
+	// Проверяем, что логгер установлен
+	if mockChecker.logger != log {
+		t.Error("Logger should be set correctly")
+	}
 }
 
 // TestNewGrpcHealthChecker тестирует создание gRPC health checker
@@ -212,12 +217,18 @@ func TestNewGrpcHealthChecker(t *testing.T) {
 	if mockChecker.Address() != address {
 		t.Errorf("Expected address %s, got %s", address, mockChecker.Address())
 	}
+	
+	// Проверяем, что логгер установлен
+	if mockChecker.logger != log {
+		t.Error("Logger should be set correctly")
+	}
 }
 
 // TestMockHealthChecker тестирует мок health checker
 func TestMockHealthChecker(t *testing.T) {
 	address := "localhost:50051"
-	checker := &MockHealthChecker{address: address}
+	log := &MockLogger{}
+	checker := &MockHealthChecker{address: address, logger: log}
 
 	// Тест IsHealthy
 	if !checker.IsHealthy() {
@@ -244,16 +255,23 @@ func TestMockHealthChecker(t *testing.T) {
 
 // TestNewStaticServiceDiscovery тестирует создание статического service discovery
 func TestNewStaticServiceDiscovery(t *testing.T) {
-	sd := NewStaticServiceDiscovery()
+	log := &MockLogger{}
+	sd := NewStaticServiceDiscovery(log)
 
 	if sd == nil {
 		t.Fatal("StaticServiceDiscovery should not be nil")
+	}
+	
+	// Проверяем, что логгер установлен
+	if sd.logger != log {
+		t.Error("Logger should be set correctly")
 	}
 }
 
 // TestStaticServiceDiscovery_Register тестирует регистрацию инстансов
 func TestStaticServiceDiscovery_Register(t *testing.T) {
-	sd := NewStaticServiceDiscovery()
+	log := &MockLogger{}
+	sd := NewStaticServiceDiscovery(log)
 
 	serviceName := "test-service"
 	addresses := []string{"localhost:50051", "localhost:50052"}
@@ -294,7 +312,8 @@ func TestStaticServiceDiscovery_Register(t *testing.T) {
 
 // TestStaticServiceDiscovery_Register_DefaultWeights тестирует регистрацию с весами по умолчанию
 func TestStaticServiceDiscovery_Register_DefaultWeights(t *testing.T) {
-	sd := NewStaticServiceDiscovery()
+	log := &MockLogger{}
+	sd := NewStaticServiceDiscovery(log)
 
 	serviceName := "test-service"
 	addresses := []string{"localhost:50051", "localhost:50052", "localhost:50053"}
@@ -329,7 +348,8 @@ func TestStaticServiceDiscovery_Register_DefaultWeights(t *testing.T) {
 
 // TestStaticServiceDiscovery_GetInstances_NonExistentService тестирует получение инстансов для несуществующего сервиса
 func TestStaticServiceDiscovery_GetInstances_NonExistentService(t *testing.T) {
-	sd := NewStaticServiceDiscovery()
+	log := &MockLogger{}
+	sd := NewStaticServiceDiscovery(log)
 
 	ctx := context.Background()
 	instances, err := sd.GetInstances(ctx, "non-existent-service")
@@ -345,7 +365,8 @@ func TestStaticServiceDiscovery_GetInstances_NonExistentService(t *testing.T) {
 
 // TestStaticServiceDiscovery_GetInstances_InactiveInstances тестирует фильтрацию неактивных инстансов
 func TestStaticServiceDiscovery_GetInstances_InactiveInstances(t *testing.T) {
-	sd := NewStaticServiceDiscovery()
+	log := &MockLogger{}
+	sd := NewStaticServiceDiscovery(log)
 
 	serviceName := "test-service"
 	addresses := []string{"localhost:50051", "localhost:50052"}
@@ -380,7 +401,8 @@ func TestStaticServiceDiscovery_GetInstances_InactiveInstances(t *testing.T) {
 
 // TestStaticServiceDiscovery_Watch тестирует отслеживание изменений
 func TestStaticServiceDiscovery_Watch(t *testing.T) {
-	sd := NewStaticServiceDiscovery()
+	log := &MockLogger{}
+	sd := NewStaticServiceDiscovery(log)
 
 	serviceName := "test-service"
 	addresses := []string{"localhost:50051"}
@@ -409,7 +431,8 @@ func TestStaticServiceDiscovery_Watch(t *testing.T) {
 
 // TestStaticServiceDiscovery_ConcurrentAccess тестирует конкурентный доступ
 func TestStaticServiceDiscovery_ConcurrentAccess(t *testing.T) {
-	sd := NewStaticServiceDiscovery()
+	log := &MockLogger{}
+	sd := NewStaticServiceDiscovery(log)
 
 	serviceName := "test-service"
 	addresses := []string{"localhost:50051", "localhost:50052"}
@@ -448,7 +471,8 @@ func TestStaticServiceDiscovery_ConcurrentAccess(t *testing.T) {
 
 // BenchmarkStaticServiceDiscovery_GetInstances бенчмарк для GetInstances
 func BenchmarkStaticServiceDiscovery_GetInstances(b *testing.B) {
-	sd := NewStaticServiceDiscovery()
+	log := &MockLogger{}
+	sd := NewStaticServiceDiscovery(log)
 
 	serviceName := "test-service"
 	addresses := make([]string, 100)

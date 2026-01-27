@@ -141,7 +141,7 @@ func main() {
 	grpcServer := grpc.NewServer()
 
 	// Регистрация обработчиков
-	authHandler := handlers.NewAuthHandler(authService, appLogger)
+	authHandler := handlers.NewAuthHandler(authService, jwtManager, appLogger)
 	grpc_auth.RegisterAuthServiceServer(grpcServer, authHandler)
 
 	// Включаем reflection для разработки

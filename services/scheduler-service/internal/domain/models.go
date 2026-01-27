@@ -4,6 +4,9 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -209,18 +212,21 @@ func (s *Schedule) ShouldRun() bool {
 }
 
 // UpdateNextRun обновляет время следующего запуска на основе cron выражения
-// В реальной реализации здесь будет использоваться библиотека для работы с cron
 func (s *Schedule) UpdateNextRun() error {
-	// TODO: Реализовать парсинг cron выражения и вычисление следующего времени
-	// Например, с использованием github.com/robfig/cron/v3
+	if s.CronExpression == "" {
+		return fmt.Errorf("cron expression is required")
+	}
 
 	now := time.Now()
 	s.LastRun = &now
 
-	// Временная реализация - добавляем час
-	nextRun := now.Add(time.Hour)
-	s.NextRun = &nextRun
+	// Вычисляем следующее время запуска
+	nextRun, err := calculateNextRunTime(s.CronExpression, now)
+	if err != nil {
+		return fmt.Errorf("failed to calculate next run time: %w", err)
+	}
 
+	s.NextRun = &nextRun
 	return nil
 }
 
@@ -237,10 +243,9 @@ func (s *Schedule) Validate() error {
 	}
 
 	// Валидация cron выражения
-	// TODO: Добавить валидацию cron выражения
-	// if err := validateCronExpression(s.CronExpression); err != nil {
-	//     return fmt.Errorf("invalid cron expression: %w", err)
-	// }
+	if err := validateCronExpression(s.CronExpression); err != nil {
+		return fmt.Errorf("invalid cron expression: %w", err)
+	}
 
 	// Валидация приоритета
 	if s.Priority < PriorityLow || s.Priority > PriorityCritical {
@@ -311,4 +316,259 @@ func NewTask(checkID, tenantID string, priority Priority) *Task {
 // В реальной реализации здесь будет использоваться UUID генератор
 func generateID() string {
 	return fmt.Sprintf("task_%d", time.Now().UnixNano())
+}
+
+// validateCronExpression валидирует cron выражение
+func validateCronExpression(cronExpr string) error {
+	if cronExpr == "" {
+		return fmt.Errorf("cron expression cannot be empty")
+	}
+
+	// Разделяем выражение на 5 полей (minute hour day month weekday)
+	fields := strings.Fields(cronExpr)
+	if len(fields) != 5 {
+		return fmt.Errorf("cron expression must have exactly 5 fields (minute hour day month weekday), got %d", len(fields))
+	}
+
+	// Regex паттерны для каждого поля
+	patterns := []string{
+		`^(\*|[0-5]?\d|([0-5]?\d-[0-5]?\d)(/[0-5]?\d)?|([0-5]?\d)(,[0-5]?\d)*)$`,           // minute: 0-59
+		`^(\*|[01]?\d|2[0-3]|([01]?\d-2[0-3])(/[01]?\d)?|([01]?\d|2[0-3])(,([01]?\d|2[0-3]))*)$`, // hour: 0-23
+		`^(\*|[12]?\d|3[01]|([12]?\d-3[01])(/[12]?\d)?|([12]?\d|3[01])(,([12]?\d|3[01]))*)$`, // day: 1-31
+		`^(\*|[1]?\d|([1]?\d-1[2])(/[1]?\d)?|([1]?\d)(,([1]?\d))*)$`,                     // month: 1-12
+		`^(\*|[0-6]|([0-6]-[0-6])(/[0-6])?|[0-6](,[0-6])*)$`,                                 // weekday: 0-6 (0=Sunday)
+	}
+
+	// Проверяем каждое поле
+	for i, field := range fields {
+		pattern := regexp.MustCompile(patterns[i])
+		if !pattern.MatchString(field) {
+			fieldNames := []string{"minute", "hour", "day", "month", "weekday"}
+			return fmt.Errorf("invalid %s field: %s", fieldNames[i], field)
+		}
+	}
+
+	return nil
+}
+
+// parseCronField парсит одно поле cron выражения
+func parseCronField(field string, min, max int) ([]int, error) {
+	var values []int
+
+	// Обработка wildcard
+	if field == "*" {
+		for i := min; i <= max; i++ {
+			values = append(values, i)
+		}
+		return values, nil
+	}
+
+	// Обработка списков (например, "1,3,5")
+	if strings.Contains(field, ",") {
+		parts := strings.Split(field, ",")
+		for _, part := range parts {
+			val, err := strconv.Atoi(strings.TrimSpace(part))
+			if err != nil {
+				return nil, fmt.Errorf("invalid value in list: %s", part)
+			}
+			if val < min || val > max {
+				return nil, fmt.Errorf("value %d out of range [%d, %d]", val, min, max)
+			}
+			values = append(values, val)
+		}
+		return values, nil
+	}
+
+	// Обработка диапазонов (например, "1-5")
+	if strings.Contains(field, "-") {
+		parts := strings.Split(field, "-")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid range format: %s", field)
+		}
+
+		start, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil {
+			return nil, fmt.Errorf("invalid range start: %s", parts[0])
+		}
+
+		end, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil {
+			return nil, fmt.Errorf("invalid range end: %s", parts[1])
+		}
+
+		// Обработка шага (например, "1-5/2")
+		step := 1
+		if strings.Contains(parts[1], "/") {
+			stepParts := strings.Split(parts[1], "/")
+			if len(stepParts) != 2 {
+				return nil, fmt.Errorf("invalid step format: %s", parts[1])
+			}
+			stepVal, err := strconv.Atoi(strings.TrimSpace(stepParts[1]))
+			if err != nil {
+				return nil, fmt.Errorf("invalid step value: %s", stepParts[1])
+			}
+			if stepVal <= 0 {
+				return nil, fmt.Errorf("step must be positive, got %d", stepVal)
+			}
+			step = stepVal
+			end, err = strconv.Atoi(strings.TrimSpace(stepParts[0]))
+			if err != nil {
+				return nil, fmt.Errorf("invalid range end with step: %s", stepParts[0])
+			}
+		}
+
+		if start < min || start > max || end < min || end > max {
+			return nil, fmt.Errorf("range [%d, %d] out of bounds [%d, %d]", start, end, min, max)
+		}
+
+		if start > end {
+			return nil, fmt.Errorf("range start %d greater than end %d", start, end)
+		}
+
+		for i := start; i <= end; i += step {
+			values = append(values, i)
+		}
+		return values, nil
+	}
+
+	// Обработка шага с wildcard (например, "*/5")
+	if strings.Contains(field, "/") {
+		parts := strings.Split(field, "/")
+		if len(parts) != 2 || parts[0] != "*" {
+			return nil, fmt.Errorf("invalid step format: %s", field)
+		}
+
+		step, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil {
+			return nil, fmt.Errorf("invalid step value: %s", parts[1])
+		}
+		if step <= 0 {
+			return nil, fmt.Errorf("step must be positive, got %d", step)
+		}
+
+		for i := min; i <= max; i += step {
+			values = append(values, i)
+		}
+		return values, nil
+	}
+
+	// Обработка простого числа
+	val, err := strconv.Atoi(strings.TrimSpace(field))
+	if err != nil {
+		return nil, fmt.Errorf("invalid numeric value: %s", field)
+	}
+
+	if val < min || val > max {
+		return nil, fmt.Errorf("value %d out of range [%d, %d]", val, min, max)
+	}
+
+	values = append(values, val)
+	return values, nil
+}
+
+// calculateNextRunTime вычисляет следующее время запуска на основе cron выражения
+func calculateNextRunTime(cronExpr string, from time.Time) (time.Time, error) {
+	fields := strings.Fields(cronExpr)
+	if len(fields) != 5 {
+		return time.Time{}, fmt.Errorf("invalid cron expression format")
+	}
+
+	// Парсим каждое поле
+	minutes, err := parseCronField(fields[0], 0, 59)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid minute field: %w", err)
+	}
+
+	hours, err := parseCronField(fields[1], 0, 23)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid hour field: %w", err)
+	}
+
+	days, err := parseCronField(fields[2], 1, 31)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid day field: %w", err)
+	}
+
+	months, err := parseCronField(fields[3], 1, 12)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid month field: %w", err)
+	}
+
+	weekdays, err := parseCronField(fields[4], 0, 6)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid weekday field: %w", err)
+	}
+
+	// Ищем следующее время запуска
+	next := from.Add(time.Minute).Truncate(time.Minute)
+
+	// Максимальное количество итераций для предотвращения бесконечного цикла
+	maxIterations := 366 * 24 * 60 // примерно год вперед
+	for i := 0; i < maxIterations; i++ {
+		// Проверяем месяц
+		if !contains(months, int(next.Month())) {
+			next = time.Date(next.Year(), next.Month(), 1, 0, 0, 0, 0, next.Location()).AddDate(0, 1, 0)
+			continue
+		}
+
+		// Проверяем день (учитываем и день месяца, и день недели)
+		dayOfMonth := next.Day()
+		weekday := int(next.Weekday())
+		
+		// В cron: 0=Sunday, 6=Saturday
+		// В Go: Sunday=0, Monday=1, ..., Saturday=6
+		goWeekday := weekday
+		if goWeekday == 0 {
+			goWeekday = 7 // Преобразуем Sunday=0 в Sunday=7 для cron
+		}
+		cronWeekday := goWeekday % 7
+
+		dayMatch := contains(days, dayOfMonth)
+		weekdayMatch := contains(weekdays, cronWeekday)
+
+		// Если указаны и день месяца, и день недели, используется логика ИЛИ
+		// Если указан только один из них, используется логика И
+		if len(days) > 1 || days[0] != 1 || !contains(days, dayOfMonth) {
+			if len(weekdays) > 1 || weekdays[0] != 0 || !contains(weekdays, cronWeekday) {
+				// Оба поля указаны - используем ИЛИ
+				if !dayMatch && !weekdayMatch {
+					next = next.Add(time.Hour)
+					continue
+				}
+			}
+		} else {
+			// Только день недели указан
+			if !weekdayMatch {
+				next = next.Add(time.Hour)
+				continue
+			}
+		}
+
+		// Проверяем час
+		if !contains(hours, next.Hour()) {
+			next = time.Date(next.Year(), next.Month(), next.Day(), next.Hour()+1, 0, 0, 0, next.Location())
+			continue
+		}
+
+		// Проверяем минуту
+		if !contains(minutes, next.Minute()) {
+			next = next.Add(time.Minute)
+			continue
+		}
+
+		// Все условия выполнены
+		return next, nil
+	}
+
+	return time.Time{}, fmt.Errorf("failed to calculate next run time within reasonable timeframe")
+}
+
+// contains проверяет наличие элемента в слайсе
+func contains(slice []int, item int) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }

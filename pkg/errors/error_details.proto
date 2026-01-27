@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package errors;
+
+option go_package = "UptimePingPlatform/pkg/errors";
+
+// ErrorDetails представляет детали ошибки для gRPC
+message ErrorDetails {
+  string details = 1;
+}

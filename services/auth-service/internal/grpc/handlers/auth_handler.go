@@ -6,10 +6,14 @@ import (
 
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
+	pkgErrors "UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/validation"
 	"UptimePingPlatform/services/auth-service/internal/service"
+	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
 
 	grpc_auth "UptimePingPlatform/gen/go/proto/api/auth/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // AuthHandler реализация gRPC обработчиков для AuthService
@@ -17,14 +21,16 @@ type AuthHandler struct {
 	*grpcBase.BaseHandler
 	grpc_auth.UnimplementedAuthServiceServer
 	authService service.AuthService
+	jwtManager  jwt.JWTManager
 	validator   *validation.Validator
 }
 
 // NewAuthHandler создает новый экземпляр AuthHandler
-func NewAuthHandler(authService service.AuthService, logger logger.Logger) *AuthHandler {
+func NewAuthHandler(authService service.AuthService, jwtManager jwt.JWTManager, logger logger.Logger) *AuthHandler {
 	return &AuthHandler{
 		BaseHandler: grpcBase.NewBaseHandler(logger),
 		authService: authService,
+		jwtManager:  jwtManager,
 		validator:   validation.NewValidator(),
 	}
 }
@@ -66,7 +72,7 @@ func (h *AuthHandler) Register(ctx context.Context, req *grpc_auth.RegisterReque
 
 	tokenPair, err := h.authService.Register(ctx, req.Email, req.Password, req.TenantName)
 	if err != nil {
-		return nil, h.LogError(ctx, err, "Register", "")
+		return nil, h.convertError(err)
 	}
 
 	h.LogOperationSuccess(ctx, "Register", map[string]interface{}{
@@ -88,7 +94,7 @@ func (h *AuthHandler) Login(ctx context.Context, req *grpc_auth.LoginRequest) (*
 
 	tokenPair, err := h.authService.Login(ctx, req.Email, req.Password)
 	if err != nil {
-		return nil, h.LogError(ctx, err, "Login", "")
+		return nil, h.convertError(err)
 	}
 
 	h.LogOperationSuccess(ctx, "Login", map[string]interface{}{
@@ -108,12 +114,54 @@ func (h *AuthHandler) ValidateToken(ctx context.Context, req *grpc_auth.Validate
 		"token": req.Token,
 	})
 
-	// TODO: Реализовать валидацию токена через JWT manager
-	// Сейчас возвращаем заглушку для тестирования
+	// Валидация входных данных
+	if err := h.validator.ValidateRequiredFields(map[string]interface{}{
+		"token": req.Token,
+	}, map[string]string{
+		"token": "JWT token",
+	}); err != nil {
+		return nil, h.LogError(ctx, err, "ValidateToken", "validation failed")
+	}
+
+	// Валидация длины токена
+	if err := h.validator.ValidateStringLength(req.Token, "token", 10, 1000); err != nil {
+		return nil, h.LogError(ctx, err, "ValidateToken", "invalid token length")
+	}
+
+	// Валидация JWT токена через JWT manager
+	claims, err := h.jwtManager.ValidateAccessToken(req.Token)
+	if err != nil {
+		h.LogOperationSuccess(ctx, "ValidateToken", map[string]interface{}{
+			"is_valid": false,
+			"error":    err.Error(),
+		})
+		
+		return nil, status.Error(codes.Unauthenticated, fmt.Sprintf("invalid token: %v", err))
+	}
+
+	// Получаем email пользователя из базы данных
+	user, err := h.authService.GetUserByID(ctx, claims.UserID)
+	if err != nil {
+		h.LogOperationSuccess(ctx, "ValidateToken", map[string]interface{}{
+			"is_valid": false,
+			"error":    err.Error(),
+		})
+		
+		return nil, status.Error(codes.Unauthenticated, fmt.Sprintf("user not found: %v", err))
+	}
+
+	h.LogOperationSuccess(ctx, "ValidateToken", map[string]interface{}{
+		"is_valid":  true,
+		"user_id":   claims.UserID,
+		"tenant_id": claims.TenantID,
+		"email":     user.Email,
+		"is_admin":  claims.IsAdmin,
+	})
+
 	return &grpc_auth.ValidateTokenResponse{
-		UserId:   "test-user-id",
-		Email:    "test@example.com",
-		TenantId: "test-tenant-id",
+		UserId:   claims.UserID,
+		Email:    user.Email,
+		TenantId: claims.TenantID,
 		IsValid:  true,
 	}, nil
 }
@@ -126,7 +174,7 @@ func (h *AuthHandler) RefreshToken(ctx context.Context, req *grpc_auth.RefreshTo
 
 	tokenPair, err := h.authService.RefreshToken(ctx, req.RefreshToken)
 	if err != nil {
-		return nil, h.LogError(ctx, err, "RefreshToken", "")
+		return nil, h.convertError(err)
 	}
 
 	h.LogOperationSuccess(ctx, "RefreshToken", map[string]interface{}{
@@ -149,7 +197,7 @@ func (h *AuthHandler) Logout(ctx context.Context, req *grpc_auth.LogoutRequest) 
 
 	err := h.authService.Logout(ctx, req.UserId, req.RefreshToken)
 	if err != nil {
-		return nil, h.LogError(ctx, err, "Logout", "")
+		return nil, h.convertError(err)
 	}
 
 	h.LogOperationSuccess(ctx, "Logout", map[string]interface{}{
@@ -170,7 +218,7 @@ func (h *AuthHandler) CreateAPIKey(ctx context.Context, req *grpc_auth.CreateAPI
 
 	apiKeyPair, err := h.authService.CreateAPIKey(ctx, req.TenantId, req.Name)
 	if err != nil {
-		return nil, h.LogError(ctx, err, "CreateAPIKey", "")
+		return nil, h.convertError(err)
 	}
 
 	h.LogOperationSuccess(ctx, "CreateAPIKey", map[string]interface{}{
@@ -183,7 +231,7 @@ func (h *AuthHandler) CreateAPIKey(ctx context.Context, req *grpc_auth.CreateAPI
 		Secret:   apiKeyPair.Secret,
 		Name:     req.Name,
 		TenantId: req.TenantId,
-		ExpiresAt: 0, // TODO: добавить срок действия если нужно
+		ExpiresAt: 0, // API ключи не имеют срока действия в текущей реализации
 	}, nil
 }
 
@@ -195,7 +243,7 @@ func (h *AuthHandler) ValidateAPIKey(ctx context.Context, req *grpc_auth.Validat
 
 	claims, err := h.authService.ValidateAPIKey(ctx, req.Key, req.Secret)
 	if err != nil {
-		return nil, h.LogError(ctx, err, "ValidateAPIKey", "")
+		return nil, h.convertError(err)
 	}
 
 	h.LogOperationSuccess(ctx, "ValidateAPIKey", map[string]interface{}{
@@ -218,7 +266,7 @@ func (h *AuthHandler) RevokeAPIKey(ctx context.Context, req *grpc_auth.RevokeAPI
 
 	err := h.authService.RevokeAPIKey(ctx, req.KeyId)
 	if err != nil {
-		return nil, h.LogError(ctx, err, "RevokeAPIKey", "")
+		return nil, h.convertError(err)
 	}
 
 	h.LogOperationSuccess(ctx, "RevokeAPIKey", map[string]interface{}{
@@ -232,7 +280,37 @@ func (h *AuthHandler) RevokeAPIKey(ctx context.Context, req *grpc_auth.RevokeAPI
 
 // convertError конвертирует ошибки сервиса в gRPC ошибки
 func (h *AuthHandler) convertError(err error) error {
-	// TODO: Реализовать конвертацию ошибок в gRPC status errors
-	// Сейчас возвращаем базовую ошибку
-	return fmt.Errorf("auth service error: %w", err)
+	if err == nil {
+		return nil
+	}
+
+	// Используем pkg/errors для получения кода ошибки
+	if customErr, ok := err.(*pkgErrors.Error); ok {
+		switch customErr.Code {
+		case pkgErrors.ErrValidation:
+			return status.Error(codes.InvalidArgument, customErr.Message)
+		case pkgErrors.ErrUnauthorized:
+			return status.Error(codes.Unauthenticated, customErr.Message)
+		case pkgErrors.ErrForbidden:
+			return status.Error(codes.PermissionDenied, customErr.Message)
+		case pkgErrors.ErrNotFound:
+			return status.Error(codes.NotFound, customErr.Message)
+		case pkgErrors.ErrConflict:
+			return status.Error(codes.AlreadyExists, customErr.Message)
+		case pkgErrors.ErrInternal:
+			return status.Error(codes.Internal, customErr.Message)
+		default:
+			return status.Error(codes.Internal, customErr.Message)
+		}
+	}
+
+	// Для стандартных ошибок Go
+	switch {
+	case err == context.Canceled:
+		return status.Error(codes.Canceled, "request canceled")
+	case err == context.DeadlineExceeded:
+		return status.Error(codes.DeadlineExceeded, "deadline exceeded")
+	default:
+		return status.Error(codes.Internal, fmt.Sprintf("internal error: %v", err))
+	}
 }

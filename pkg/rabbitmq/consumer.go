@@ -129,10 +129,11 @@ func (c *Consumer) consume(ctx context.Context, queueName string, handler Messag
 				fmt.Printf("Error sending ack for delivery %d: %v\n", msg.DeliveryTag, err)
 			}
 		} else {
-			// Ошибка при обработке - отправляем nack с requeue
-			//TODO В реальном приложении здесь может быть логика retry с задержкой
-			// или отправка в DLQ после определенного количества попыток
-
+			// Ошибка при обработке - отправляем nack с retry логикой
+			
+			// Логируем ошибку обработки
+			fmt.Printf("Error processing message from queue %s: %v\n", queueName, err)
+			
 			// Проверяем количество попыток
 			retryCount := 0
 			if xDeath, ok := msg.Headers["x-death"]; ok {
@@ -140,16 +141,46 @@ func (c *Consumer) consume(ctx context.Context, queueName string, handler Messag
 					retryCount = len(deaths)
 				}
 			}
-
-			// Если попыток меньше 3, пробуем снова
-			if retryCount < 3 {
+			
+			// Конфигурация retry
+			maxRetries := c.config.MaxRetryAttempts
+			retryDelay := c.config.RetryDelay
+			
+			// Если попыток меньше максимальных, пробуем снова с задержкой
+			if retryCount < maxRetries {
+				fmt.Printf("Retrying message (attempt %d/%d) in %s\n", retryCount+1, maxRetries, retryDelay)
+				
+				// Добавляем задержку перед повторной попыткой
+				time.Sleep(retryDelay)
+				
+				// Отправляем nack с requeue для повторной обработки
 				if err := msg.Nack(false, true); err != nil {
 					fmt.Printf("Error sending nack with requeue for delivery %d: %v\n", msg.DeliveryTag, err)
 				}
 			} else {
-				// Иначе отправляем в DLQ
-				if err := msg.Nack(false, false); err != nil {
-					fmt.Printf("Error sending nack without requeue for delivery %d: %v\n", msg.DeliveryTag, err)
+				// Превысили максимальное количество попыток - отправляем в DLQ
+				fmt.Printf("Max retries (%d) exceeded, sending to DLQ\n", maxRetries)
+				
+				// Проверяем, настроен ли DLQ
+				if c.config.DLQ != "" && c.config.DLX != "" {
+					// Публикуем в DLQ
+					if err := c.publishToDLQ(msg, err); err != nil {
+						fmt.Printf("Error publishing to DLQ: %v\n", err)
+						// Если не удалось отправить в DLQ, просто отправляем nack без requeue
+						if err := msg.Nack(false, false); err != nil {
+							fmt.Printf("Error sending nack without requeue for delivery %d: %v\n", msg.DeliveryTag, err)
+						}
+					} else {
+						// Успешно отправили в DLQ, отправляем ack
+						if err := msg.Ack(false); err != nil {
+							fmt.Printf("Error sending ack after DLQ publish for delivery %d: %v\n", msg.DeliveryTag, err)
+						}
+					}
+				} else {
+					// DLQ не настроен, просто отправляем nack без requeue
+					if err := msg.Nack(false, false); err != nil {
+						fmt.Printf("Error sending nack without requeue for delivery %d: %v\n", msg.DeliveryTag, err)
+					}
 				}
 			}
 		}
@@ -168,6 +199,49 @@ func (c *Consumer) consume(ctx context.Context, queueName string, handler Messag
 		// Канал все еще открыт
 	}
 
+	return nil
+}
+
+// publishToDLQ публикует сообщение в Dead Letter Queue
+func (c *Consumer) publishToDLQ(msg amqp091.Delivery, processingError error) error {
+	// Проверяем, что канал инициализирован
+	if c.conn.Channel() == nil {
+		return fmt.Errorf("rabbitmq channel is not initialized")
+	}
+	
+	// Создаем DLQ сообщение с дополнительной информацией
+	dlqHeaders := amqp091.Table{
+		"x-original-queue": msg.RoutingKey,
+		"x-original-exchange": msg.Exchange,
+		"x-error-message": processingError.Error(),
+		"x-timestamp": time.Now().Format(time.RFC3339),
+		"x-retry-count": "0",
+	}
+	
+	// Добавляем информацию о предыдущих попытках
+	if xDeath, ok := msg.Headers["x-death"]; ok {
+		dlqHeaders["x-death"] = xDeath
+	}
+	
+	// Публикуем в DLQ
+	err := c.conn.Channel().Publish(
+		c.config.DLX,
+		c.config.DLQ,
+		false,
+		false,
+		amqp091.Publishing{
+			ContentType:  msg.ContentType,
+			Headers:      dlqHeaders,
+			Timestamp:    msg.Timestamp,
+			MessageId:    msg.MessageId,
+			Body:         msg.Body,
+		},
+	)
+	
+	if err != nil {
+		return fmt.Errorf("failed to publish to DLQ: %w", err)
+	}
+	
 	return nil
 }
 
