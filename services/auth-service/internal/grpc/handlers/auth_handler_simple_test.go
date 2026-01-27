@@ -3,15 +3,17 @@ package handlers
 import (
 	"context"
 	"testing"
+	"time"
 
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/auth-service/internal/service"
 	"UptimePingPlatform/services/auth-service/internal/domain"
-	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
+	jwtPkg "UptimePingPlatform/services/auth-service/internal/pkg/jwt"
 
 	grpc_auth "UptimePingPlatform/gen/go/proto/api/auth/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // SimpleMockAuthService мок для AuthService
@@ -48,6 +50,14 @@ func (m *SimpleMockAuthService) Logout(ctx context.Context, userID, tokenID stri
 	return args.Error(0)
 }
 
+func (m *SimpleMockAuthService) GetUserByID(ctx context.Context, userID string) (*domain.User, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
 func (m *SimpleMockAuthService) CreateAPIKey(ctx context.Context, tenantID, name string) (*service.APIKeyPair, error) {
 	args := m.Called(ctx, tenantID, name)
 	if args.Get(0) == nil {
@@ -69,14 +79,6 @@ func (m *SimpleMockAuthService) RevokeAPIKey(ctx context.Context, keyID string) 
 	return args.Error(0)
 }
 
-func (m *SimpleMockAuthService) GetUserByID(ctx context.Context, userID string) (*domain.User, error) {
-	args := m.Called(ctx, userID)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*domain.User), args.Error(1)
-}
-
 // SimpleMockLogger мок для логгера без testify/mock
 type SimpleMockLogger struct{}
 
@@ -91,42 +93,80 @@ func (m *SimpleMockLogger) Sync() error {
 	return nil
 }
 
-func createSimpleTestHandler() (*AuthHandler, *SimpleMockAuthService, *jwt.Manager) {
+// MockJWTManager мок для JWT менеджера
+type MockJWTManager struct {
+	mock.Mock
+}
+
+func (m *MockJWTManager) GenerateToken(userID, tenantID string, isAdmin bool) (string, string, error) {
+	args := m.Called(userID, tenantID, isAdmin)
+	return args.String(0), args.String(1), args.Error(2)
+}
+
+func (m *MockJWTManager) GenerateAccessToken(userID, tenantID string, isAdmin bool) (string, error) {
+	args := m.Called(userID, tenantID, isAdmin)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockJWTManager) GenerateRefreshToken(userID, tenantID string, isAdmin bool) (string, error) {
+	args := m.Called(userID, tenantID, isAdmin)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockJWTManager) ValidateAccessToken(token string) (*jwtPkg.TokenClaims, error) {
+	args := m.Called(token)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*jwtPkg.TokenClaims), args.Error(1)
+}
+
+func (m *MockJWTManager) ValidateRefreshToken(token string) (*jwtPkg.TokenClaims, error) {
+	args := m.Called(token)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*jwtPkg.TokenClaims), args.Error(1)
+}
+
+func createSimpleTestHandler() (*AuthHandler, *SimpleMockAuthService, *MockJWTManager) {
 	mockAuthService := &SimpleMockAuthService{}
 	mockLogger := &SimpleMockLogger{}
+	mockJWTManager := &MockJWTManager{}
 	
-	// Создаем JWT менеджер с большим сроком действия для тестов
-	jwtManager := jwt.NewManager(
-		"test-access-secret-key-12345678901234567890",
-		"test-refresh-secret-key-12345678901234567890", 
-		86400*7, // 7 дней
-		86400*30, // 30 дней
-	)
-
-	handler := NewAuthHandler(mockAuthService, jwtManager, mockLogger)
-	return handler, mockAuthService, jwtManager
+	handler := NewAuthHandler(mockAuthService, mockJWTManager, mockLogger)
+	return handler, mockAuthService, mockJWTManager
 }
 
 func TestAuthHandler_ValidateToken_ValidToken(t *testing.T) {
-	// Создаем JWT менеджер с большим сроком действия
-	jwtManager := jwt.NewManager(
-		"test-access-secret-key-12345678901234567890",
-		"test-refresh-secret-key-12345678901234567890", 
-		86400*7, // 7 дней
-		86400*30, // 30 дней
-	)
+	handler, mockAuthService, jwtManager := createSimpleTestHandler()
+	
+	// Настраиваем мок для возврата пользователя
+	mockAuthService.On("GetUserByID", mock.Anything, "user-123").Return(&domain.User{
+		ID:        "user-123",
+		Email:     "test@example.com",
+		TenantID:  "tenant-456",
+		CreatedAt: time.Now(),
+	}, nil)
 
-	// Создаем handler с этим JWT manager
-	mockAuthService := &SimpleMockAuthService{}
-	mockLogger := &SimpleMockLogger{}
-	handler := NewAuthHandler(mockAuthService, jwtManager, mockLogger)
-
-	// Создаем валидный JWT токен
-	token, _, err := jwtManager.GenerateToken("user-123", "tenant-456", false)
-	assert.NoError(t, err)
+	// Настраиваем мок для JWT валидации
+	validClaims := &jwtPkg.TokenClaims{
+		UserID:    "user-123",
+		TenantID:  "tenant-456",
+		IsAdmin:   false,
+		TokenType: "access",
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+			Subject:   "user-123",
+		},
+	}
+	
+	jwtManager.On("ValidateAccessToken", "valid-token").Return(validClaims, nil)
 
 	req := &grpc_auth.ValidateTokenRequest{
-		Token: token,
+		Token: "valid-token",
 	}
 
 	resp, err := handler.ValidateToken(context.Background(), req)
@@ -138,7 +178,10 @@ func TestAuthHandler_ValidateToken_ValidToken(t *testing.T) {
 }
 
 func TestAuthHandler_ValidateToken_InvalidToken(t *testing.T) {
-	handler, _, _ := createSimpleTestHandler()
+	handler, _, jwtManager := createSimpleTestHandler()
+
+	// Настраиваем мок для возврата ошибки
+	jwtManager.On("ValidateAccessToken", "invalid-token-format").Return(nil, assert.AnError)
 
 	req := &grpc_auth.ValidateTokenRequest{
 		Token: "invalid-token-format",
@@ -150,7 +193,10 @@ func TestAuthHandler_ValidateToken_InvalidToken(t *testing.T) {
 }
 
 func TestAuthHandler_ValidateToken_EmptyToken(t *testing.T) {
-	handler, _, _ := createSimpleTestHandler()
+	handler, _, jwtManager := createSimpleTestHandler()
+
+	// Настраиваем мок для возврата ошибки
+	jwtManager.On("ValidateAccessToken", "").Return(nil, assert.AnError)
 
 	req := &grpc_auth.ValidateTokenRequest{
 		Token: "",
@@ -162,7 +208,10 @@ func TestAuthHandler_ValidateToken_EmptyToken(t *testing.T) {
 }
 
 func TestAuthHandler_ValidateToken_ShortToken(t *testing.T) {
-	handler, _, _ := createSimpleTestHandler()
+	handler, _, jwtManager := createSimpleTestHandler()
+
+	// Настраиваем мок для возврата ошибки
+	jwtManager.On("ValidateAccessToken", "short").Return(nil, assert.AnError)
 
 	req := &grpc_auth.ValidateTokenRequest{
 		Token: "short",

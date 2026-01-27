@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"UptimePingPlatform/pkg/logger"
 )
 
 // SimpleMockRateLimiter простой мок для rate limiter
@@ -29,7 +30,10 @@ func TestRateLimitMiddleware_Allowed(t *testing.T) {
 		w.Write([]byte("OK"))
 	})
 
-	middleware := RateLimitMiddleware(limiter, 10, time.Minute)(handler)
+	// Создаем тестовый logger
+	testLogger, _ := logger.NewLogger("test", "info", "test-service", false)
+
+	middleware := RateLimitMiddleware(limiter, 10, time.Minute, testLogger)(handler)
 
 	// Act
 	req := httptest.NewRequest("GET", "/test", nil)
@@ -50,7 +54,10 @@ func TestRateLimitMiddleware_RateLimited(t *testing.T) {
 		w.Write([]byte("Should not reach here"))
 	})
 
-	middleware := RateLimitMiddleware(limiter, 10, time.Minute)(handler)
+	// Создаем тестовый logger
+	testLogger, _ := logger.NewLogger("test", "info", "test-service", false)
+
+	middleware := RateLimitMiddleware(limiter, 10, time.Minute, testLogger)(handler)
 
 	// Act
 	req := httptest.NewRequest("GET", "/test", nil)
@@ -75,19 +82,22 @@ func TestRateLimitMiddleware_Error(t *testing.T) {
 	limiter := &ErrorMockRateLimiter{}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Should not reach here"))
+		w.Write([]byte("OK")) // Rate limiter error allows request
 	})
 
-	middleware := RateLimitMiddleware(limiter, 10, time.Minute)(handler)
+	// Создаем тестовый logger
+	testLogger, _ := logger.NewLogger("test", "info", "test-service", false)
+
+	middleware := RateLimitMiddleware(limiter, 10, time.Minute, testLogger)(handler)
 
 	// Act
 	req := httptest.NewRequest("GET", "/test", nil)
 	w := httptest.NewRecorder()
 	middleware.ServeHTTP(w, req)
 
-	// Assert
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
-	assert.Contains(t, w.Body.String(), "Rate limit service unavailable")
+	// Assert - Rate limiter error should allow the request
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "OK", w.Body.String())
 }
 
 // TestRateLimitMiddleware_DifferentMethods тестирует разные HTTP методы
@@ -99,7 +109,10 @@ func TestRateLimitMiddleware_DifferentMethods(t *testing.T) {
 		w.Write([]byte("OK"))
 	})
 
-	middleware := RateLimitMiddleware(limiter, 10, time.Minute)(handler)
+	// Создаем тестовый logger
+	testLogger, _ := logger.NewLogger("test", "info", "test-service", false)
+
+	middleware := RateLimitMiddleware(limiter, 10, time.Minute, testLogger)(handler)
 
 	methods := []string{"GET", "POST", "PUT", "DELETE", "PATCH"}
 
@@ -125,7 +138,10 @@ func TestRateLimitMiddleware_IPExtraction(t *testing.T) {
 		w.Write([]byte("OK"))
 	})
 
-	middleware := RateLimitMiddleware(limiter, 10, time.Minute)(handler)
+	// Создаем тестовый logger
+	testLogger, _ := logger.NewLogger("test", "info", "test-service", false)
+
+	middleware := RateLimitMiddleware(limiter, 10, time.Minute, testLogger)(handler)
 
 	// Act & Assert - X-Forwarded-For
 	req := httptest.NewRequest("GET", "/test", nil)

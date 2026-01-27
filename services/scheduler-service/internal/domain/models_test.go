@@ -283,7 +283,7 @@ func TestSchedule_Validate(t *testing.T) {
 			schedule: Schedule{
 				ID:             "schedule-1",
 				CheckID:        "check-1",
-				CronExpression: "0 */5 * * * *",
+				CronExpression: "0 */5 * * *", // 5 полей
 				Priority:       PriorityNormal,
 			},
 			wantErr: false,
@@ -292,7 +292,7 @@ func TestSchedule_Validate(t *testing.T) {
 			name: "missing id",
 			schedule: Schedule{
 				CheckID:        "check-1",
-				CronExpression: "0 */5 * * * *",
+				CronExpression: "0 */5 * * *", // 5 полей
 				Priority:       PriorityNormal,
 			},
 			wantErr: true,
@@ -302,7 +302,7 @@ func TestSchedule_Validate(t *testing.T) {
 			name: "missing check id",
 			schedule: Schedule{
 				ID:             "schedule-1",
-				CronExpression: "0 */5 * * * *",
+				CronExpression: "0 */5 * * *", // 5 полей
 				Priority:       PriorityNormal,
 			},
 			wantErr: true,
@@ -323,7 +323,7 @@ func TestSchedule_Validate(t *testing.T) {
 			schedule: Schedule{
 				ID:             "schedule-1",
 				CheckID:        "check-1",
-				CronExpression: "0 */5 * * * *",
+				CronExpression: "*/5 * * * *", // 5 полей: каждые 5 минут
 				Priority:       Priority(5), // invalid priority
 			},
 			wantErr: true,

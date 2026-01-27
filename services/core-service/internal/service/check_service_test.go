@@ -10,9 +10,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"UptimePingPlatform/services/core-service/internal/domain"
+	"UptimePingPlatform/services/core-service/internal/repository"
 	"UptimePingPlatform/services/core-service/internal/service/checker"
 	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/logger"
+	pkg_redis "UptimePingPlatform/pkg/redis"
 )
 
 // MockCheckerFactory мок для CheckerFactory
@@ -34,6 +36,77 @@ func (m *MockCheckerFactory) GetSupportedTypes() []domain.TaskType {
 		domain.TaskTypeGraphQL,
 		domain.TaskTypeTCP,
 	}
+}
+
+// MockCheckResultRepository мок для CheckResultRepository
+type MockCheckResultRepository struct{}
+
+func (m *MockCheckResultRepository) Save(ctx context.Context, result *domain.CheckResult) error {
+	return nil
+}
+
+func (m *MockCheckResultRepository) GetByID(ctx context.Context, id string) (*domain.CheckResult, error) {
+	return nil, nil
+}
+
+func (m *MockCheckResultRepository) GetByCheckID(ctx context.Context, checkID string, limit int) ([]*domain.CheckResult, error) {
+	return nil, nil
+}
+
+func (m *MockCheckResultRepository) GetByTimeRange(ctx context.Context, startTime, endTime time.Time, limit int) ([]*domain.CheckResult, error) {
+	return nil, nil
+}
+
+func (m *MockCheckResultRepository) DeleteOldResults(ctx context.Context, before time.Time) error {
+	return nil
+}
+
+func (m *MockCheckResultRepository) GetFailedChecks(ctx context.Context, startTime, endTime time.Time, limit int) ([]*domain.CheckResult, error) {
+	return nil, nil
+}
+
+func (m *MockCheckResultRepository) GetLatestByCheckID(ctx context.Context, checkID string) (*domain.CheckResult, error) {
+	return nil, nil
+}
+
+func (m *MockCheckResultRepository) GetStats(ctx context.Context, startTime, endTime time.Time) (*repository.ResultStats, error) {
+	return &repository.ResultStats{
+		TotalChecks:     0,
+		SuccessfulChecks: 0,
+		FailedChecks:   0,
+		AvgResponseTime: 0,
+	}, nil
+}
+
+// MockIncidentManager мок для IncidentManager
+type MockIncidentManager struct{}
+
+func (m *MockIncidentManager) ProcessCheckResult(ctx context.Context, result *domain.CheckResult) error {
+	return nil
+}
+
+func (m *MockIncidentManager) CreateIncident(ctx context.Context, incident *Incident) (*Incident, error) {
+	return incident, nil
+}
+
+func (m *MockIncidentManager) UpdateIncident(ctx context.Context, incidentID string, updates *IncidentUpdates) (*Incident, error) {
+	return &Incident{ID: incidentID}, nil
+}
+
+func (m *MockIncidentManager) ResolveIncident(ctx context.Context, incidentID string) error {
+	return nil
+}
+
+func (m *MockIncidentManager) GetActiveIncidents(ctx context.Context, tenantID string) ([]*Incident, error) {
+	return []*Incident{}, nil
+}
+
+func (m *MockIncidentManager) GetIncident(ctx context.Context, incidentID string) (*Incident, error) {
+	return &Incident{ID: incidentID}, nil
+}
+
+func (m *MockIncidentManager) ListIncidents(ctx context.Context, filters *IncidentFilters) ([]*Incident, error) {
+	return []*Incident{}, nil
 }
 
 // MockChecker мок для Checker
@@ -97,8 +170,11 @@ func (m *MockLogger) ClearLogs() {
 func TestCheckService_NewCheckService(t *testing.T) {
 	log := &MockLogger{}
 	factory := &MockCheckerFactory{}
+	mockRepo := &MockCheckResultRepository{}
+	mockRedis := (*pkg_redis.Client)(nil) // Передаем nil, чтобы избежать использования Redis в тесте
+	mockIncidentManager := &MockIncidentManager{}
 	
-	service := NewCheckService(log, factory)
+	service := NewCheckService(log, factory, mockRepo, mockRedis, mockIncidentManager)
 	
 	assert.NotNil(t, service)
 	// Проверяем, что сервис создан, без прямого доступа к приватным полям
@@ -118,8 +194,11 @@ func TestCheckService_ProcessTask_Success(t *testing.T) {
 		},
 	}
 	factory := &MockCheckerFactory{mockChecker: mockChecker}
+	mockRepo := &MockCheckResultRepository{}
+	mockRedis := (*pkg_redis.Client)(nil) // Передаем nil, чтобы избежать использования Redis в тесте
+	mockIncidentManager := &MockIncidentManager{}
 	
-	service := NewCheckService(log, factory)
+	service := NewCheckService(log, factory, mockRepo, mockRedis, mockIncidentManager)
 	
 	// Создание тестового сообщения
 	message := TaskMessage{
@@ -154,8 +233,11 @@ func TestCheckService_ProcessTask_Success(t *testing.T) {
 func TestCheckService_ProcessTask_InvalidMessage(t *testing.T) {
 	log := &MockLogger{}
 	factory := &MockCheckerFactory{}
+	mockRepo := &MockCheckResultRepository{}
+	mockRedis := (*pkg_redis.Client)(nil) // Передаем nil, чтобы избежать использования Redis в тесте
+	mockIncidentManager := &MockIncidentManager{}
 	
-	service := NewCheckService(log, factory)
+	service := NewCheckService(log, factory, mockRepo, mockRedis, mockIncidentManager)
 	
 	// Некорректное сообщение
 	invalidMessage := []byte("invalid json")
@@ -174,8 +256,11 @@ func TestCheckService_ProcessTask_InvalidMessage(t *testing.T) {
 func TestCheckService_ProcessTask_MissingRequiredFields(t *testing.T) {
 	log := &MockLogger{}
 	factory := &MockCheckerFactory{}
+	mockRepo := &MockCheckResultRepository{}
+	mockRedis := (*pkg_redis.Client)(nil) // Передаем nil, чтобы избежать использования Redis в тесте
+	mockIncidentManager := &MockIncidentManager{}
 	
-	service := NewCheckService(log, factory)
+	service := NewCheckService(log, factory, mockRepo, mockRedis, mockIncidentManager)
 	
 	// Сообщение без обязательных полей
 	message := TaskMessage{
@@ -196,8 +281,11 @@ func TestCheckService_ProcessTask_MissingRequiredFields(t *testing.T) {
 func TestCheckService_ProcessTask_CheckerCreationFailed(t *testing.T) {
 	log := &MockLogger{}
 	factory := &MockCheckerFactory{} // mockChecker не установлен
+	mockRepo := &MockCheckResultRepository{}
+	mockRedis := (*pkg_redis.Client)(nil) // Передаем nil, чтобы избежать использования Redis в тесте
+	mockIncidentManager := &MockIncidentManager{}
 	
-	service := NewCheckService(log, factory)
+	service := NewCheckService(log, factory, mockRepo, mockRedis, mockIncidentManager)
 	
 	message := TaskMessage{
 		CheckID:     "check-1",
@@ -223,8 +311,11 @@ func TestCheckService_ProcessTask_CheckExecutionFailed(t *testing.T) {
 		mockError: errors.New(errors.ErrInternal, "check execution failed"),
 	}
 	factory := &MockCheckerFactory{mockChecker: mockChecker}
+	mockRepo := &MockCheckResultRepository{}
+	mockRedis := (*pkg_redis.Client)(nil) // Передаем nil, чтобы избежать использования Redis в тесте
+	mockIncidentManager := &MockIncidentManager{}
 	
-	service := NewCheckService(log, factory)
+	service := NewCheckService(log, factory, mockRepo, mockRedis, mockIncidentManager)
 	
 	message := TaskMessage{
 		CheckID:     "check-1",
@@ -247,8 +338,11 @@ func TestCheckService_ProcessTask_CheckExecutionFailed(t *testing.T) {
 func TestCheckService_GetCachedResult(t *testing.T) {
 	log := &MockLogger{}
 	factory := &MockCheckerFactory{}
+	mockRepo := &MockCheckResultRepository{}
+	mockRedis := (*pkg_redis.Client)(nil) // Передаем nil, чтобы избежать использования Redis в тесте
+	mockIncidentManager := &MockIncidentManager{}
 	
-	service := NewCheckService(log, factory)
+	service := NewCheckService(log, factory, mockRepo, mockRedis, mockIncidentManager)
 	
 	result, err := service.GetCachedResult(context.Background(), "check-1")
 	assert.NoError(t, err)
