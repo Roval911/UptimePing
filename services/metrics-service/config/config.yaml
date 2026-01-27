@@ -1,0 +1,36 @@
+server:
+  host: "${SERVER_HOST:0.0.0.0}"
+  port: ${SERVER_PORT:9090}
+
+logger:
+  level: "${LOG_LEVEL:info}"
+  format: "${LOG_FORMAT:json}"
+
+environment: "${ENVIRONMENT:dev}"
+
+# Metrics Service Configuration
+metrics:
+  scrape_interval: "${METRICS_SCRAPE_INTERVAL:15s}"
+  timeout: "${METRICS_TIMEOUT:10s}"
+  retry_attempts: "${METRICS_RETRY_ATTEMPTS:3}"
+
+# Services to monitor (can also be set via environment variables)
+services:
+  auth_service:
+    address: "${AUTH_SERVICE_ADDR:localhost:50051}"
+    enabled: ${AUTH_SERVICE_ENABLED:true}
+  core_service:
+    address: "${CORE_SERVICE_ADDR:localhost:50052}"
+    enabled: ${CORE_SERVICE_ENABLED:true}
+  scheduler_service:
+    address: "${SCHEDULER_SERVICE_ADDR:localhost:50053}"
+    enabled: ${SCHEDULER_SERVICE_ENABLED:true}
+  api_gateway:
+    address: "${API_GATEWAY_ADDR:localhost:8080}"
+    enabled: ${API_GATEWAY_ENABLED:true}
+
+# Health Check Configuration
+health:
+  enabled: ${HEALTH_ENABLED:true}
+  port: ${HEALTH_PORT:8091}
+  check_interval: "${HEALTH_CHECK_INTERVAL:30s}"
