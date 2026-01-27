@@ -5,23 +5,23 @@ import (
 	"fmt"
 	"net/http"
 
+	pkglogger "UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/forge-service/internal/domain"
 	"UptimePingPlatform/services/forge-service/internal/service"
-	pkglogger "UptimePingPlatform/pkg/logger"
 )
 
 // HTTPHandler обрабатывает HTTP запросы для Forge Service
 type HTTPHandler struct {
-	logger         pkglogger.Logger
-	codeGenerator  *service.CodeGenerator
+	logger            pkglogger.Logger
+	codeGenerator     *service.CodeGenerator
 	interactiveConfig *domain.InteractiveConfig
 }
 
 // NewHTTPHandler создает новый HTTP обработчик
 func NewHTTPHandler(logger pkglogger.Logger, codeGenerator *service.CodeGenerator) *HTTPHandler {
 	return &HTTPHandler{
-		logger:         logger,
-		codeGenerator:  codeGenerator,
+		logger:            logger,
+		codeGenerator:     codeGenerator,
 		interactiveConfig: domain.NewDefaultInteractiveConfig(),
 	}
 }
@@ -52,7 +52,7 @@ func (h *HTTPHandler) handleConfig(w http.ResponseWriter, r *http.Request) {
 // getConfig возвращает текущую конфигурацию
 func (h *HTTPHandler) getConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	if err := json.NewEncoder(w).Encode(h.interactiveConfig); err != nil {
 		h.logger.Error("Failed to encode config", pkglogger.Error(err))
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -63,7 +63,7 @@ func (h *HTTPHandler) getConfig(w http.ResponseWriter, r *http.Request) {
 // updateConfig обновляет конфигурацию
 func (h *HTTPHandler) updateConfig(w http.ResponseWriter, r *http.Request) {
 	var config domain.InteractiveConfig
-	
+
 	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
 		h.logger.Error("Failed to decode config", pkglogger.Error(err))
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -78,10 +78,10 @@ func (h *HTTPHandler) updateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.interactiveConfig = &config
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"status": "success",
+		"status":  "success",
 		"message": "Configuration updated successfully",
 	})
 }
@@ -107,17 +107,17 @@ func (h *HTTPHandler) getTelegramConfig(w http.ResponseWriter, r *http.Request) 
 // updateTelegramConfig обновляет конфигурацию Telegram
 func (h *HTTPHandler) updateTelegramConfig(w http.ResponseWriter, r *http.Request) {
 	var telegramConfig domain.TelegramConfig
-	
+
 	if err := json.NewDecoder(r.Body).Decode(&telegramConfig); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
 	h.interactiveConfig.Telegram = telegramConfig
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"status": "success",
+		"status":  "success",
 		"message": "Telegram configuration updated successfully",
 	})
 }
@@ -143,17 +143,17 @@ func (h *HTTPHandler) getEmailConfig(w http.ResponseWriter, r *http.Request) {
 // updateEmailConfig обновляет конфигурацию Email
 func (h *HTTPHandler) updateEmailConfig(w http.ResponseWriter, r *http.Request) {
 	var emailConfig domain.EmailConfig
-	
+
 	if err := json.NewDecoder(r.Body).Decode(&emailConfig); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
 	h.interactiveConfig.Email = emailConfig
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"status": "success",
+		"status":  "success",
 		"message": "Email configuration updated successfully",
 	})
 }
@@ -185,10 +185,10 @@ func (h *HTTPHandler) handleGenerateCheckers(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Здесь нужно получить список сервисов от парсера
+	//todo Здесь нужно получить список сервисов от парсера
 	// Для упрощения примера, используем пустой список
 	services := []domain.Service{}
-	
+
 	checkersPath := "generated/checkers"
 	if err := h.codeGenerator.GenerateGRPCCheckers(services, checkersPath); err != nil {
 		h.logger.Error("Failed to generate checkers", pkglogger.Error(err))
@@ -229,7 +229,7 @@ func (h *HTTPHandler) LoggingMiddleware(next http.Handler) http.Handler {
 			pkglogger.String("path", r.URL.Path),
 			pkglogger.String("remote", r.RemoteAddr),
 		)
-		
+
 		next.ServeHTTP(w, r)
 	})
 }
@@ -240,12 +240,12 @@ func (h *HTTPHandler) CORSMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		
+
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		
+
 		next.ServeHTTP(w, r)
 	})
 }

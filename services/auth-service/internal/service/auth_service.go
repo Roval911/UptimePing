@@ -552,8 +552,6 @@ func (s *Service) Logout(ctx context.Context, userID, tokenID string) error {
 
 // generateSlug генерирует slug из имени тенанта
 func generateSlug(name string) string {
-	// Простая реализация slug: преобразуем в нижний регистр и заменяем пробелы на дефисы
-	// В реальной системе может потребоваться более сложная логика
 	slug := strings.ToLower(name)
 	slug = strings.ReplaceAll(slug, " ", "-")
 	// Удаление или замена других символов может быть добавлена по необходимости

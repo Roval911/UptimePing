@@ -26,13 +26,13 @@ type NotificationGrouper struct {
 type GrouperConfig struct {
 	// Временное окно для группировки (в минутах)
 	GroupWindowMinutes int `json:"group_window_minutes" yaml:"group_window_minutes"`
-	
+
 	// Максимальный размер группы
 	MaxGroupSize int `json:"max_group_size" yaml:"max_group_size"`
-	
+
 	// Включить группировку
 	Enabled bool `json:"enabled" yaml:"enabled"`
-	
+
 	// Стратегии группировки
 	Strategies []string `json:"strategies" yaml:"strategies"`
 }
@@ -66,18 +66,18 @@ func (g *NotificationGrouper) GroupNotifications(ctx context.Context, event *dom
 
 	// Создаем базовые уведомления из события
 	notifications := g.createNotificationsFromEvent(ctx, event)
-	
+
 	// Группируем уведомления
 	groups := make(map[string][]*domain.Notification)
-	
+
 	for _, notification := range notifications {
 		groupKey := g.getGroupKey(notification)
-		
+
 		// Добавляем в существующую группу или создаем новую
 		if _, exists := groups[groupKey]; !exists {
 			groups[groupKey] = []*domain.Notification{}
 		}
-		
+
 		// Проверяем размер группы
 		if len(groups[groupKey]) >= g.config.MaxGroupSize {
 			// Если группа переполнена, создаем новую с суффиксом
@@ -89,7 +89,7 @@ func (g *NotificationGrouper) GroupNotifications(ctx context.Context, event *dom
 			}
 			groupKey = newGroupKey
 		}
-		
+
 		groups[groupKey] = append(groups[groupKey], notification)
 	}
 
@@ -107,15 +107,15 @@ func (g *NotificationGrouper) GroupNotifications(ctx context.Context, event *dom
 func (g *NotificationGrouper) createIndividualNotifications(ctx context.Context, event *domain.Event) (map[string][]*domain.Notification, error) {
 	notifications := g.createNotificationsFromEvent(ctx, event)
 	groups := make(map[string][]*domain.Notification)
-	
+
 	for _, notification := range notifications {
-		groupKey := fmt.Sprintf("%s:%s:%s", 
-			notification.TenantID, 
-			notification.Channel, 
+		groupKey := fmt.Sprintf("%s:%s:%s",
+			notification.TenantID,
+			notification.Channel,
 			notification.Recipient)
 		groups[groupKey] = []*domain.Notification{notification}
 	}
-	
+
 	return groups, nil
 }
 
@@ -123,13 +123,13 @@ func (g *NotificationGrouper) createIndividualNotifications(ctx context.Context,
 func (g *NotificationGrouper) createNotificationsFromEvent(ctx context.Context, event *domain.Event) []*domain.Notification {
 	// Определяем каналы для уведомлений
 	channels := g.getChannelsForEvent(event)
-	
+
 	var notifications []*domain.Notification
-	
+
 	for _, channel := range channels {
 		// Определяем получателей для канала
 		recipients := g.getRecipientsForChannel(ctx, event, channel)
-		
+
 		for _, recipient := range recipients {
 			notification := &domain.Notification{
 				ID:         g.generateNotificationID(event.ID, channel, recipient),
@@ -148,21 +148,21 @@ func (g *NotificationGrouper) createNotificationsFromEvent(ctx context.Context, 
 				RetryCount: 0,
 				MaxRetries: 3,
 			}
-			
+
 			notifications = append(notifications, notification)
 		}
 	}
-	
+
 	return notifications
 }
 
 // getChannelsForEvent определяет каналы для события
 func (g *NotificationGrouper) getChannelsForEvent(event *domain.Event) []string {
 	var channels []string
-	
+
 	// Базовые каналы для всех событий
 	channels = append(channels, domain.ChannelEmail)
-	
+
 	// Дополнительные каналы в зависимости от серьезности
 	switch event.Severity {
 	case domain.SeverityCritical:
@@ -174,21 +174,21 @@ func (g *NotificationGrouper) getChannelsForEvent(event *domain.Event) []string 
 	default:
 		// Только email для low
 	}
-	
+
 	// Webhook для определенных типов событий
 	if event.Type == domain.NotificationTypeIncidentCreated ||
 		event.Type == domain.NotificationTypeIncidentResolved {
 		channels = append(channels, domain.ChannelWebhook)
 	}
-	
+
 	return channels
 }
 
 // getRecipientsForChannel определяет получателей для канала
 func (g *NotificationGrouper) getRecipientsForChannel(ctx context.Context, event *domain.Event, channel string) []string {
-	// Здесь должна быть логика определения получателей из конфигурации или БД
+	//todo Здесь должна быть логика определения получателей из конфигурации или БД
 	// Для примера используем базовую логику
-	
+
 	switch channel {
 	case domain.ChannelEmail:
 		return []string{
@@ -216,7 +216,7 @@ func (g *NotificationGrouper) getRecipientsForChannel(ctx context.Context, event
 // generateSubject генерирует тему уведомления
 func (g *NotificationGrouper) generateSubject(event *domain.Event) string {
 	severityIcon := g.getSeverityIcon(event.Severity)
-	
+
 	switch event.Type {
 	case domain.NotificationTypeIncidentCreated:
 		return fmt.Sprintf("%s [INCIDENT] %s", severityIcon, event.Title)
@@ -277,7 +277,7 @@ func (g *NotificationGrouper) getSeverityIcon(severity string) string {
 // getGroupKey возвращает ключ для группировки
 func (g *NotificationGrouper) getGroupKey(notification *domain.Notification) string {
 	var keyParts []string
-	
+
 	// Применяем стратегии группировки
 	for _, strategy := range g.config.Strategies {
 		switch GroupStrategy(strategy) {
@@ -298,12 +298,12 @@ func (g *NotificationGrouper) getGroupKey(notification *domain.Notification) str
 			keyParts = append(keyParts, timeSlot.Format("2006-01-02-15:04"))
 		}
 	}
-	
+
 	if len(keyParts) == 0 {
 		// Стратегия по умолчанию
 		keyParts = []string{notification.TenantID, notification.Channel, notification.Severity}
 	}
-	
+
 	return strings.Join(keyParts, ":")
 }
 
@@ -316,10 +316,10 @@ func (g *NotificationGrouper) generateNotificationID(eventID, channel, recipient
 // GetGrouperStats возвращает статистику группировщика
 func (g *NotificationGrouper) GetGrouperStats() map[string]interface{} {
 	return map[string]interface{}{
-		"enabled":             g.config.Enabled,
+		"enabled":              g.config.Enabled,
 		"group_window_minutes": g.config.GroupWindowMinutes,
 		"max_group_size":       g.config.MaxGroupSize,
-		"strategies":          g.config.Strategies,
+		"strategies":           g.config.Strategies,
 	}
 }
 
@@ -328,7 +328,7 @@ func DefaultGrouperConfig() GrouperConfig {
 	return GrouperConfig{
 		GroupWindowMinutes: 5,  // 5 минут
 		MaxGroupSize:       10, // Максимум 10 уведомлений в группе
-		Enabled:           true,
+		Enabled:            true,
 		Strategies: []string{
 			string(StrategyByTenant),
 			string(StrategyByChannel),
@@ -342,7 +342,7 @@ func ProductionGrouperConfig() GrouperConfig {
 	return GrouperConfig{
 		GroupWindowMinutes: 10, // 10 минут
 		MaxGroupSize:       20, // Максимум 20 уведомлений в группе
-		Enabled:           true,
+		Enabled:            true,
 		Strategies: []string{
 			string(StrategyByTenant),
 			string(StrategyByChannel),
@@ -355,9 +355,9 @@ func ProductionGrouperConfig() GrouperConfig {
 // DevelopmentGrouperConfig возвращает конфигурацию для разработки
 func DevelopmentGrouperConfig() GrouperConfig {
 	return GrouperConfig{
-		GroupWindowMinutes: 1,  // 1 минута
-		MaxGroupSize:       5, // Максимум 5 уведомлений в группе
-		Enabled:           false, // Отключена для разработки
+		GroupWindowMinutes: 1,     // 1 минута
+		MaxGroupSize:       5,     // Максимум 5 уведомлений в группе
+		Enabled:            false, // Отключена для разработки
 		Strategies: []string{
 			string(StrategyByTenant),
 			string(StrategyByChannel),

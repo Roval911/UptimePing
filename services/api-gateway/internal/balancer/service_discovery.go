@@ -73,7 +73,7 @@ func NewInstanceHealthChecker(address string, log logger.Logger) InstanceHealthC
 
 // NewGrpcHealthChecker создает новый gRPC health checker
 func NewGrpcHealthChecker(address string, log logger.Logger) InstanceHealthChecker {
-	// В реальной реализации здесь бы создавался gRPC HealthChecker
+	//TODO В реальной реализации здесь бы создавался gRPC HealthChecker
 	// Пока используем мок для совместимости
 	return &MockHealthChecker{address: address, logger: log}
 }
@@ -86,7 +86,7 @@ type MockHealthChecker struct {
 
 func (m *MockHealthChecker) IsHealthy() bool {
 	if m.logger != nil {
-		m.logger.Debug("Checking instance health", 
+		m.logger.Debug("Checking instance health",
 			logger.String("address", m.address),
 			logger.Bool("healthy", true))
 	}
@@ -99,7 +99,7 @@ func (m *MockHealthChecker) Address() string {
 
 func (m *MockHealthChecker) LastSeen() time.Time {
 	if m.logger != nil {
-		m.logger.Debug("Getting last seen time", 
+		m.logger.Debug("Getting last seen time",
 			logger.String("address", m.address))
 	}
 	return time.Now()
@@ -107,7 +107,7 @@ func (m *MockHealthChecker) LastSeen() time.Time {
 
 func (m *MockHealthChecker) Close() error {
 	if m.logger != nil {
-		m.logger.Info("Closing health checker", 
+		m.logger.Info("Closing health checker",
 			logger.String("address", m.address))
 	}
 	return nil
@@ -126,14 +126,14 @@ type ServiceDiscovery interface {
 type StaticServiceDiscovery struct {
 	instances map[string][]*Instance
 	mu        sync.RWMutex
-	logger   logger.Logger
+	logger    logger.Logger
 }
 
 // NewStaticServiceDiscovery создает новый StaticServiceDiscovery
 func NewStaticServiceDiscovery(logger logger.Logger) *StaticServiceDiscovery {
 	return &StaticServiceDiscovery{
 		instances: make(map[string][]*Instance),
-		logger:   logger,
+		logger:    logger,
 	}
 }
 
@@ -142,7 +142,7 @@ func (s *StaticServiceDiscovery) Register(serviceName string, addresses []string
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.logger.Info("Registering service instances", 
+	s.logger.Info("Registering service instances",
 		logger.String("service", serviceName),
 		logger.Int("address_count", len(addresses)))
 
@@ -152,19 +152,19 @@ func (s *StaticServiceDiscovery) Register(serviceName string, addresses []string
 		if i < len(weights) {
 			weight = weights[i]
 		}
-		
-		s.logger.Debug("Creating instance", 
+
+		s.logger.Debug("Creating instance",
 			logger.String("service", serviceName),
 			logger.String("address", address),
 			logger.Int("weight", weight))
-		
+
 		healthChecker := NewInstanceHealthChecker(address, s.logger)
 		instance := NewInstance(address, healthChecker, weight)
 		instances = append(instances, instance)
 	}
 	s.instances[serviceName] = instances
-	
-	s.logger.Info("Service instances registered successfully", 
+
+	s.logger.Info("Service instances registered successfully",
 		logger.String("service", serviceName),
 		logger.Int("total_instances", len(instances)))
 }
@@ -187,7 +187,7 @@ func (s *StaticServiceDiscovery) GetInstances(ctx context.Context, serviceName s
 		}
 	}
 
-	s.logger.Debug("Retrieved service instances", 
+	s.logger.Debug("Retrieved service instances",
 		logger.String("service", serviceName),
 		logger.Int("total_instances", len(instances)),
 		logger.Int("active_instances", len(activeInstances)))
@@ -199,9 +199,9 @@ func (s *StaticServiceDiscovery) GetInstances(ctx context.Context, serviceName s
 func (s *StaticServiceDiscovery) Watch(ctx context.Context, serviceName string, callback func([]*Instance)) error {
 	// В статическом режиме инстансы не изменяются динамически,
 	// но мы можем отслеживать изменения в их состоянии (например, доступность)
-	s.logger.Info("Starting to watch service instances", 
+	s.logger.Info("Starting to watch service instances",
 		logger.String("service", serviceName))
-	
+
 	go func() {
 		ticker := time.NewTicker(10 * time.Second) // Проверяем состояние каждые 10 секунд
 		defer ticker.Stop()
@@ -209,17 +209,17 @@ func (s *StaticServiceDiscovery) Watch(ctx context.Context, serviceName string, 
 		for {
 			select {
 			case <-ctx.Done():
-				s.logger.Info("Stopping to watch service instances", 
+				s.logger.Info("Stopping to watch service instances",
 					logger.String("service", serviceName))
 				return
 			case <-ticker.C:
 				if instances, err := s.GetInstances(ctx, serviceName); err == nil {
-					s.logger.Debug("Service instances updated", 
+					s.logger.Debug("Service instances updated",
 						logger.String("service", serviceName),
 						logger.Int("count", len(instances)))
 					callback(instances)
 				} else {
-					s.logger.Error("Failed to get service instances", 
+					s.logger.Error("Failed to get service instances",
 						logger.String("service", serviceName),
 						logger.Error(err))
 				}

@@ -123,7 +123,7 @@ func (s *Scheduler) AddCheck(ctx context.Context, checkID string, nextRun time.T
 
 // RemoveCheck удаляет проверку из планировщика
 func (s *Scheduler) RemoveCheck(ctx context.Context, checkID string) error {
-	// В текущей реализации cron не поддерживает удаление конкретных задач по ID
+	// todo В текущей реализации cron не поддерживает удаление конкретных задач по ID
 	// Это потребует более сложной реализации с хранением entry ID
 	s.logger.Debug("RemoveCheck called - not implemented in current cron version",
 		logger.String("check_id", checkID),

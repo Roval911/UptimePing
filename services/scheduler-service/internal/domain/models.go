@@ -312,7 +312,7 @@ func NewTask(checkID, tenantID string, priority Priority) *Task {
 	}
 }
 
-// generateID генерирует уникальный ID
+// todo generateID генерирует уникальный ID
 // В реальной реализации здесь будет использоваться UUID генератор
 func generateID() string {
 	return fmt.Sprintf("task_%d", time.Now().UnixNano())
@@ -332,11 +332,11 @@ func validateCronExpression(cronExpr string) error {
 
 	// Regex паттерны для каждого поля
 	patterns := []string{
-		`^(\*|[0-5]?\d|([0-5]?\d-[0-5]?\d)(/[0-5]?\d)?|([0-5]?\d)(,[0-5]?\d)*|\*/[0-5]?\d)$`,           // minute: 0-59
+		`^(\*|[0-5]?\d|([0-5]?\d-[0-5]?\d)(/[0-5]?\d)?|([0-5]?\d)(,[0-5]?\d)*|\*/[0-5]?\d)$`,                // minute: 0-59
 		`^(\*|[01]?\d|2[0-3]|([01]?\d-2[0-3])(/[01]?\d)?|([01]?\d|2[0-3])(,([01]?\d|2[0-3]))*|\*/[01]?\d)$`, // hour: 0-23
-		`^(\*|[12]?\d|3[01]|([12]?\d-3[01])(/[12]?\d)?|([12]?\d|3[01])(,([12]?\d|3[01]))*|\*/[12]?\d)$`, // day: 1-31
-		`^(\*|[1]?\d|([1]?\d-1[2])(/[1]?\d)?|([1]?\d)(,([1]?\d))*)$`,                     // month: 1-12
-		`^(\*|[0-6]|([0-6]-[0-6])(/[0-6])?|[0-6](,[0-6])*)$`,                                 // weekday: 0-6 (0=Sunday)
+		`^(\*|[12]?\d|3[01]|([12]?\d-3[01])(/[12]?\d)?|([12]?\d|3[01])(,([12]?\d|3[01]))*|\*/[12]?\d)$`,     // day: 1-31
+		`^(\*|[1]?\d|([1]?\d-1[2])(/[1]?\d)?|([1]?\d)(,([1]?\d))*)$`,                                        // month: 1-12
+		`^(\*|[0-6]|([0-6]-[0-6])(/[0-6])?|[0-6](,[0-6])*)$`,                                                // weekday: 0-6 (0=Sunday)
 	}
 
 	// Проверяем каждое поле
@@ -514,7 +514,7 @@ func calculateNextRunTime(cronExpr string, from time.Time) (time.Time, error) {
 		// Проверяем день (учитываем и день месяца, и день недели)
 		dayOfMonth := next.Day()
 		weekday := int(next.Weekday())
-		
+
 		// В cron: 0=Sunday, 6=Saturday
 		// В Go: Sunday=0, Monday=1, ..., Saturday=6
 		goWeekday := weekday

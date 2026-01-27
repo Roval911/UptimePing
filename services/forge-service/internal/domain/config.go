@@ -4,13 +4,13 @@ import "fmt"
 
 // InteractiveConfig представляет интерактивную конфигурацию
 type InteractiveConfig struct {
-	Server      ServerConfig      `json:"server"`
-	Database    DatabaseConfig    `json:"database"`
-	Redis       RedisConfig       `json:"redis"`
-	Telegram    TelegramConfig    `json:"telegram"`
-	Email       EmailConfig       `json:"email"`
-	Logger      LoggerConfig      `json:"logger"`
-	Environment string           `json:"environment"`
+	Server      ServerConfig   `json:"server"`
+	Database    DatabaseConfig `json:"database"`
+	Redis       RedisConfig    `json:"redis"`
+	Telegram    TelegramConfig `json:"telegram"`
+	Email       EmailConfig    `json:"email"`
+	Logger      LoggerConfig   `json:"logger"`
+	Environment string         `json:"environment"`
 }
 
 // ServerConfig представляет конфигурацию сервера
@@ -44,13 +44,13 @@ type TelegramConfig struct {
 
 // EmailConfig представляет конфигурацию Email
 type EmailConfig struct {
-	SMTPHost     string `json:"smtp_host"`
-	SMTPPort     int    `json:"smtp_port"`
-	Username     string `json:"username"`
-	Password     string `json:"password"`
-	FromAddress  string `json:"from_address"`
-	FromName     string `json:"from_name"`
-	Enabled      bool   `json:"enabled"`
+	SMTPHost    string `json:"smtp_host"`
+	SMTPPort    int    `json:"smtp_port"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	FromAddress string `json:"from_address"`
+	FromName    string `json:"from_name"`
+	Enabled     bool   `json:"enabled"`
 }
 
 // LoggerConfig представляет конфигурацию логгера
@@ -60,7 +60,7 @@ type LoggerConfig struct {
 }
 
 // NewDefaultInteractiveConfig создает конфигурацию по умолчанию
-func NewDefaultInteractiveConfig() *InteractiveConfig {
+func NewDefaultInteractiveConfig() *InteractiveConfig { //todo выносить или нет в файл конфигурации
 	return &InteractiveConfig{
 		Server: ServerConfig{
 			Host: "0.0.0.0",
@@ -84,13 +84,13 @@ func NewDefaultInteractiveConfig() *InteractiveConfig {
 			Enabled:  false,
 		},
 		Email: EmailConfig{
-			SMTPHost:     "smtp.gmail.com",
-			SMTPPort:     587,
-			Username:     "",
-			Password:     "",
-			FromAddress:  "noreply@uptimeping.com",
-			FromName:     "UptimePing Platform",
-			Enabled:      false,
+			SMTPHost:    "smtp.gmail.com",
+			SMTPPort:    587,
+			Username:    "",
+			Password:    "",
+			FromAddress: "noreply@uptimeping.com",
+			FromName:    "UptimePing Platform",
+			Enabled:     false,
 		},
 		Logger: LoggerConfig{
 			Level:  "info",
@@ -159,11 +159,11 @@ func (c *InteractiveConfig) Validate() error {
 	}
 
 	validEnvironments := map[string]bool{
-		"dev":        true,
-		"staging":    true,
-		"prod":       true,
+		"dev":         true,
+		"staging":     true,
+		"prod":        true,
 		"development": true,
-		"production": true,
+		"production":  true,
 	}
 
 	if !validEnvironments[c.Environment] {

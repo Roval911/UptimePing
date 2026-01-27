@@ -192,7 +192,7 @@ func (h *IncidentHandler) incidentToProto(incident *domain.Incident) *pb.Inciden
 func (h *IncidentHandler) incidentEventToProto(ctx context.Context, event *domain.IncidentEvent) *pb.IncidentEvent {
 	// Извлекаем user ID из контекста
 	userID := h.extractUserIDFromContext(ctx)
-	
+
 	return &pb.IncidentEvent{
 		Id:          event.ID,
 		IncidentId:  event.IncidentID,
@@ -266,7 +266,7 @@ func (h *IncidentHandler) extractUserIDFromContext(ctx context.Context) string {
 		if userIDs := md["user_id"]; len(userIDs) > 0 {
 			return userIDs[0]
 		}
-		
+
 		// Альтернативные поля метаданных
 		if userIDs := md["x-user-id"]; len(userIDs) > 0 {
 			return userIDs[0]
@@ -275,21 +275,21 @@ func (h *IncidentHandler) extractUserIDFromContext(ctx context.Context) string {
 			return userIDs[0]
 		}
 	}
-	
+
 	// 2. Извлекаем из контекстных значений
 	if userID := ctx.Value("user_id"); userID != nil {
 		if uid, ok := userID.(string); ok {
 			return uid
 		}
 	}
-	
+
 	// 3. Извлекаем из JWT токена (если доступен)
 	if token := h.extractTokenFromContext(ctx); token != "" {
 		if claims, err := h.parseJWTToken(token); err == nil {
 			return claims.UserID
 		}
 	}
-	
+
 	// 4. Возвращаем "system" если пользователь не определен
 	return "system"
 }
@@ -306,20 +306,20 @@ func (h *IncidentHandler) extractTokenFromContext(ctx context.Context) string {
 			}
 			return token
 		}
-		
+
 		// Альтернативные поля
 		if tokens := md["x-auth-token"]; len(tokens) > 0 {
 			return tokens[0]
 		}
 	}
-	
+
 	// Извлекаем из контекстных значений
 	if token := ctx.Value("auth_token"); token != nil {
 		if authToken, ok := token.(string); ok {
 			return authToken
 		}
 	}
-	
+
 	return ""
 }
 
@@ -333,10 +333,10 @@ type JWTClaims struct {
 
 // parseJWTToken парсит JWT токен и извлекает утверждения
 func (h *IncidentHandler) parseJWTToken(token string) (*JWTClaims, error) {
-	// Здесь должна быть реализация парсинга JWT токена
+	//todo Здесь должна быть реализация парсинга JWT токена
 	// Для простоты возвращаем базовую структуру
 	// В реальной реализации используйте библиотеку вроде github.com/golang-jwt/jwt
-	
+
 	// Базовая реализация для демонстрации
 	claims := &JWTClaims{
 		UserID: "demo-user",
@@ -344,6 +344,6 @@ func (h *IncidentHandler) parseJWTToken(token string) (*JWTClaims, error) {
 		Name:   "Demo User",
 		Role:   "user",
 	}
-	
+
 	return claims, nil
 }

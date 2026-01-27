@@ -492,7 +492,7 @@ func (c *IncidentManagerChecker) Check(ctx context.Context) *CheckResult {
 	defer cancel()
 
 	// Создаем gRPC соединение
-	conn, err := grpc.DialContext(checkCtx, c.address,
+	conn, err := grpc.DialContext(checkCtx, c.address, //todo устаревшие вызовы
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithBlock())
 	if err != nil {

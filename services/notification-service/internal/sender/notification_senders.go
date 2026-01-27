@@ -17,13 +17,13 @@ type EmailSender struct {
 
 // EmailConfig конфигурация email отправщика
 type EmailConfig struct {
-	SMTPHost     string `json:"smtp_host" yaml:"smtp_host"`
-	SMTPPort     int    `json:"smtp_port" yaml:"smtp_port"`
-	Username     string `json:"username" yaml:"username"`
-	Password     string `json:"password" yaml:"password"`
-	FromAddress  string `json:"from_address" yaml:"from_address"`
-	UseTLS       bool   `json:"use_tls" yaml:"use_tls"`
-	Timeout      time.Duration `json:"timeout" yaml:"timeout"`
+	SMTPHost    string        `json:"smtp_host" yaml:"smtp_host"`
+	SMTPPort    int           `json:"smtp_port" yaml:"smtp_port"`
+	Username    string        `json:"username" yaml:"username"`
+	Password    string        `json:"password" yaml:"password"`
+	FromAddress string        `json:"from_address" yaml:"from_address"`
+	UseTLS      bool          `json:"use_tls" yaml:"use_tls"`
+	Timeout     time.Duration `json:"timeout" yaml:"timeout"`
 }
 
 // NewEmailSender создает новый email отправщик
@@ -133,10 +133,10 @@ type SMSSender struct {
 
 // SMSConfig конфигурация SMS отправщика
 type SMSConfig struct {
-	APIKey      string        `json:"api_key" yaml:"api_key"`
-	APISecret   string        `json:"api_secret" yaml:"api_secret"`
-	FromNumber  string        `json:"from_number" yaml:"from_number"`
-	Timeout     time.Duration `json:"timeout" yaml:"timeout"`
+	APIKey     string        `json:"api_key" yaml:"api_key"`
+	APISecret  string        `json:"api_secret" yaml:"api_secret"`
+	FromNumber string        `json:"from_number" yaml:"from_number"`
+	Timeout    time.Duration `json:"timeout" yaml:"timeout"`
 }
 
 // NewSMSSender создает новый SMS отправщик
@@ -158,7 +158,7 @@ func (s *SMSSender) Send(ctx context.Context, notification *domain.Notification)
 	// Имитация отправки SMS
 	time.Sleep(200 * time.Millisecond)
 
-	// Здесь должна быть реальная логика отправки SMS через SMS API
+	//todo Здесь должна быть реальная логика отправки SMS через SMS API
 	_ = s.config.APIKey
 	_ = s.config.APISecret
 	_ = s.config.FromNumber
@@ -213,7 +213,7 @@ func (s *WebhookSender) Send(ctx context.Context, notification *domain.Notificat
 	// Имитация отправки webhook
 	time.Sleep(150 * time.Millisecond)
 
-	// Здесь должна быть реальная логика отправки webhook
+	//todo Здесь должна быть реальная логика отправки webhook
 	_ = s.config.URL
 
 	s.logger.Info("Webhook notification sent successfully",

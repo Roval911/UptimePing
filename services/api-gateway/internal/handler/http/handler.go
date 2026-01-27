@@ -6,12 +6,12 @@ import (
 	"errors"
 	"net/http"
 
+	forgev1 "UptimePingPlatform/gen/go/proto/api/forge/v1"
+	schedulerv1 "UptimePingPlatform/gen/go/proto/api/scheduler/v1"
 	pkgErrors "UptimePingPlatform/pkg/errors"
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/validation"
-	schedulerv1 "UptimePingPlatform/gen/go/proto/api/scheduler/v1"
-	forgev1 "UptimePingPlatform/gen/go/proto/api/forge/v1"
 )
 
 // ForgeServiceClient интерфейс для Forge Service клиента
@@ -117,7 +117,7 @@ func (h *Handler) handleProtected(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// isAuthenticated проверяет аутентификацию запроса
+// TODO isAuthenticated проверяет аутентификацию запроса
 // В реальной реализации будет проверять JWT или API ключ
 func (h *Handler) isAuthenticated(r *http.Request) bool {
 	// Пока возвращаем true для тестирования
@@ -148,7 +148,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"email":    req.Email,
 		"password": req.Password,
 	}
-	
+
 	if err := h.validator.ValidateRequiredFields(requiredFields, map[string]string{
 		"email":    "Email address",
 		"password": "Password",
@@ -415,12 +415,12 @@ func (h *Handler) handleForgeProxy(w http.ResponseWriter, r *http.Request) {
 	// Валидация обязательных полей
 	requiredFields := map[string]interface{}{
 		"proto_content": req.ProtoContent,
-		"action":       req.Action,
+		"action":        req.Action,
 	}
-	
+
 	if err := h.validator.ValidateRequiredFields(requiredFields, map[string]string{
 		"proto_content": "Proto content",
-		"action":       "Action",
+		"action":        "Action",
 	}); err != nil {
 		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "validation failed"), http.StatusBadRequest)
 		return
@@ -500,9 +500,9 @@ func (h *Handler) handleGenerateConfig(ctx context.Context, w http.ResponseWrite
 
 	// Формирование ответа
 	response := map[string]interface{}{
-		"success":     true,
-		"message":     "Configuration generated successfully",
-		"config_yaml": resp.ConfigYaml,
+		"success":      true,
+		"message":      "Configuration generated successfully",
+		"config_yaml":  resp.ConfigYaml,
 		"check_config": resp.CheckConfig,
 	}
 

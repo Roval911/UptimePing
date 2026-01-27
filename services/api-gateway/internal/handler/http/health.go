@@ -62,7 +62,7 @@ func (h *healthHandlerImpl) ReadyCheck(w http.ResponseWriter, r *http.Request) {
 		logger.String("method", r.Method),
 		logger.String("path", r.URL.Path))
 
-	// Пока возвращаем просто OK, в реальности может проверять готовность зависимостей
+	//TODO Пока возвращаем просто OK, в реальности может проверять готовность зависимостей
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
@@ -83,7 +83,7 @@ func (h *healthHandlerImpl) LiveCheck(w http.ResponseWriter, r *http.Request) {
 		logger.String("method", r.Method),
 		logger.String("path", r.URL.Path))
 
-	// Пока возвращаем просто OK, в реальности может проверять живость сервиса
+	//TODO Пока возвращаем просто OK, в реальности может проверять живость сервиса
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{

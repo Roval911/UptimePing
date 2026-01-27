@@ -241,16 +241,16 @@ func (p *TelegramProvider) parseChatID(recipient string) interface{} {
 
 // shouldRetry определяет, нужно ли повторять попытку
 func (p *TelegramProvider) shouldRetry(err error) bool {
-	// Здесь можно добавить логику для определения ошибок,
+	//todo Здесь можно добавить логику для определения ошибок,
 	// которые требуют повторной попытки
 	// Например: network errors, timeouts, rate limiting
-	
+
 	// Для простоты всегда возвращаем true для всех ошибок,
 	// кроме context cancellation
 	if err == context.Canceled || err == context.DeadlineExceeded {
 		return false
 	}
-	
+
 	return true
 }
 
@@ -263,7 +263,7 @@ func (p *TelegramProvider) GetType() string {
 func (p *TelegramProvider) IsHealthy(ctx context.Context) bool {
 	// Проверка здоровья через getMe метод Telegram API
 	url := fmt.Sprintf("%s/bot%s/getMe", p.config.APIURL, p.config.BotToken)
-	
+
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return false

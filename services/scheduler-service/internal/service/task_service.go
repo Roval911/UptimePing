@@ -325,7 +325,7 @@ func (s *TaskService) generateCronExpression(check *domain.Check) (string, error
 		return "", fmt.Errorf("invalid interval: %d", check.Interval)
 	}
 
-	// Для простоты используем формат: каждые N секунд
+	//todo Для простоты используем формат: каждые N секунд
 	// В реальном проекте можно добавить более сложную логику
 	if check.Interval < 60 {
 		// Для интервалов меньше минуты

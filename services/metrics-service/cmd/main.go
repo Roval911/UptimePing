@@ -12,8 +12,8 @@ import (
 
 	"UptimePingPlatform/pkg/config"
 	"UptimePingPlatform/pkg/health"
-	"UptimePingPlatform/pkg/metrics"
 	pkglogger "UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/pkg/metrics"
 	"UptimePingPlatform/services/metrics-service/internal/collector"
 	httpHandler "UptimePingPlatform/services/metrics-service/internal/handler/http"
 )
@@ -56,21 +56,21 @@ func main() {
 
 	// Создаем HTTP обработчики
 	httpH := httpHandler.NewHTTPHandler(logger, metricsCollector)
-	
+
 	// Создаем mux для регистрации маршрутов
 	mux := http.NewServeMux()
-	
+
 	// Регистрируем обработчики
 	httpH.RegisterRoutes(mux)
-	
+
 	// Добавляем health check эндпоинты из pkg/health (только если не зарегистрированы)
 	mux.HandleFunc("/health/pkg", health.Handler(healthChecker))
 	mux.HandleFunc("/ready/pkg", health.ReadyHandler(healthChecker))
 	mux.HandleFunc("/live/pkg", health.LiveHandler())
-	
+
 	// Добавляем metrics эндпоинт из pkg/metrics
 	mux.Handle("/service-metrics", prometheusMetrics.GetHandler())
-	
+
 	// Применяем middleware
 	handlerWithMetrics := prometheusMetrics.Middleware(mux)
 	handlerWithLogging := httpH.LoggingMiddleware(handlerWithMetrics)
@@ -129,9 +129,9 @@ func main() {
 
 // loadServicesFromConfig загружает сервисы из конфигурации
 func loadServicesFromConfig(collector *collector.MetricsCollector, cfg *config.Config) error {
-	// Здесь можно добавить логику загрузки сервисов из конфигурации
+	//todo Здесь можно добавить логику загрузки сервисов из конфигурации
 	// Например, из конфигурационного файла или переменных окружения
-	
+
 	// Пример: добавляем сервисы из переменных окружения
 	services := []struct {
 		Name    string

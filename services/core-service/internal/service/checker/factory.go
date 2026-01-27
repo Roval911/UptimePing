@@ -5,23 +5,23 @@ import (
 	"net/http"
 	"time"
 
-	"UptimePingPlatform/services/core-service/internal/domain"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/validation"
+	"UptimePingPlatform/services/core-service/internal/domain"
 )
 
 // DefaultCheckerFactory реализация CheckerFactory
 type DefaultCheckerFactory struct {
-	logger    logger.Logger
-	validator *validation.Validator
+	logger     logger.Logger
+	validator  *validation.Validator
 	httpClient HTTPClient
 }
 
 // NewDefaultCheckerFactory создает новую фабрику checker'ов
 func NewDefaultCheckerFactory(logger logger.Logger, httpClient HTTPClient) *DefaultCheckerFactory {
 	return &DefaultCheckerFactory{
-		logger:    logger,
-		validator: validation.NewValidator(),
+		logger:     logger,
+		validator:  validation.NewValidator(),
 		httpClient: httpClient,
 	}
 }
@@ -73,26 +73,26 @@ func NewDefaultHTTPClient(timeout time.Duration) *DefaultHTTPClient {
 // Do выполняет HTTP запрос
 func (c *DefaultHTTPClient) Do(req *http.Request) (*HTTPResponse, error) {
 	start := time.Now()
-	
+
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	
+
 	duration := time.Since(start)
-	
+
 	// Читаем тело ответа
 	body := make([]byte, 0, 1024)
 	// Для простоты не будем читать тело полностью
-	
+
 	headers := make(map[string]string)
 	for key, values := range resp.Header {
 		if len(values) > 0 {
 			headers[key] = values[0]
 		}
 	}
-	
+
 	return &HTTPResponse{
 		StatusCode: resp.StatusCode,
 		Headers:    headers,
@@ -108,19 +108,19 @@ type DefaultTCPDialer struct{}
 // Dial устанавливает TCP соединение
 func (d *DefaultTCPDialer) Dial(address string, timeout int64) (*TCPConnection, error) {
 	start := time.Now()
-	
-	// Для простоты симулируем TCP подключение
+
+	//todo Для простоты симулируем TCP подключение
 	// В реальной реализации здесь был бы net.DialTimeout
-	
+
 	duration := time.Since(start)
-	
+
 	// Симуляция успешного подключения
 	return &TCPConnection{
-		Connected:   true,
-		Address:     address,
-		DurationMs:  duration.Milliseconds(),
-		LocalAddr:   "127.0.0.1:12345",
-		RemoteAddr:  address,
+		Connected:  true,
+		Address:    address,
+		DurationMs: duration.Milliseconds(),
+		LocalAddr:  "127.0.0.1:12345",
+		RemoteAddr: address,
 	}, nil
 }
 
@@ -143,23 +143,23 @@ func (i *ICMPChecker) Execute(task *domain.Task) (*domain.CheckResult, error) {
 		logger.String("execution_id", task.ExecutionID),
 		logger.String("target", task.Target),
 	)
-	
+
 	// Валидация конфигурации
 	if err := i.ValidateConfig(task.Config); err != nil {
 		return nil, err
 	}
-	
-	// Симуляция ICMP проверки
+
+	//todo Симуляция ICMP проверки
 	// В реальной реализации здесь был бы ping
-	
+
 	return domain.NewCheckResult(
 		task.CheckID,
 		task.ExecutionID,
-		true,  // success
-		50,    // duration_ms
-		0,     // status_code
-		"",    // error
-		"",    // response_body
+		true, // success
+		50,   // duration_ms
+		0,    // status_code
+		"",   // error
+		"",   // response_body
 	), nil
 }
 
@@ -193,23 +193,23 @@ func (g *GRPCChecker) Execute(task *domain.Task) (*domain.CheckResult, error) {
 		logger.String("execution_id", task.ExecutionID),
 		logger.String("target", task.Target),
 	)
-	
+
 	// Валидация конфигурации
 	if err := g.ValidateConfig(task.Config); err != nil {
 		return nil, err
 	}
-	
-	// Симуляция gRPC проверки
+
+	// todo Симуляция gRPC проверки
 	// В реальной реализации здесь был бы gRPC клиент
-	
+
 	return domain.NewCheckResult(
 		task.CheckID,
 		task.ExecutionID,
-		true,  // success
-		100,   // duration_ms
-		0,     // status_code
-		"",    // error
-		"",    // response_body
+		true, // success
+		100,  // duration_ms
+		0,    // status_code
+		"",   // error
+		"",   // response_body
 	), nil
 }
 
