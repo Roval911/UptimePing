@@ -6,22 +6,30 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
 
 	"gopkg.in/yaml.v2"
 )
 
 // Config представляет конфигурацию приложения. Структура содержит вложенные структуры для различных компонентов приложения.
 type Config struct {
-	Server         ServerConfig    `json:"server" yaml:"server"`
-	Database       DatabaseConfig  `json:"database" yaml:"database"`
-	Logger         LoggerConfig    `json:"logger" yaml:"logger"`
-	Environment    string          `json:"environment" yaml:"environment"`
-	Redis          RedisConfig     `json:"redis" yaml:"redis"`
-	JWT            JWTConfig       `json:"jwt" yaml:"jwt"`
-	RabbitMQ       RabbitMQConfig  `json:"rabbitmq" yaml:"rabbitmq"`
-	GRPC          GRPCConfig      `json:"grpc" yaml:"grpc"`
-	RateLimiting   RateLimitConfig `json:"rate_limiting" yaml:"rate_limiting"`
-	Providers      ProvidersConfig `json:"providers" yaml:"providers"`
+	Server       ServerConfig    `json:"server" yaml:"server"`
+	Database     DatabaseConfig  `json:"database" yaml:"database"`
+	Logger       LoggerConfig    `json:"logger" yaml:"logger"`
+	Environment  string          `json:"environment" yaml:"environment"`
+	Redis        RedisConfig     `json:"redis" yaml:"redis"`
+	JWT          JWTConfig       `json:"jwt" yaml:"jwt"`
+	RabbitMQ     RabbitMQConfig  `json:"rabbitmq" yaml:"rabbitmq"`
+	GRPC         GRPCConfig      `json:"grpc" yaml:"grpc"`
+	RateLimiting RateLimitConfig `json:"rate_limiting" yaml:"rate_limiting"`
+	Providers    ProvidersConfig `json:"providers" yaml:"providers"`
+	Forge        ForgeConfig     `json:"forge" yaml:"forge"`
+	Metrics      MetricsConfig   `json:"metrics" yaml:"metrics"`
+	Health       HealthConfig    `json:"health" yaml:"health"`
+	Scheduler    SchedulerConfig `json:"scheduler" yaml:"scheduler"`
 }
 
 // ServerConfig представляет конфигурацию сервера. Содержит настройки хоста и порта для HTTP-сервера.
@@ -55,14 +63,14 @@ type RabbitMQConfig struct {
 
 // RedisConfig представляет конфигурацию Redis
 type RedisConfig struct {
-	Addr           string        `json:"addr" yaml:"addr"`
-	Password       string        `json:"password" yaml:"password"`
-	DB             int           `json:"db" yaml:"db"`
-	PoolSize       int           `json:"pool_size" yaml:"pool_size"`
-	MinIdleConn    int           `json:"min_idle_conn" yaml:"min_idle_conn"`
-	MaxRetries     int           `json:"max_retries" yaml:"max_retries"`
-	RetryInterval  string        `json:"retry_interval" yaml:"retry_interval"`
-	HealthCheck    string        `json:"health_check" yaml:"health_check"`
+	Addr          string `json:"addr" yaml:"addr"`
+	Password      string `json:"password" yaml:"password"`
+	DB            int    `json:"db" yaml:"db"`
+	PoolSize      int    `json:"pool_size" yaml:"pool_size"`
+	MinIdleConn   int    `json:"min_idle_conn" yaml:"min_idle_conn"`
+	MaxRetries    int    `json:"max_retries" yaml:"max_retries"`
+	RetryInterval string `json:"retry_interval" yaml:"retry_interval"`
+	HealthCheck   string `json:"health_check" yaml:"health_check"`
 }
 
 // IncidentManagerConfig представляет конфигурацию Incident Manager
@@ -73,14 +81,15 @@ type IncidentManagerConfig struct {
 // RateLimitConfig представляет конфигурацию Rate Limiting
 type RateLimitConfig struct {
 	RequestsPerMinute int `json:"requests_per_minute" yaml:"requests_per_minute"`
+	BurstSize         int `json:"burst_size" yaml:"burst_size"`
 }
 
 // JWTConfig представляет конфигурацию JWT
 type JWTConfig struct {
-	AccessSecret           string `json:"access_secret" yaml:"access_secret"`
-	RefreshSecret          string `json:"refresh_secret" yaml:"refresh_secret"`
-	AccessTokenDuration    string `json:"access_token_duration" yaml:"access_token_duration"`
-	RefreshTokenDuration   string `json:"refresh_token_duration" yaml:"refresh_token_duration"`
+	AccessSecret         string `json:"access_secret" yaml:"access_secret"`
+	RefreshSecret        string `json:"refresh_secret" yaml:"refresh_secret"`
+	AccessTokenDuration  string `json:"access_token_duration" yaml:"access_token_duration"`
+	RefreshTokenDuration string `json:"refresh_token_duration" yaml:"refresh_token_duration"`
 }
 
 // GRPCConfig представляет конфигурацию gRPC
@@ -97,31 +106,31 @@ type ProvidersConfig struct {
 
 // TelegramProviderConfig представляет конфигурацию Telegram провайдера
 type TelegramProviderConfig struct {
-	BotToken    string `json:"bot_token" yaml:"bot_token"`
-	APIURL      string `json:"api_url" yaml:"api_url"`
-	Timeout     string `json:"timeout" yaml:"timeout"`
-	RetryAttempts int  `json:"retry_attempts" yaml:"retry_attempts"`
+	BotToken      string `json:"bot_token" yaml:"bot_token"`
+	APIURL        string `json:"api_url" yaml:"api_url"`
+	Timeout       string `json:"timeout" yaml:"timeout"`
+	RetryAttempts int    `json:"retry_attempts" yaml:"retry_attempts"`
 }
 
 // SlackProviderConfig представляет конфигурацию Slack провайдера
 type SlackProviderConfig struct {
-	BotToken    string `json:"bot_token" yaml:"bot_token"`
-	WebhookURL  string `json:"webhook_url" yaml:"webhook_url"`
-	APIURL      string `json:"api_url" yaml:"api_url"`
-	Timeout     string `json:"timeout" yaml:"timeout"`
-	RetryAttempts int  `json:"retry_attempts" yaml:"retry_attempts"`
+	BotToken      string `json:"bot_token" yaml:"bot_token"`
+	WebhookURL    string `json:"webhook_url" yaml:"webhook_url"`
+	APIURL        string `json:"api_url" yaml:"api_url"`
+	Timeout       string `json:"timeout" yaml:"timeout"`
+	RetryAttempts int    `json:"retry_attempts" yaml:"retry_attempts"`
 }
 
 // EmailProviderConfig представляет конфигурацию Email провайдера
 type EmailProviderConfig struct {
-	SMTPHost     string `json:"smtp_host" yaml:"smtp_host"`
-	SMTPPort     int    `json:"smtp_port" yaml:"smtp_port"`
-	Username     string `json:"username" yaml:"username"`
-	Password     string `json:"password" yaml:"password"`
-	FromAddress  string `json:"from_address" yaml:"from_address"`
-	FromName     string `json:"from_name" yaml:"from_name"`
-	UseStartTLS  bool   `json:"use_starttls" yaml:"use_starttls"`
-	Timeout      string `json:"timeout" yaml:"timeout"`
+	SMTPHost      string `json:"smtp_host" yaml:"smtp_host"`
+	SMTPPort      int    `json:"smtp_port" yaml:"smtp_port"`
+	Username      string `json:"username" yaml:"username"`
+	Password      string `json:"password" yaml:"password"`
+	FromAddress   string `json:"from_address" yaml:"from_address"`
+	FromName      string `json:"from_name" yaml:"from_name"`
+	UseStartTLS   bool   `json:"use_starttls" yaml:"use_starttls"`
+	Timeout       string `json:"timeout" yaml:"timeout"`
 	RetryAttempts int    `json:"retry_attempts" yaml:"retry_attempts"`
 }
 
@@ -151,23 +160,23 @@ func LoadConfig(configFile string) (*Config, error) {
 		},
 		Environment: "dev",
 		Redis: RedisConfig{
-			Addr:           "localhost:6379",
-			Password:       "",
-			DB:             0,
-			PoolSize:       10,
-			MinIdleConn:    2,
-			MaxRetries:     3,
-			RetryInterval:  "1s",
-			HealthCheck:    "30s",
+			Addr:          "localhost:6379",
+			Password:      "",
+			DB:            0,
+			PoolSize:      10,
+			MinIdleConn:   2,
+			MaxRetries:    3,
+			RetryInterval: "1s",
+			HealthCheck:   "30s",
 		},
 		JWT: JWTConfig{
-			AccessSecret:         "your-access-secret",
-			RefreshSecret:        "your-refresh-secret",
+			AccessSecret:         "", // Будет загружено из переменных окружения
+			RefreshSecret:        "", // Будет загружено из переменных окружения
 			AccessTokenDuration:  "15m",
 			RefreshTokenDuration: "7d",
 		},
 		RabbitMQ: RabbitMQConfig{
-			URL:        "amqp://guest:guest@localhost:5672/",
+			URL:        "", // Будет загружено из переменных окружения
 			Exchange:   "notifications",
 			RoutingKey: "notification.events",
 			Queue:      "notifications",
@@ -180,36 +189,58 @@ func LoadConfig(configFile string) (*Config, error) {
 		},
 		Providers: ProvidersConfig{
 			Telegram: TelegramProviderConfig{
-				BotToken:     "",
-				APIURL:       "https://api.telegram.org",
-				Timeout:      "30s",
+				BotToken:      "",
+				APIURL:        "https://api.telegram.org",
+				Timeout:       "30s",
 				RetryAttempts: 3,
 			},
 			Slack: SlackProviderConfig{
-				BotToken:     "",
-				WebhookURL:   "",
-				APIURL:       "https://slack.com/api",
-				Timeout:      "30s",
+				BotToken:      "",
+				WebhookURL:    "",
+				APIURL:        "https://slack.com/api",
+				Timeout:       "30s",
 				RetryAttempts: 3,
 			},
 			Email: EmailProviderConfig{
-				SMTPHost:     "smtp.gmail.com",
-				SMTPPort:     587,
-				Username:     "",
-				Password:     "",
-				FromAddress:  "noreply@uptimeping.com",
-				FromName:     "UptimePing Platform",
-				UseStartTLS:  true,
-				Timeout:      "30s",
+				SMTPHost:      "smtp.gmail.com",
+				SMTPPort:      587,
+				Username:      "",
+				Password:      "",
+				FromAddress:   "noreply@uptimeping.com",
+				FromName:      "UptimePing Platform",
+				UseStartTLS:   true,
+				Timeout:       "30s",
 				RetryAttempts: 3,
 			},
 		},
+		Forge: ForgeConfig{
+			ProtoDir:  "proto",
+			OutputDir: "generated",
+		},
+		Metrics: MetricsConfig{
+			Enabled: true,
+			Port:    9090,
+		},
+		Health: HealthConfig{
+			Enabled: true,
+			Port:    8081,
+		},
+		Scheduler: SchedulerConfig{
+			MaxConcurrentTasks: 10,
+			TaskTimeout:        30 * time.Second,
+			CleanupInterval:    1 * time.Hour,
+			LockTimeout:        5 * time.Minute,
+		},
 	}
 
-	// Load from file if specified
+	// Load from file if specified and exists
 	if configFile != "" {
 		if err := loadConfigFromFile(config, configFile); err != nil {
-			return nil, fmt.Errorf("failed to load config from file: %w", err)
+			// If file doesn't exist, continue with defaults
+			if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("failed to load config from file: %w", err)
+			}
+			// File doesn't exist, continue with defaults and env vars
 		}
 	}
 
@@ -247,10 +278,13 @@ func loadConfigFromFile(config *Config, filename string) error {
 		return err
 	}
 
+	// Process environment variables in format ${VAR:default}
+	processedContent := expandEnvVars(string(content))
+
 	// Try to unmarshal as YAML first, then JSON
-	if err := yaml.Unmarshal(content, config); err != nil {
+	if err := yaml.Unmarshal([]byte(processedContent), config); err != nil {
 		// If YAML fails, try JSON
-		if jsonErr := json.Unmarshal(content, config); jsonErr != nil {
+		if jsonErr := json.Unmarshal([]byte(processedContent), config); jsonErr != nil {
 			return fmt.Errorf("failed to unmarshal config file as YAML or JSON: %w", err)
 		}
 	}
@@ -299,6 +333,80 @@ func loadConfigFromEnv(config *Config) error {
 	// Environment
 	if env := os.Getenv("ENVIRONMENT"); env != "" {
 		config.Environment = env
+	}
+
+	// Forge config
+	if protoDir := os.Getenv("PROTO_DIR"); protoDir != "" {
+		config.Forge.ProtoDir = protoDir
+	}
+	if outputDir := os.Getenv("OUTPUT_DIR"); outputDir != "" {
+		config.Forge.OutputDir = outputDir
+	}
+
+	// Metrics config
+	if metricsEnabled := os.Getenv("METRICS_ENABLED"); metricsEnabled != "" {
+		if enabled, err := strconv.ParseBool(metricsEnabled); err == nil {
+			config.Metrics.Enabled = enabled
+		}
+	}
+	if metricsPort := os.Getenv("METRICS_PORT"); metricsPort != "" {
+		if _, err := fmt.Sscanf(metricsPort, "%d", &config.Metrics.Port); err != nil {
+			return fmt.Errorf("invalid METRICS_PORT: %s", metricsPort)
+		}
+	}
+
+	// Health config
+	if healthEnabled := os.Getenv("HEALTH_ENABLED"); healthEnabled != "" {
+		if enabled, err := strconv.ParseBool(healthEnabled); err == nil {
+			config.Health.Enabled = enabled
+		}
+	}
+	if healthPort := os.Getenv("HEALTH_PORT"); healthPort != "" {
+		if _, err := fmt.Sscanf(healthPort, "%d", &config.Health.Port); err != nil {
+			return fmt.Errorf("invalid HEALTH_PORT: %s", healthPort)
+		}
+	}
+
+	// JWT config
+	if accessSecret := os.Getenv("JWT_ACCESS_SECRET"); accessSecret != "" {
+		config.JWT.AccessSecret = accessSecret
+	}
+	if refreshSecret := os.Getenv("JWT_REFRESH_SECRET"); refreshSecret != "" {
+		config.JWT.RefreshSecret = refreshSecret
+	}
+	if accessTokenDuration := os.Getenv("JWT_ACCESS_TOKEN_DURATION"); accessTokenDuration != "" {
+		config.JWT.AccessTokenDuration = accessTokenDuration
+	}
+	if refreshTokenDuration := os.Getenv("JWT_REFRESH_TOKEN_DURATION"); refreshTokenDuration != "" {
+		config.JWT.RefreshTokenDuration = refreshTokenDuration
+	}
+
+	// RabbitMQ config
+	if rabbitmqURL := os.Getenv("RABBITMQ_URL"); rabbitmqURL != "" {
+		config.RabbitMQ.URL = rabbitmqURL
+	}
+	if rabbitmqExchange := os.Getenv("RABBITMQ_EXCHANGE"); rabbitmqExchange != "" {
+		config.RabbitMQ.Exchange = rabbitmqExchange
+	}
+	if rabbitmqRoutingKey := os.Getenv("RABBITMQ_ROUTING_KEY"); rabbitmqRoutingKey != "" {
+		config.RabbitMQ.RoutingKey = rabbitmqRoutingKey
+	}
+	if rabbitmqQueue := os.Getenv("RABBITMQ_QUEUE"); rabbitmqQueue != "" {
+		config.RabbitMQ.Queue = rabbitmqQueue
+	}
+
+	// gRPC config
+	if grpcPort := os.Getenv("GRPC_PORT"); grpcPort != "" {
+		if _, err := fmt.Sscanf(grpcPort, "%d", &config.GRPC.Port); err != nil {
+			return fmt.Errorf("invalid GRPC_PORT: %s", grpcPort)
+		}
+	}
+
+	// Rate limiting config
+	if rateLimitRequests := os.Getenv("RATE_LIMIT_REQUESTS_PER_MINUTE"); rateLimitRequests != "" {
+		if _, err := fmt.Sscanf(rateLimitRequests, "%d", &config.RateLimiting.RequestsPerMinute); err != nil {
+			return fmt.Errorf("invalid RATE_LIMIT_REQUESTS_PER_MINUTE: %s", rateLimitRequests)
+		}
 	}
 
 	return nil
@@ -369,4 +477,53 @@ func (c *Config) Save(filename string) error {
 
 	// Write to file
 	return os.WriteFile(filename, content, 0644)
+}
+
+// expandEnvVars processes environment variables in format ${VAR:default}
+func expandEnvVars(content string) string {
+	// Use regex to find ${VAR:default} patterns
+	re := regexp.MustCompile(`\$\{([^}:]+):([^}]*)\}`)
+
+	return re.ReplaceAllStringFunc(content, func(match string) string {
+		// Extract VAR and default from the match
+		parts := strings.SplitN(match[2:len(match)-1], ":", 2)
+		if len(parts) != 2 {
+			return match // Return original if format is wrong
+		}
+
+		varName := parts[0]
+		defaultValue := parts[1]
+
+		// Get environment variable or use default
+		if envValue := os.Getenv(varName); envValue != "" {
+			return envValue
+		}
+		return defaultValue
+	})
+}
+
+// ForgeConfig представляет конфигурацию Forge Service
+type ForgeConfig struct {
+	ProtoDir  string `json:"proto_dir" yaml:"proto_dir"`
+	OutputDir string `json:"output_dir" yaml:"output_dir"`
+}
+
+// MetricsConfig представляет конфигурацию метрик
+type MetricsConfig struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	Port    int  `json:"port" yaml:"port"`
+}
+
+// HealthConfig представляет конфигурацию health check
+type HealthConfig struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	Port    int  `json:"port" yaml:"port"`
+}
+
+// SchedulerConfig конфигурация планировщика
+type SchedulerConfig struct {
+	MaxConcurrentTasks int           `json:"max_concurrent_tasks" yaml:"max_concurrent_tasks"`
+	TaskTimeout        time.Duration `json:"task_timeout" yaml:"task_timeout"`
+	CleanupInterval    time.Duration `json:"cleanup_interval" yaml:"cleanup_interval"`
+	LockTimeout        time.Duration `json:"lock_timeout" yaml:"lock_timeout"`
 }

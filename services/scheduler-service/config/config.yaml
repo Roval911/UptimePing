@@ -33,12 +33,4 @@ rate_limit:
   requests_per_minute: ${RATE_LIMIT_REQUESTS_PER_MINUTE:60}
   burst_size: ${RATE_LIMIT_BURST_SIZE:10}
 
-retry:
-  max_attempts: ${RETRY_MAX_ATTEMPTS:3}
-  initial_delay: "${RETRY_INITIAL_DELAY:1s}"
-  max_delay: "${RETRY_MAX_DELAY:30s}"
-  multiplier: ${RETRY_MULTIPLIER:2.0}
-  jitter: ${RETRY_JITTER:true}
-  jitter_range: ${RETRY_JITTER_RANGE:0.1}
-
 environment: "${ENVIRONMENT:dev}"

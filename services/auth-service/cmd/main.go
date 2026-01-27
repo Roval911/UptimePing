@@ -17,13 +17,13 @@ import (
 	"UptimePingPlatform/pkg/health"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
-	pkg_redis "UptimePingPlatform/pkg/redis"
 	"UptimePingPlatform/pkg/rabbitmq"
 	"UptimePingPlatform/pkg/ratelimit"
+	pkg_redis "UptimePingPlatform/pkg/redis"
 	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
 	"UptimePingPlatform/services/auth-service/internal/pkg/password"
-	redis_repo "UptimePingPlatform/services/auth-service/internal/repository/redis"
 	"UptimePingPlatform/services/auth-service/internal/repository/postgres"
+	redis_repo "UptimePingPlatform/services/auth-service/internal/repository/redis"
 	"UptimePingPlatform/services/auth-service/internal/service"
 
 	grpc_auth "UptimePingPlatform/gen/go/proto/api/auth/v1"
@@ -45,23 +45,30 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize logger: %v", err)
 	}
-	
+
 	// Инициализация метрик
 	metricsInstance := metrics.NewMetrics("auth-service")
 
 	// Инициализация retry конфигурации
 	retryConfig := connection.DefaultRetryConfig()
-	
+
 	// Инициализация базы данных с retry логикой
 	dbConfig := &database.Config{
-		Host:     cfg.Database.Host,
-		Port:     cfg.Database.Port,
-		User:     cfg.Database.User,
-		Password: cfg.Database.Password,
-		Database: cfg.Database.Name,
-		SSLMode:  "disable",
+		Host:          cfg.Database.Host,
+		Port:          cfg.Database.Port,
+		User:          cfg.Database.User,
+		Password:      cfg.Database.Password,
+		Database:      cfg.Database.Name,
+		SSLMode:       "disable",
+		MaxConns:      20,
+		MinConns:      5,
+		MaxConnLife:   30 * time.Minute,
+		MaxConnIdle:   5 * time.Minute,
+		HealthCheck:   30 * time.Second,
+		MaxRetries:    3,
+		RetryInterval: 1 * time.Second,
 	}
-	
+
 	var postgresDB *database.Postgres
 	err = connection.WithRetry(context.Background(), retryConfig, func(ctx context.Context) error {
 		var err error
@@ -100,7 +107,7 @@ func main() {
 	rabbitConfig := rabbitmq.NewConfig()
 	rabbitConfig.URL = cfg.RabbitMQ.URL
 	rabbitConfig.Queue = cfg.RabbitMQ.Queue
-	
+
 	rabbitConn, err := rabbitmq.Connect(context.Background(), rabbitConfig)
 	if err != nil {
 		appLogger.Warn("Failed to connect to RabbitMQ (notifications disabled)", logger.String("error", err.Error()))
@@ -132,7 +139,7 @@ func main() {
 
 	// Создание gRPC сервера
 	grpcServer := grpc.NewServer()
-	
+
 	// Регистрация обработчиков
 	authHandler := handlers.NewAuthHandler(authService, appLogger)
 	grpc_auth.RegisterAuthServiceServer(grpcServer, authHandler)
@@ -158,13 +165,13 @@ func main() {
 	// Запуск HTTP сервера для health checks
 	go func() {
 		mux := http.NewServeMux()
-		
+
 		// Инициализация health checker
 		healthChecker := health.NewSimpleHealthChecker("1.0.0")
-		
+
 		// Инициализация rate limiter
 		rateLimiter := ratelimit.NewRedisRateLimiter(redisClient.Client)
-		
+
 		// Rate limiting middleware
 		rateLimitMiddleware := func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -175,25 +182,25 @@ func main() {
 					http.Error(w, "Rate limit check failed", http.StatusInternalServerError)
 					return
 				}
-				
+
 				if !allowed {
 					appLogger.Warn("Rate limit exceeded", logger.String("client_ip", clientIP))
 					http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 					return
 				}
-				
+
 				next.ServeHTTP(w, r)
 			})
 		}
-		
+
 		// Health check эндпоинты
 		mux.HandleFunc("/health", health.Handler(healthChecker))
 		mux.HandleFunc("/ready", health.ReadyHandler(healthChecker))
 		mux.HandleFunc("/live", health.LiveHandler())
-		
+
 		// Metrics эндпоинт
 		mux.Handle("/metrics", metricsInstance.GetHandler())
-		
+
 		// Применяем middleware
 		handler := metricsInstance.Middleware(rateLimitMiddleware(mux))
 
@@ -238,12 +245,12 @@ func getClientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		return xff
 	}
-	
+
 	// Проверяем X-Real-IP header
 	if xri := r.Header.Get("X-Real-IP"); xri != "" {
 		return xri
 	}
-	
+
 	// Возвращаем RemoteAddr
 	return r.RemoteAddr
 }

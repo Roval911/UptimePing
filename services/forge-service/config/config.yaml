@@ -1,0 +1,39 @@
+server:
+  host: "${SERVER_HOST:0.0.0.0}"
+  port: ${SERVER_PORT:8082}
+
+logger:
+  level: "${LOG_LEVEL:info}"
+  format: "${LOG_FORMAT:json}"
+
+forge:
+  proto_dir: "${PROTO_DIR:proto}"
+  output_dir: "${OUTPUT_DIR:generated}"
+  
+database:
+  host: "${DB_HOST:localhost}"
+  port: ${DB_PORT:5432}
+  name: "${DB_NAME:forge}"
+  user: "${DB_USER:forge}"
+  password: "${DB_PASSWORD:forge_password}"
+
+redis:
+  addr: "${REDIS_ADDR:localhost:6379}"
+  password: "${REDIS_PASSWORD:}"
+  db: ${REDIS_DB:0}
+
+rabbitmq:
+  url: "${RABBITMQ_URL:amqp://guest:guest@localhost:5672/}"
+  exchange: "${RABBITMQ_EXCHANGE:forge.exchange}"
+  routing_key: "${RABBITMQ_ROUTING_KEY:forge.routing}"
+
+grpc:
+  port: ${GRPC_PORT:50052}
+
+metrics:
+  enabled: ${METRICS_ENABLED:true}
+  port: ${METRICS_PORT:9090}
+
+health:
+  enabled: ${HEALTH_ENABLED:true}
+  port: ${HEALTH_PORT:8081}

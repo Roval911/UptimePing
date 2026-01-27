@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"UptimePingPlatform/services/core-service/internal/domain"
 	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/validation"
+	"UptimePingPlatform/services/core-service/internal/domain"
 )
 
 // GraphQLChecker реализует Checker для GraphQL проверок
@@ -32,16 +32,16 @@ type GraphQLRequest struct {
 
 // GraphQLResponse представляет GraphQL ответ
 type GraphQLResponse struct {
-	Data       interface{}       `json:"data"`
-	Errors     []GraphQLError    `json:"errors,omitempty"`
+	Data       interface{}            `json:"data"`
+	Errors     []GraphQLError         `json:"errors,omitempty"`
 	Extensions map[string]interface{} `json:"extensions,omitempty"`
 }
 
 // GraphQLError представляет GraphQL ошибку
 type GraphQLError struct {
-	Message    string            `json:"message"`
-	Locations  []GraphQLLocation `json:"locations,omitempty"`
-	Path       []interface{}     `json:"path,omitempty"`
+	Message    string                 `json:"message"`
+	Locations  []GraphQLLocation      `json:"locations,omitempty"`
+	Path       []interface{}          `json:"path,omitempty"`
 	Extensions map[string]interface{} `json:"extensions,omitempty"`
 }
 
@@ -74,44 +74,44 @@ func (g *GraphQLChecker) Execute(task *domain.Task) (*domain.CheckResult, error)
 	if err := g.ValidateConfig(task.Config); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
-	
+
 	// Извлечение GraphQL конфигурации
 	graphqlConfig, err := task.GetGraphQLConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract GraphQL config: %w", err)
 	}
-	
+
 	// Создание HTTP запроса для GraphQL
 	req, err := g.createGraphQLRequest(graphqlConfig)
 	if err != nil {
 		return g.createErrorResult(task, 0, 0, fmt.Errorf("failed to create request: %w", err)), nil
 	}
-	
+
 	// Выполнение запроса с измерением времени
 	startTime := time.Now()
 	resp, err := g.client.Do(req)
 	duration := time.Since(startTime)
-	
+
 	if err != nil {
 		return g.createErrorResult(task, 0, duration.Milliseconds(), fmt.Errorf("request failed: %w", err)), nil
 	}
 	defer resp.Body.Close()
-	
+
 	// Чтение тела ответа
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return g.createErrorResult(task, resp.StatusCode, duration.Milliseconds(), fmt.Errorf("failed to read response body: %w", err)), nil
 	}
-	
+
 	// Парсинг GraphQL ответа
 	graphqlResp, err := g.parseGraphQLResponse(string(body))
 	if err != nil {
 		return g.createErrorResult(task, resp.StatusCode, duration.Milliseconds(), fmt.Errorf("failed to parse GraphQL response: %w", err)), nil
 	}
-	
+
 	// GraphQL считается успешным если нет ошибок в ответе
 	success := len(graphqlResp.Errors) == 0
-	
+
 	// Формирование результата
 	result := &domain.CheckResult{
 		CheckID:      task.CheckID,
@@ -123,7 +123,7 @@ func (g *GraphQLChecker) Execute(task *domain.Task) (*domain.CheckResult, error)
 		CheckedAt:    time.Now().UTC(),
 		Metadata:     make(map[string]string),
 	}
-	
+
 	// Добавление метаданных
 	result.Metadata["content_type"] = resp.Header.Get("Content-Type")
 	result.Metadata["body_size"] = fmt.Sprintf("%d", len(body))
@@ -131,7 +131,7 @@ func (g *GraphQLChecker) Execute(task *domain.Task) (*domain.CheckResult, error)
 	if graphqlConfig.OperationName != "" {
 		result.Metadata["operation_name"] = graphqlConfig.OperationName
 	}
-	
+
 	if !success {
 		var errorMessages []string
 		for _, gqlErr := range graphqlResp.Errors {
@@ -139,7 +139,7 @@ func (g *GraphQLChecker) Execute(task *domain.Task) (*domain.CheckResult, error)
 		}
 		result.Error = fmt.Sprintf("GraphQL errors: %s", strings.Join(errorMessages, "; "))
 	}
-	
+
 	return result, nil
 }
 
@@ -155,52 +155,52 @@ func (g *GraphQLChecker) ValidateConfig(config map[string]interface{}) error {
 		"url":   "GraphQL endpoint URL",
 		"query": "GraphQL query",
 	}
-	
+
 	if err := g.validator.ValidateRequiredFields(config, requiredFields); err != nil {
 		g.logger.Debug("GraphQL config validation failed", logger.Error(err))
 		return errors.Wrap(err, errors.ErrValidation, "required fields validation failed")
 	}
-	
+
 	// Валидация URL
 	urlStr := config["url"].(string)
 	if err := g.validator.ValidateURL(urlStr, []string{"http", "https"}); err != nil {
-		g.logger.Debug("GraphQL config validation failed: invalid URL", 
+		g.logger.Debug("GraphQL config validation failed: invalid URL",
 			logger.String("url", urlStr),
 			logger.Error(err))
 		return errors.Wrap(err, errors.ErrValidation, "invalid URL format")
 	}
-	
+
 	// Валидация query - базовая проверка наличия фигурных скобок
 	queryStr := config["query"].(string)
 	if !strings.Contains(queryStr, "{") || !strings.Contains(queryStr, "}") {
 		err := fmt.Errorf("must contain valid GraphQL query with braces")
-		g.logger.Debug("GraphQL config validation failed: invalid query", 
+		g.logger.Debug("GraphQL config validation failed: invalid query",
 			logger.String("query_preview", queryStr[:min(100, len(queryStr))]),
 			logger.Error(err))
 		return errors.Wrap(err, errors.ErrValidation, "invalid GraphQL query format")
 	}
-	
+
 	// Валидация длины query
 	if err := g.validator.ValidateStringLength(queryStr, "query", 1, 10000); err != nil {
-		g.logger.Debug("GraphQL config validation failed: invalid query length", 
+		g.logger.Debug("GraphQL config validation failed: invalid query length",
 			logger.Int("query_length", len(queryStr)),
 			logger.Error(err))
 		return errors.Wrap(err, errors.ErrValidation, "query length validation failed")
 	}
-	
+
 	// Валидация таймаута
 	if timeout, ok := config["timeout"]; ok {
 		if timeoutStr, ok := timeout.(string); ok {
 			// Проверяем, что это не невалидное значение
 			if timeoutStr == "invalid" {
-				g.logger.Debug("GraphQL config validation failed: invalid timeout", 
+				g.logger.Debug("GraphQL config validation failed: invalid timeout",
 					logger.String("timeout", timeoutStr))
 				return errors.New(errors.ErrValidation, "invalid timeout")
 			}
 			// Для других строковых значений пока пропускаем (TODO: добавить парсинг duration)
 		}
 	}
-	
+
 	g.logger.Debug("GraphQL config validation passed")
 	return nil
 }
@@ -221,33 +221,33 @@ func (g *GraphQLChecker) createGraphQLRequest(config *domain.GraphQLConfig) (*ht
 		Variables:     config.Variables,
 		OperationName: config.OperationName,
 	}
-	
+
 	// Сериализация в JSON
 	reqBody, err := json.Marshal(graphqlReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal GraphQL request: %w", err)
 	}
-	
+
 	// Создание HTTP запроса
 	req, err := http.NewRequest("POST", config.URL, bytes.NewBuffer(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
-	
+
 	// Установка заголовков
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	
+
 	// Добавление кастомных заголовков
 	for key, value := range config.Headers {
 		req.Header.Set(key, value)
 	}
-	
+
 	// Установка User-Agent если не указан
 	if req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", "UptimePing-GraphQL/1.0")
 	}
-	
+
 	return req, nil
 }
 
@@ -279,6 +279,11 @@ func (g *GraphQLChecker) createErrorResult(task *domain.Task, statusCode int, du
 // SetTimeout устанавливает таймаут HTTP клиента
 func (g *GraphQLChecker) SetTimeout(timeout time.Duration) {
 	g.client.Timeout = timeout
+}
+
+// GetTimeout возвращает текущий таймаут HTTP клиента
+func (g *GraphQLChecker) GetTimeout() time.Duration {
+	return g.client.Timeout
 }
 
 // GetClient возвращает HTTP клиент для тестирования

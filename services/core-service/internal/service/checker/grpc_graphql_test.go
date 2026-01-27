@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/services/core-service/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"UptimePingPlatform/services/core-service/internal/domain"
-	"UptimePingPlatform/pkg/logger"
 )
 
 func TestGRPCChecker_Execute_Success(t *testing.T) {
@@ -16,7 +16,7 @@ func TestGRPCChecker_Execute_Success(t *testing.T) {
 	log, err := logger.NewLogger("test", "debug", "core-service", false)
 	require.NoError(t, err)
 	checker := NewgRPCChecker(5000, log)
-	
+
 	// Создание тестовой задачи с health check
 	config := map[string]interface{}{
 		"service": "grpc.health.v1.Health",
@@ -25,12 +25,12 @@ func TestGRPCChecker_Execute_Success(t *testing.T) {
 		"port":    float64(50051),
 		"timeout": "5s",
 	}
-	
+
 	task := domain.NewTask("check-1", "localhost:50051", "grpc", "exec-1", time.Now(), config)
-	
+
 	// Выполнение проверки (может не пройти если нет gRPC сервера)
 	result, err := checker.Execute(task)
-	
+
 	// Проверки
 	if err != nil {
 		// Ожидаем ошибку если нет сервера
@@ -49,7 +49,7 @@ func TestGRPCChecker_Execute_InvalidConfig(t *testing.T) {
 	log, err := logger.NewLogger("test", "debug", "core-service", false)
 	require.NoError(t, err)
 	checker := NewgRPCChecker(5000, log)
-	
+
 	// Создание задачи с невалидной конфигурацией
 	config := map[string]interface{}{
 		"service": "", // пустой сервис
@@ -57,12 +57,12 @@ func TestGRPCChecker_Execute_InvalidConfig(t *testing.T) {
 		"host":    "localhost",
 		"port":    float64(50051),
 	}
-	
+
 	task := domain.NewTask("check-1", "localhost:50051", "grpc", "exec-1", time.Now(), config)
-	
+
 	// Выполнение проверки
 	result, err := checker.Execute(task)
-	
+
 	// Проверки
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -80,14 +80,14 @@ func TestGRPCChecker_SetDialTimeout(t *testing.T) {
 	log, err := logger.NewLogger("test", "debug", "core-service", false)
 	require.NoError(t, err)
 	checker := NewgRPCChecker(1000, log)
-	
+
 	// Проверка начального таймаута
 	assert.Equal(t, 1*time.Second, checker.GetDialTimeout())
-	
+
 	// Установка нового таймаута
 	newTimeout := 10 * time.Second
 	checker.SetDialTimeout(newTimeout)
-	
+
 	// Проверка изменения таймаута
 	assert.Equal(t, newTimeout, checker.GetDialTimeout())
 }
@@ -196,14 +196,14 @@ func TestGRPCChecker_ValidateConfig(t *testing.T) {
 			errorField:  "timeout",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			log, err := logger.NewLogger("test", "debug", "core-service", false)
 			require.NoError(t, err)
 			checker := NewgRPCChecker(5000, log)
 			err = checker.ValidateConfig(tt.config)
-			
+
 			if tt.expectError {
 				assert.Error(t, err)
 				if tt.errorField != "" {
@@ -220,7 +220,7 @@ func TestGRPCChecker_executeStandardHealthCheck(t *testing.T) {
 	log, err := logger.NewLogger("test", "debug", "core-service", false)
 	require.NoError(t, err)
 	checker := NewgRPCChecker(5000, log)
-	
+
 	// Просто проверяем, что функция существует
 	assert.NotNil(t, checker)
 }
@@ -229,7 +229,7 @@ func TestGRPCChecker_executeCustomMethodCheck(t *testing.T) {
 	log, err := logger.NewLogger("test", "debug", "core-service", false)
 	require.NoError(t, err)
 	checker := NewgRPCChecker(5000, log)
-	
+
 	// Создание тестовой конфигурации
 	config := &domain.GPRCConfig{
 		Service: "test.service",
@@ -237,7 +237,7 @@ func TestGRPCChecker_executeCustomMethodCheck(t *testing.T) {
 		Host:    "localhost",
 		Port:    50051,
 	}
-	
+
 	// Просто проверяем, что функция существует и конфигурация создана
 	assert.NotNil(t, checker)
 	assert.Equal(t, "test.service", config.Service)
@@ -248,12 +248,12 @@ func TestGRPCChecker_createErrorResult(t *testing.T) {
 	log, err := logger.NewLogger("test", "debug", "core-service", false)
 	require.NoError(t, err)
 	checker := NewgRPCChecker(5000, log)
-	
+
 	task := domain.NewTask("check-1", "localhost:50051", "grpc", "exec-1", time.Now(), map[string]interface{}{})
 	testErr := fmt.Errorf("test error")
-	
+
 	result := checker.createErrorResult(task, 500, 1000, testErr)
-	
+
 	assert.False(t, result.Success)
 	assert.Equal(t, "check-1", result.CheckID)
 	assert.Equal(t, "exec-1", result.ExecutionID)
@@ -267,19 +267,19 @@ func TestGraphQLChecker_Execute_Success(t *testing.T) {
 	log, err := logger.NewLogger("test", "debug", "core-service", false)
 	require.NoError(t, err)
 	checker := NewGraphQLChecker(5000, log)
-	
+
 	// Создание тестовой задачи
 	config := map[string]interface{}{
-		"url":    "https://httpbin.org/graphql",
-		"query":  "{ status }",
+		"url":     "https://httpbin.org/graphql",
+		"query":   "{ status }",
 		"timeout": "5s",
 	}
-	
+
 	task := domain.NewTask("check-1", "https://httpbin.org/graphql", "graphql", "exec-1", time.Now(), config)
-	
+
 	// Выполнение проверки
 	result, err := checker.Execute(task)
-	
+
 	// Проверки
 	if err != nil {
 		// Ожидаем ошибку если нет GraphQL сервера
@@ -298,18 +298,18 @@ func TestGraphQLChecker_Execute_InvalidConfig(t *testing.T) {
 	log, err := logger.NewLogger("test", "debug", "core-service", false)
 	require.NoError(t, err)
 	checker := NewGraphQLChecker(5000, log)
-	
+
 	// Создание задачи с невалидной конфигурацией
 	config := map[string]interface{}{
 		"url":   "", // пустой URL
 		"query": "{ status }",
 	}
-	
+
 	task := domain.NewTask("check-1", "https://example.com/graphql", "graphql", "exec-1", time.Now(), config)
-	
+
 	// Выполнение проверки
 	result, err := checker.Execute(task)
-	
+
 	// Проверки
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -327,16 +327,16 @@ func TestGraphQLChecker_SetTimeout(t *testing.T) {
 	log, err := logger.NewLogger("test", "debug", "core-service", false)
 	require.NoError(t, err)
 	checker := NewGraphQLChecker(1000, log)
-	
+
 	// Проверка начального таймаута
-	assert.Equal(t, int64(1000), checker.GetTimeout())
-	
+	assert.Equal(t, time.Second, checker.GetTimeout())
+
 	// Установка нового таймаута
 	newTimeout := 5 * time.Second
 	checker.SetTimeout(newTimeout)
-	
+
 	// Проверка изменения таймаута
-	assert.Equal(t, int64(5000), checker.GetTimeout())
+	assert.Equal(t, 5*time.Second, checker.GetTimeout())
 	assert.Equal(t, newTimeout, checker.GetClient().Timeout)
 }
 
@@ -350,8 +350,8 @@ func TestGraphQLChecker_ValidateConfig(t *testing.T) {
 		{
 			name: "valid config",
 			config: map[string]interface{}{
-				"url":    "https://example.com/graphql",
-				"query":  "{ status }",
+				"url":     "https://example.com/graphql",
+				"query":   "{ status }",
 				"timeout": "5s",
 			},
 			expectError: false,
@@ -411,22 +411,22 @@ func TestGraphQLChecker_ValidateConfig(t *testing.T) {
 		{
 			name: "invalid timeout",
 			config: map[string]interface{}{
-				"url":    "https://example.com/graphql",
-				"query":  "{ status }",
+				"url":     "https://example.com/graphql",
+				"query":   "{ status }",
 				"timeout": "invalid",
 			},
 			expectError: true,
 			errorField:  "invalid timeout",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			log, err := logger.NewLogger("test", "debug", "core-service", false)
 			require.NoError(t, err)
 			checker := NewGraphQLChecker(5000, log)
 			err = checker.ValidateConfig(tt.config)
-			
+
 			if tt.expectError {
 				assert.Error(t, err)
 				if tt.errorField != "" {
@@ -443,7 +443,7 @@ func TestGraphQLChecker_createGraphQLRequest(t *testing.T) {
 	log, err := logger.NewLogger("test", "debug", "core-service", false)
 	require.NoError(t, err)
 	checker := NewGraphQLChecker(5000, log)
-	
+
 	tests := []struct {
 		name     string
 		config   *domain.GraphQLConfig
@@ -478,7 +478,7 @@ func TestGraphQLChecker_createGraphQLRequest(t *testing.T) {
 			expected: "POST",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req, err := checker.createGraphQLRequest(tt.config)
@@ -495,7 +495,7 @@ func TestGraphQLChecker_parseGraphQLResponse(t *testing.T) {
 	log, err := logger.NewLogger("test", "debug", "core-service", false)
 	require.NoError(t, err)
 	checker := NewGraphQLChecker(5000, log)
-	
+
 	tests := []struct {
 		name        string
 		body        string
@@ -503,35 +503,35 @@ func TestGraphQLChecker_parseGraphQLResponse(t *testing.T) {
 		expectData  bool
 	}{
 		{
-			name: "valid response with data",
-			body: `{"data": {"status": "ok"}}`,
+			name:        "valid response with data",
+			body:        `{"data": {"status": "ok"}}`,
 			expectError: false,
 			expectData:  true,
 		},
 		{
-			name: "valid response with errors",
-			body: `{"errors": [{"message": "Field not found"}]}`,
+			name:        "valid response with errors",
+			body:        `{"errors": [{"message": "Field not found"}]}`,
 			expectError: false,
 			expectData:  false,
 		},
 		{
-			name: "invalid JSON",
-			body: `invalid json`,
+			name:        "invalid JSON",
+			body:        `invalid json`,
 			expectError: true,
 			expectData:  false,
 		},
 		{
-			name: "empty response",
-			body: `{}`,
+			name:        "empty response",
+			body:        `{}`,
 			expectError: false,
 			expectData:  false,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			resp, err := checker.parseGraphQLResponse(tt.body)
-			
+
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -548,12 +548,12 @@ func TestGraphQLChecker_createErrorResult(t *testing.T) {
 	log, err := logger.NewLogger("test", "debug", "core-service", false)
 	require.NoError(t, err)
 	checker := NewGraphQLChecker(5000, log)
-	
+
 	task := domain.NewTask("check-1", "https://example.com/graphql", "graphql", "exec-1", time.Now(), map[string]interface{}{})
 	testErr := fmt.Errorf("test error")
-	
+
 	result := checker.createErrorResult(task, 500, 1000, testErr)
-	
+
 	assert.False(t, result.Success)
 	assert.Equal(t, "check-1", result.CheckID)
 	assert.Equal(t, "exec-1", result.ExecutionID)

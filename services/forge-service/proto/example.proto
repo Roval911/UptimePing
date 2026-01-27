@@ -1,0 +1,188 @@
+syntax = "proto3";
+
+package forge.example;
+
+option go_package = "UptimePingPlatform/services/forge-service/proto";
+
+// Forge Service API
+service ForgeService {
+  // Создает новую конфигурацию сервиса
+  rpc CreateConfig(CreateConfigRequest) returns (CreateConfigResponse);
+  
+  // Получает конфигурацию сервиса
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+  
+  // Обновляет конфигурацию сервиса
+  rpc UpdateConfig(UpdateConfigRequest) returns (UpdateConfigResponse);
+  
+  // Удаляет конфигурацию сервиса
+  rpc DeleteConfig(DeleteConfigRequest) returns (DeleteConfigResponse);
+  
+  // Получает список всех конфигураций
+  rpc ListConfigs(ListConfigsRequest) returns (stream ListConfigsResponse);
+  
+  // Валидирует конфигурацию
+  rpc ValidateConfig(stream ValidateConfigRequest) returns (ValidateConfigResponse);
+}
+
+// Запрос на создание конфигурации
+message CreateConfigRequest {
+  string service_name = 1;
+  string config_content = 2;
+  ConfigFormat format = 3;
+  map<string, string> metadata = 4;
+}
+
+// Ответ на создание конфигурации
+message CreateConfigResponse {
+  string config_id = 1;
+  string version = 2;
+  int64 created_at = 3;
+  ConfigStatus status = 4;
+}
+
+// Запрос на получение конфигурации
+message GetConfigRequest {
+  string config_id = 1;
+  string version = 2;
+  bool include_metadata = 3;
+}
+
+// Ответ на получение конфигурации
+message GetConfigResponse {
+  string config_id = 1;
+  string service_name = 2;
+  string config_content = 3;
+  string version = 4;
+  ConfigFormat format = 5;
+  ConfigStatus status = 6;
+  int64 created_at = 7;
+  int64 updated_at = 8;
+  map<string, string> metadata = 9;
+}
+
+// Запрос на обновление конфигурации
+message UpdateConfigRequest {
+  string config_id = 1;
+  string config_content = 2;
+  map<string, string> metadata = 3;
+}
+
+// Ответ на обновление конфигурации
+message UpdateConfigResponse {
+  string config_id = 1;
+  string version = 2;
+  int64 updated_at = 3;
+  ConfigStatus status = 4;
+}
+
+// Запрос на удаление конфигурации
+message DeleteConfigRequest {
+  string config_id = 1;
+  bool force = 2;
+}
+
+// Ответ на удаление конфигурации
+message DeleteConfigResponse {
+  string config_id = 1;
+  bool deleted = 2;
+  int64 deleted_at = 3;
+}
+
+// Запрос на список конфигураций
+message ListConfigsRequest {
+  string service_name = 1;
+  ConfigStatus status_filter = 2;
+  int32 page = 3;
+  int32 limit = 4;
+}
+
+// Ответ на список конфигураций
+message ListConfigsResponse {
+  repeated ConfigInfo configs = 1;
+  int32 total_count = 2;
+  bool has_more = 3;
+}
+
+// Запрос на валидацию конфигурации
+message ValidateConfigRequest {
+  string config_content = 1;
+  ConfigFormat format = 2;
+  ValidationLevel level = 3;
+}
+
+// Ответ на валидацию конфигурации
+message ValidateConfigResponse {
+  bool valid = 1;
+  repeated ValidationError errors = 2;
+  repeated ValidationWarning warnings = 3;
+}
+
+// Информация о конфигурации
+message ConfigInfo {
+  string config_id = 1;
+  string service_name = 2;
+  string version = 3;
+  ConfigFormat format = 4;
+  ConfigStatus status = 5;
+  int64 created_at = 6;
+  int64 updated_at = 7;
+}
+
+// Ошибка валидации
+message ValidationError {
+  string field = 1;
+  string message = 2;
+  ValidationErrorCode code = 3;
+}
+
+// Предупреждение валидации
+message ValidationWarning {
+  string field = 1;
+  string message = 2;
+  ValidationWarningCode code = 3;
+}
+
+// Формат конфигурации
+enum ConfigFormat {
+  CONFIG_FORMAT_UNSPECIFIED = 0;
+  CONFIG_FORMAT_JSON = 1;
+  CONFIG_FORMAT_YAML = 2;
+  CONFIG_FORMAT_TOML = 3;
+  CONFIG_FORMAT_XML = 4;
+}
+
+// Статус конфигурации
+enum ConfigStatus {
+  CONFIG_STATUS_UNSPECIFIED = 0;
+  CONFIG_STATUS_DRAFT = 1;
+  CONFIG_STATUS_ACTIVE = 2;
+  CONFIG_STATUS_DEPRECATED = 3;
+  CONFIG_STATUS_ARCHIVED = 4;
+}
+
+// Уровень валидации
+enum ValidationLevel {
+  VALIDATION_LEVEL_UNSPECIFIED = 0;
+  VALIDATION_LEVEL_BASIC = 1;
+  VALIDATION_LEVEL_STRICT = 2;
+  VALIDATION_LEVEL_COMPREHENSIVE = 3;
+}
+
+// Коды ошибок валидации
+enum ValidationErrorCode {
+  VALIDATION_ERROR_CODE_UNSPECIFIED = 0;
+  VALIDATION_ERROR_CODE_SYNTAX = 1;
+  VALIDATION_ERROR_CODE_SCHEMA = 2;
+  VALIDATION_ERROR_CODE_DEPENDENCY = 3;
+  VALIDATION_ERROR_CODE_SECURITY = 4;
+  VALIDATION_ERROR_CODE_PERFORMANCE = 5;
+}
+
+// Коды предупреждений валидации
+enum ValidationWarningCode {
+  VALIDATION_WARNING_CODE_UNSPECIFIED = 0;
+  VALIDATION_WARNING_CODE_DEPRECATED = 1;
+  VALIDATION_WARNING_CODE_RECOMMENDATION = 2;
+  VALIDATION_WARNING_CODE_STYLE = 3;
+}
