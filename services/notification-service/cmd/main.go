@@ -3,13 +3,16 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	pkg_config "UptimePingPlatform/pkg/config"
+	"UptimePingPlatform/pkg/health"
 	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/pkg/metrics"
 	pkg_rabbitmq "UptimePingPlatform/pkg/rabbitmq"
 	"gopkg.in/yaml.v2"
 
@@ -105,6 +108,27 @@ func main() {
 		appLogger,
 	)
 
+	// Создаем метрики
+	metricsInstance := metrics.NewMetrics("notification-service")
+	appLogger.Info("Metrics initialized")
+
+	// Создаем health checker
+	healthChecker := health.NewSimpleHealthChecker("1.0.0")
+
+	// Создаем HTTP сервер для health checks и метрик
+	httpServer := &http.Server{
+		Addr: fmt.Sprintf(":%d", cfg.Server.Port+1000), // Используем порт+1000 для HTTP
+	}
+
+	// Регистрируем HTTP маршруты
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", health.Handler(healthChecker))
+	mux.HandleFunc("/ready", health.ReadyHandler(healthChecker))
+	mux.HandleFunc("/live", health.LiveHandler())
+	mux.Handle("/metrics", metricsInstance.GetHandler())
+
+	httpServer.Handler = metricsInstance.Middleware(mux)
+
 	// Запуск consumer в горутине
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -117,12 +141,24 @@ func main() {
 		}
 	}()
 
+	// Запуск HTTP сервера для метрик в горутине
+	go func() {
+		appLogger.Info("Starting HTTP server for metrics",
+			logger.String("address", httpServer.Addr))
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			appLogger.Error("HTTP server failed", logger.Error(err))
+		}
+	}()
+
+	appLogger.Info("Notification Service started successfully",
+		logger.String("http_address", httpServer.Addr),
+		logger.String("metrics", "http://"+httpServer.Addr+"/metrics"),
+		logger.String("health", "http://"+httpServer.Addr+"/health"))
+	appLogger.Info("Waiting for signals...")
+
 	// Ожидание сигнала для graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	appLogger.Info("Notification Service started successfully")
-	appLogger.Info("Waiting for signals...")
 
 	<-sigChan
 	appLogger.Info("Shutdown signal received")
@@ -134,6 +170,12 @@ func main() {
 	appLogger.Info("Stopping notification consumer...")
 	if err := notificationConsumer.Stop(); err != nil {
 		appLogger.Error("Failed to stop notification consumer", logger.Error(err))
+	}
+
+	// Останавливаем HTTP сервер
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		appLogger.Error("HTTP server shutdown failed", logger.Error(err))
+		httpServer.Close()
 	}
 
 	appLogger.Info("Notification Service stopped gracefully")

@@ -2,22 +2,27 @@ package middleware
 
 import (
 	"encoding/json"
-	//"fmt"
-	"log"
 	"net/http"
 	"runtime"
+	"time"
+
+	"UptimePingPlatform/pkg/logger"
 )
 
 // RecoveryMiddleware обрабатывает паники в обработчиках HTTP
-func RecoveryMiddleware() func(http.Handler) http.Handler {
+func RecoveryMiddleware(log logger.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Откладываем обработку паники
 			defer func() {
 				if err := recover(); err != nil {
 					// Логируем панику с трейсом стека
-					log.Printf("Panic recovered: %v\n", err)
-					log.Printf("Stack trace:\n%s", string(debugStack()))
+					log.Error("Panic recovered in HTTP handler",
+						logger.Any("panic", err),
+						logger.String("stack_trace", string(debugStack())),
+						logger.String("method", r.Method),
+						logger.String("path", r.URL.Path),
+						logger.String("remote_addr", r.RemoteAddr))
 
 					// Устанавливаем заголовки ответа
 					w.Header().Set("Content-Type", "application/json")
@@ -29,6 +34,7 @@ func RecoveryMiddleware() func(http.Handler) http.Handler {
 							"code":    "INTERNAL_ERROR",
 							"message": "Internal server error",
 						},
+						"timestamp": time.Now().UTC().Format(time.RFC3339),
 					}
 
 					// Отправляем JSON ответ

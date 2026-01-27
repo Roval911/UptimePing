@@ -120,17 +120,17 @@ func main() {
 	// Создаем реальные сервисы
 	authAdapter := service.NewAuthAdapter(authClient)
 	healthChecker := health.NewSimpleHealthChecker("1.0.0")
-	healthHandler := httphandler.NewHealthHandler(healthChecker)
-	
+	healthHandler := httphandler.NewHealthHandler(healthChecker, appLogger)
+
 	baseHandler := httphandler.NewHandler(authAdapter, healthHandler, schedulerClient, forgeClient, appLogger)
 
 	// Обертываем хендлер в middleware
 	var httpHandler http.Handler = baseHandler
 	httpHandler = middleware.LoggingMiddleware(appLogger)(httpHandler)
-	httpHandler = middleware.RecoveryMiddleware()(httpHandler)
-	httpHandler = middleware.CORSMiddleware([]string{"*"})(httpHandler)
-	httpHandler = middleware.RateLimitMiddleware(rateLimiter, 100, time.Minute)(httpHandler)
-	httpHandler = middleware.AuthMiddleware(authClient)(httpHandler)
+	httpHandler = middleware.RecoveryMiddleware(appLogger)(httpHandler)
+	httpHandler = middleware.CORSMiddleware([]string{"*"}, appLogger)(httpHandler)
+	httpHandler = middleware.RateLimitMiddleware(rateLimiter, 100, time.Minute, appLogger)(httpHandler)
+	httpHandler = middleware.AuthMiddleware(authClient, appLogger)(httpHandler)
 
 	// Добавляем эндпоинт для метрик
 	metricsMux := http.NewServeMux()

@@ -1,13 +1,26 @@
 package balancer
 
 import (
-	"testing"
 	"sync"
+	"testing"
+
+	"UptimePingPlatform/pkg/logger"
 )
+
+// nopLogger - простая реализация logger для тестов
+type nopLogger struct{}
+
+func (l *nopLogger) Debug(msg string, fields ...logger.Field)  {}
+func (l *nopLogger) Info(msg string, fields ...logger.Field)   {}
+func (l *nopLogger) Warn(msg string, fields ...logger.Field)   {}
+func (l *nopLogger) Error(msg string, fields ...logger.Field)  {}
+func (l *nopLogger) With(fields ...logger.Field) logger.Logger { return l }
+func (l *nopLogger) Sync() error                               { return nil }
 
 // TestRoundRobin_NewRoundRobin тестирует создание RoundRobin балансировщика
 func TestRoundRobin_NewRoundRobin(t *testing.T) {
-	rr := NewRoundRobin()
+	nopLog := &nopLogger{}
+	rr := NewRoundRobin(nopLog)
 
 	if rr == nil {
 		t.Fatal("RoundRobin should not be nil")
@@ -21,7 +34,8 @@ func TestRoundRobin_NewRoundRobin(t *testing.T) {
 
 // TestRoundRobin_Select тестирует выбор инстансов
 func TestRoundRobin_Select(t *testing.T) {
-	rr := NewRoundRobin()
+	nopLog := &nopLogger{}
+	rr := NewRoundRobin(nopLog)
 
 	// Тест с пустым списком
 	instances := []*Instance{}
@@ -47,7 +61,8 @@ func TestRoundRobin_Select(t *testing.T) {
 	}
 
 	// Создаем новый RoundRobin для чистого теста нескольких инстансов
-	rr2 := NewRoundRobin()
+	nopLog2 := &nopLogger{}
+	rr2 := NewRoundRobin(nopLog2)
 	instances = []*Instance{
 		NewInstance("localhost:50051", mockChecker, 1),
 		NewInstance("localhost:50052", mockChecker, 1),
@@ -75,7 +90,8 @@ func TestRoundRobin_Select(t *testing.T) {
 
 // TestRoundRobin_ConcurrentSelect тестирует конкурентный выбор
 func TestRoundRobin_ConcurrentSelect(t *testing.T) {
-	rr := NewRoundRobin()
+	nopLog := &nopLogger{}
+	rr := NewRoundRobin(nopLog)
 
 	mockChecker := &MockHealthChecker{address: "localhost:50051"}
 	instances := []*Instance{
@@ -123,7 +139,7 @@ func TestRoundRobin_ConcurrentSelect(t *testing.T) {
 
 	for address, count := range selectionCounts {
 		if count < expectedPerInstance-tolerance || count > expectedPerInstance+tolerance {
-			t.Errorf("Instance %s selected %d times, expected around %d (±%d)", 
+			t.Errorf("Instance %s selected %d times, expected around %d (±%d)",
 				address, count, expectedPerInstance, tolerance)
 		}
 	}
@@ -131,7 +147,8 @@ func TestRoundRobin_ConcurrentSelect(t *testing.T) {
 
 // TestLeastConnections_NewLeastConnections тестирует создание LeastConnections балансировщика
 func TestLeastConnections_NewLeastConnections(t *testing.T) {
-	lc := NewLeastConnections()
+	nopLog := &nopLogger{}
+	lc := NewLeastConnections(nopLog)
 
 	if lc == nil {
 		t.Fatal("LeastConnections should not be nil")
@@ -140,7 +157,8 @@ func TestLeastConnections_NewLeastConnections(t *testing.T) {
 
 // TestLeastConnections_Select тестирует выбор инстанса с наименьшими соединениями
 func TestLeastConnections_Select(t *testing.T) {
-	lc := NewLeastConnections()
+	nopLog := &nopLogger{}
+	lc := NewLeastConnections(nopLog)
 
 	// Тест с пустым списком
 	instances := []*Instance{}
@@ -181,7 +199,7 @@ func TestLeastConnections_Select(t *testing.T) {
 	// Должен быть выбран инстанс с 0 соединений
 	selected = lc.Select(instances)
 	if selected != instances[2] {
-		t.Errorf("Expected instance with 0 connections, got instance with %d connections", 
+		t.Errorf("Expected instance with 0 connections, got instance with %d connections",
 			selected.GetActiveConnections())
 	}
 
@@ -192,14 +210,15 @@ func TestLeastConnections_Select(t *testing.T) {
 	// Теперь должен быть выбран инстанс с 1 соединением (второй)
 	selected = lc.Select(instances)
 	if selected != instances[1] {
-		t.Errorf("Expected instance with 1 connection, got instance with %d connections", 
+		t.Errorf("Expected instance with 1 connection, got instance with %d connections",
 			selected.GetActiveConnections())
 	}
 }
 
 // TestLeastConnections_Select_InactiveInstances тестирует выбор только активных инстансов
 func TestLeastConnections_Select_InactiveInstances(t *testing.T) {
-	lc := NewLeastConnections()
+	nopLog := &nopLogger{}
+	lc := NewLeastConnections(nopLog)
 
 	mockChecker := &MockHealthChecker{address: "localhost:50051"}
 	instances := []*Instance{
@@ -234,7 +253,8 @@ func TestLeastConnections_Select_InactiveInstances(t *testing.T) {
 
 // TestLeastConnections_Select_EqualConnections тестирует выбор при равном количестве соединений
 func TestLeastConnections_Select_EqualConnections(t *testing.T) {
-	lc := NewLeastConnections()
+	nopLog := &nopLogger{}
+	lc := NewLeastConnections(nopLog)
 
 	mockChecker := &MockHealthChecker{address: "localhost:50051"}
 	instances := []*Instance{
@@ -268,7 +288,8 @@ func TestLeastConnections_Select_EqualConnections(t *testing.T) {
 
 // TestLeastConnections_ConcurrentSelect тестирует конкурентный выбор
 func TestLeastConnections_ConcurrentSelect(t *testing.T) {
-	lc := NewLeastConnections()
+	nopLog := &nopLogger{}
+	lc := NewLeastConnections(nopLog)
 
 	// Создаем уникальные health checker для каждого инстанса
 	instances := []*Instance{
@@ -278,7 +299,7 @@ func TestLeastConnections_ConcurrentSelect(t *testing.T) {
 		NewInstance("localhost:50054", &MockHealthChecker{address: "localhost:50054"}, 1),
 	}
 
-	const numGoroutines = 10 // Уменьшаем для надежности
+	const numGoroutines = 10  // Уменьшаем для надежности
 	const numSelections = 100 // Уменьшаем для надежности
 
 	selectionCounts := make(map[string]int)
@@ -329,7 +350,8 @@ func TestLeastConnections_ConcurrentSelect(t *testing.T) {
 
 // BenchmarkRoundRobin_Select бенчмарк для RoundRobin выбора
 func BenchmarkRoundRobin_Select(b *testing.B) {
-	rr := NewRoundRobin()
+	nopLog := &nopLogger{}
+	rr := NewRoundRobin(nopLog)
 
 	mockChecker := &MockHealthChecker{address: "localhost:50051"}
 	instances := make([]*Instance, 100)
@@ -345,7 +367,8 @@ func BenchmarkRoundRobin_Select(b *testing.B) {
 
 // BenchmarkLeastConnections_Select бенчмарк для LeastConnections выбора
 func BenchmarkLeastConnections_Select(b *testing.B) {
-	lc := NewLeastConnections()
+	nopLog := &nopLogger{}
+	lc := NewLeastConnections(nopLog)
 
 	mockChecker := &MockHealthChecker{address: "localhost:50051"}
 	instances := make([]*Instance, 100)

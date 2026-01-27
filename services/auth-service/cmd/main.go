@@ -20,6 +20,7 @@ import (
 	"UptimePingPlatform/pkg/rabbitmq"
 	"UptimePingPlatform/pkg/ratelimit"
 	pkg_redis "UptimePingPlatform/pkg/redis"
+	"UptimePingPlatform/services/auth-service/internal/middleware"
 	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
 	"UptimePingPlatform/services/auth-service/internal/pkg/password"
 	"UptimePingPlatform/services/auth-service/internal/repository/postgres"
@@ -135,6 +136,7 @@ func main() {
 		sessionRepo,
 		jwtManager,
 		passwordHasher,
+		appLogger,
 	)
 
 	// Создание gRPC сервера
@@ -173,25 +175,7 @@ func main() {
 		rateLimiter := ratelimit.NewRedisRateLimiter(redisClient.Client)
 
 		// Rate limiting middleware
-		rateLimitMiddleware := func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				clientIP := getClientIP(r)
-				allowed, err := rateLimiter.CheckRateLimit(r.Context(), clientIP, cfg.RateLimiting.RequestsPerMinute, time.Minute)
-				if err != nil {
-					appLogger.Error("Rate limit check failed", logger.String("error", err.Error()))
-					http.Error(w, "Rate limit check failed", http.StatusInternalServerError)
-					return
-				}
-
-				if !allowed {
-					appLogger.Warn("Rate limit exceeded", logger.String("client_ip", clientIP))
-					http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
-					return
-				}
-
-				next.ServeHTTP(w, r)
-			})
-		}
+		rateLimitMiddleware := middleware.RateLimitMiddleware(rateLimiter, cfg.RateLimiting.RequestsPerMinute, time.Minute, false, appLogger)
 
 		// Health check эндпоинты
 		mux.HandleFunc("/health", health.Handler(healthChecker))

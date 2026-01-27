@@ -2,6 +2,7 @@ package service
 
 import (
 	"UptimePingPlatform/pkg/errors"
+	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/auth-service/internal/domain"
 	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
 	"UptimePingPlatform/services/auth-service/internal/pkg/password"
@@ -67,6 +68,7 @@ type Service struct {
 	apiKeyRepository  repository.APIKeyRepository
 	jwtManager        jwt.JWTManager
 	passwordHasher    password.Hasher
+	log               logger.Logger
 }
 
 // NewAuthService создает новый экземпляр AuthService
@@ -77,6 +79,7 @@ func NewAuthService(
 	sessionRepository repository.SessionRepository,
 	jwtManager jwt.JWTManager,
 	passwordHasher password.Hasher,
+	log logger.Logger,
 ) AuthService {
 	return &Service{
 		userRepository:    userRepository,
@@ -85,6 +88,7 @@ func NewAuthService(
 		sessionRepository: sessionRepository,
 		jwtManager:        jwtManager,
 		passwordHasher:    passwordHasher,
+		log:               log,
 	}
 }
 
@@ -234,45 +238,70 @@ func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
 
 // Login реализует аутентификацию пользователя
 func (s *Service) Login(ctx context.Context, email, password string) (*TokenPair, error) {
+	s.log.Info("User login attempt", logger.String("email", email))
+
 	// Валидация входных данных
 	if email == "" {
+		s.log.Warn("Login failed: email is required")
 		return nil, errors.New(errors.ErrValidation, "email is required")
 	}
 
 	if password == "" {
+		s.log.Warn("Login failed: password is required", logger.String("email", email))
 		return nil, errors.New(errors.ErrValidation, "password is required")
 	}
 
 	// Поиск пользователя по email
 	user, err := s.userRepository.FindByEmail(ctx, email)
 	if err != nil {
+		s.log.Warn("Login failed: user not found",
+			logger.String("email", email),
+			logger.Error(err))
 		return nil, errors.Wrap(err, errors.ErrNotFound, "user not found")
 	}
 
 	// Проверка, что пользователь активен
 	if !user.IsActive {
+		s.log.Warn("Login failed: user is not active",
+			logger.String("email", email),
+			logger.String("user_id", user.ID))
 		return nil, errors.New(errors.ErrForbidden, "user is not active")
 	}
 
 	// Проверка пароля
 	if !s.passwordHasher.Check(password, user.PasswordHash) {
+		s.log.Warn("Login failed: invalid password",
+			logger.String("email", email),
+			logger.String("user_id", user.ID))
 		return nil, errors.New(errors.ErrUnauthorized, "invalid credentials")
 	}
 
 	// Генерация JWT токенов
 	accessToken, refreshToken, err := s.jwtManager.GenerateToken(user.ID, user.TenantID, user.IsAdmin)
 	if err != nil {
+		s.log.Error("Failed to generate tokens",
+			logger.String("email", email),
+			logger.String("user_id", user.ID),
+			logger.Error(err))
 		return nil, fmt.Errorf("failed to generate tokens: %w", err)
 	}
 
 	// Хешируем токены для безопасного хранения
 	accessTokenHash, err := s.passwordHasher.Hash(accessToken)
 	if err != nil {
+		s.log.Error("Failed to hash access token",
+			logger.String("email", email),
+			logger.String("user_id", user.ID),
+			logger.Error(err))
 		return nil, fmt.Errorf("failed to hash access token: %w", err)
 	}
 
 	refreshTokenHash, err := s.passwordHasher.Hash(refreshToken)
 	if err != nil {
+		s.log.Error("Failed to hash refresh token",
+			logger.String("email", email),
+			logger.String("user_id", user.ID),
+			logger.Error(err))
 		return nil, fmt.Errorf("failed to hash refresh token: %w", err)
 	}
 
@@ -289,8 +318,18 @@ func (s *Service) Login(ctx context.Context, email, password string) (*TokenPair
 	// Сохраняем сессию в Redis
 	err = s.sessionRepository.Create(ctx, session)
 	if err != nil {
+		s.log.Error("Failed to save session",
+			logger.String("email", email),
+			logger.String("user_id", user.ID),
+			logger.String("session_id", session.ID),
+			logger.Error(err))
 		return nil, fmt.Errorf("failed to save session: %w", err)
 	}
+
+	s.log.Info("User login successful",
+		logger.String("email", email),
+		logger.String("user_id", user.ID),
+		logger.String("session_id", session.ID))
 
 	// Возвращаем токены
 	return &TokenPair{
@@ -301,27 +340,37 @@ func (s *Service) Login(ctx context.Context, email, password string) (*TokenPair
 
 // Register реализует регистрацию нового пользователя
 func (s *Service) Register(ctx context.Context, email, password, tenantName string) (*TokenPair, error) {
+	s.log.Info("User registration attempt",
+		logger.String("email", email),
+		logger.String("tenant_name", tenantName))
+
 	// Валидация email и password
 	if email == "" {
+		s.log.Warn("Registration failed: email is required")
 		return nil, errors.New(errors.ErrValidation, "email is required")
 	}
 
 	if password == "" {
+		s.log.Warn("Registration failed: password is required", logger.String("email", email))
 		return nil, errors.New(errors.ErrValidation, "password is required")
 	}
 
 	if !s.passwordHasher.Validate(password) {
+		s.log.Warn("Registration failed: password does not meet complexity requirements",
+			logger.String("email", email))
 		return nil, errors.New(errors.ErrValidation, "password does not meet complexity requirements")
 	}
 
 	// Валидация tenantName
 	if tenantName == "" {
+		s.log.Warn("Registration failed: tenant name is required", logger.String("email", email))
 		return nil, errors.New(errors.ErrValidation, "tenant name is required")
 	}
 
 	// Проверка существования пользователя по email
 	_, err := s.userRepository.FindByEmail(ctx, email)
 	if err == nil {
+		s.log.Warn("Registration failed: user already exists", logger.String("email", email))
 		return nil, errors.New(errors.ErrConflict, "user already exists") // Пользователь уже существует
 	}
 
@@ -339,8 +388,15 @@ func (s *Service) Register(ctx context.Context, email, password, tenantName stri
 		}
 		err = s.tenantRepository.Create(ctx, tenant)
 		if err != nil {
+			s.log.Error("Failed to create tenant",
+				logger.String("email", email),
+				logger.String("tenant_name", tenantName),
+				logger.Error(err))
 			return nil, fmt.Errorf("failed to create tenant: %w", err)
 		}
+		s.log.Info("Created new tenant",
+			logger.String("tenant_id", tenant.ID),
+			logger.String("tenant_name", tenantName))
 	}
 
 	// Хеширование пароля

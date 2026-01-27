@@ -2,21 +2,27 @@ package balancer
 
 import (
 	"sync"
+
+	"UptimePingPlatform/pkg/logger"
 )
 
 // LeastConnections реализует стратегию least-connections балансировки нагрузки
 type LeastConnections struct {
-	mu sync.Mutex
+	mu  sync.Mutex
+	log logger.Logger
 }
 
 // NewLeastConnections создает новый LeastConnections балансировщик
-func NewLeastConnections() *LeastConnections {
-	return &LeastConnections{}
+func NewLeastConnections(log logger.Logger) *LeastConnections {
+	return &LeastConnections{
+		log: log,
+	}
 }
 
 // Select выбирает инстанс с наименьшим количеством активных соединений
 func (l *LeastConnections) Select(instances []*Instance) *Instance {
 	if len(instances) == 0 {
+		l.log.Warn("No instances available for least connections selection")
 		return nil
 	}
 
@@ -34,6 +40,14 @@ func (l *LeastConnections) Select(instances []*Instance) *Instance {
 				selected = instance
 			}
 		}
+	}
+
+	if selected != nil {
+		l.log.Debug("Selected instance with least connections",
+			logger.String("address", selected.Address),
+			logger.Int64("connections", minConnections))
+	} else {
+		l.log.Warn("No active instances found")
 	}
 
 	return selected

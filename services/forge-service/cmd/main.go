@@ -68,7 +68,7 @@ func main() {
 	// Анализ сервисов
 	services := parser.GetServices()
 	logger.Info("Found services", pkglogger.Int("count", len(services)))
-	
+
 	// Конвертируем ServiceInfo в domain.Service
 	domainServices := make([]domain.Service, 0, len(services))
 	for _, svc := range services {
@@ -80,16 +80,16 @@ func main() {
 				Enabled: true,
 			})
 		}
-		
+
 		domainServices = append(domainServices, domain.Service{
 			Name:    svc.Name,
 			Package: svc.Package,
 			Host:    "localhost", // Default host
-			Port:    50051,      // Default port
+			Port:    50051,       // Default port
 			Methods: methods,
 		})
 	}
-	
+
 	for _, svc := range domainServices {
 		logger.Info("Service parsed",
 			pkglogger.String("name", svc.Name),
@@ -102,7 +102,7 @@ func main() {
 	if outputDir == "" {
 		outputDir = "generated"
 	}
-	
+
 	codeGenerator := service.NewCodeGenerator(logger, outputDir)
 
 	// Генерируем YAML конфигурацию для UptimePing Core
@@ -149,15 +149,16 @@ func main() {
 
 	// Создаем HTTP обработчики
 	httpHandler := handler.NewHTTPHandler(logger, codeGenerator)
-	
+
 	// Создаем mux для регистрации маршрутов
 	mux := http.NewServeMux()
-	
+
 	// Регистрируем обработчики
 	mux.HandleFunc("/health", health.Handler(healthChecker))
 	mux.HandleFunc("/ready", health.ReadyHandler(healthChecker))
 	mux.HandleFunc("/live", health.LiveHandler())
-	
+	mux.Handle("/metrics", metricsInstance.GetHandler())
+
 	// Статические файлы для веб-интерфейса
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
@@ -166,20 +167,16 @@ func main() {
 		}
 		http.NotFound(w, r)
 	})
-	
+
 	// Регистрируем API маршруты
 	httpHandler.RegisterRoutes(mux)
-	
-	// Применяем middleware
-	handlerWithLogging := httpHandler.LoggingMiddleware(mux)
-	handlerWithCORS := httpHandler.CORSMiddleware(handlerWithLogging)
-	
-	server.Handler = handlerWithCORS
 
-	if metricsInstance != nil {
-		// Добавляем metrics middleware
-		server.Handler = metricsInstance.Middleware(server.Handler)
-	}
+	// Применяем middleware
+	handlerWithMetrics := metricsInstance.Middleware(mux)
+	handlerWithLogging := httpHandler.LoggingMiddleware(handlerWithMetrics)
+	handlerWithCORS := httpHandler.CORSMiddleware(handlerWithLogging)
+
+	server.Handler = handlerWithCORS
 
 	logger.Info("HTTP handlers registered")
 

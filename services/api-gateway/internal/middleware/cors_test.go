@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"UptimePingPlatform/pkg/logger"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -60,7 +61,9 @@ func TestCORSMiddleware(t *testing.T) {
 				w.Write([]byte("OK"))
 			})
 
-			middleware := CORSMiddleware(tt.allowedOrigins)(handler)
+			// Создаем тестовый logger
+			testLogger, _ := logger.NewLogger("test", "info", "test-service", false)
+			middleware := CORSMiddleware(tt.allowedOrigins, testLogger)(handler)
 
 			// Act
 			req := httptest.NewRequest(tt.method, "/test", nil)
@@ -88,7 +91,9 @@ func TestCORSMiddleware_NoOrigin(t *testing.T) {
 		w.Write([]byte("OK"))
 	})
 
-	middleware := CORSMiddleware([]string{"https://example.com"})(handler)
+	// Создаем тестовый logger
+	testLogger, _ := logger.NewLogger("test", "info", "test-service", false)
+	middleware := CORSMiddleware([]string{"https://example.com"}, testLogger)(handler)
 
 	// Act
 	req := httptest.NewRequest("GET", "/test", nil)
@@ -109,7 +114,10 @@ func TestCORSMiddleware_Headers(t *testing.T) {
 		w.Write([]byte("OK"))
 	})
 
-	middleware := CORSMiddleware([]string{"*"})(handler)
+	// Создаем тестовый logger
+	testLogger, _ := logger.NewLogger("test", "info", "test-service", false)
+
+	middleware := CORSMiddleware([]string{"*"}, testLogger)(handler)
 
 	// Act
 	req := httptest.NewRequest("GET", "/test", nil)

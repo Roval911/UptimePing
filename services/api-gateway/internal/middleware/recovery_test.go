@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"UptimePingPlatform/pkg/logger"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -49,7 +50,8 @@ func TestRecoveryMiddleware(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			middleware := RecoveryMiddleware()
+			testLogger, _ := logger.NewLogger("test", "info", "test-service", false)
+			middleware := RecoveryMiddleware(testLogger)
 
 			// Act
 			req := httptest.NewRequest("GET", "/test", nil)
@@ -69,7 +71,8 @@ func TestRecoveryMiddleware(t *testing.T) {
 // TestRecoveryMiddleware_ErrorResponse тестирует формат ответа при панике
 func TestRecoveryMiddleware_ErrorResponse(t *testing.T) {
 	// Arrange
-	middleware := RecoveryMiddleware()
+	testLogger, _ := logger.NewLogger("test", "info", "test-service", false)
+	middleware := RecoveryMiddleware(testLogger)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic(errors.New("test error"))
@@ -88,7 +91,8 @@ func TestRecoveryMiddleware_ErrorResponse(t *testing.T) {
 // TestRecoveryMiddleware_Headers тестирует сохранение заголовков
 func TestRecoveryMiddleware_Headers(t *testing.T) {
 	// Arrange
-	middleware := RecoveryMiddleware()
+	testLogger, _ := logger.NewLogger("test", "info", "test-service", false)
+	middleware := RecoveryMiddleware(testLogger)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Custom-Header", "test-value")

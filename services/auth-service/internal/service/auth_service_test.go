@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/auth-service/internal/domain"
 	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
 	"UptimePingPlatform/services/auth-service/internal/pkg/password"
@@ -182,11 +183,14 @@ func setupAuthService() (service.AuthService, *MockUserRepository, *MockTenantRe
 	tenantRepo := &MockTenantRepository{}
 	apiKeyRepo := &MockAPIKeyRepository{}
 	sessionRepo := &MockSessionRepository{}
-	
+
+	// Создаем тестовый logger
+	testLogger, _ := logger.NewLogger("test", "info", "test-service", false)
+
 	// Используем короткие секретные ключи для тестов
 	jwtManager := jwt.NewManager("secret", "refresh", time.Hour, 24*time.Hour)
 	passwordHasher := password.NewBcryptHasher(10)
-	
+
 	authService := service.NewAuthService(
 		userRepo,
 		tenantRepo,
@@ -194,104 +198,105 @@ func setupAuthService() (service.AuthService, *MockUserRepository, *MockTenantRe
 		sessionRepo,
 		jwtManager,
 		passwordHasher,
+		testLogger,
 	)
-	
+
 	return authService, userRepo, tenantRepo, apiKeyRepo, sessionRepo
 }
 
 func TestAuthService_Register_UserExists(t *testing.T) {
 	authService, userRepo, _, _, _ := setupAuthService()
-	
+
 	ctx := context.Background()
 	email := "existing@example.com"
 	password := "Password123!"
 	tenantName := "Test Tenant"
-	
+
 	existingUser := &domain.User{
 		ID:       "user-1",
 		Email:    email,
 		IsActive: true,
 	}
-	
+
 	// Мокаем существующего пользователя
 	userRepo.On("FindByEmail", ctx, email).Return(existingUser, nil)
-	
+
 	// Вызываем метод
 	tokenPair, err := authService.Register(ctx, email, password, tenantName)
-	
+
 	// Проверяем результаты
 	assert.Error(t, err)
 	assert.Nil(t, tokenPair)
 	assert.Equal(t, service.ErrConflict, err)
-	
+
 	// Проверяем, что мок был вызван
 	userRepo.AssertExpectations(t)
 }
 
 func TestAuthService_Login_InactiveUser(t *testing.T) {
 	authService, userRepo, _, _, _ := setupAuthService()
-	
+
 	ctx := context.Background()
 	email := "inactive@example.com"
 	pwd := "Password123!"
-	
+
 	inactiveUser := &domain.User{
 		ID:       "user-1",
 		Email:    email,
 		IsActive: false,
 	}
-	
+
 	// Мокаем неактивного пользователя
 	userRepo.On("FindByEmail", ctx, email).Return(inactiveUser, nil)
-	
+
 	// Вызываем метод
 	tokenPair, err := authService.Login(ctx, email, pwd)
-	
+
 	// Проверяем результаты
 	assert.Error(t, err)
 	assert.Nil(t, tokenPair)
 	assert.Equal(t, service.ErrForbidden, err)
-	
+
 	// Проверяем, что мок был вызван
 	userRepo.AssertExpectations(t)
 }
 
 func TestAuthService_CreateAPIKey(t *testing.T) {
 	authService, _, _, apiKeyRepo, _ := setupAuthService()
-	
+
 	ctx := context.Background()
 	tenantID := "tenant-1"
 	name := "Test API Key"
-	
+
 	// Мокаем создание API ключа
 	apiKeyRepo.On("Create", ctx, mock.AnythingOfType("*domain.APIKey")).Return(nil)
-	
+
 	// Вызываем метод
 	apiKeyPair, err := authService.CreateAPIKey(ctx, tenantID, name)
-	
+
 	// Проверяем результаты
 	require.NoError(t, err)
 	assert.NotEmpty(t, apiKeyPair.Key)
 	assert.NotEmpty(t, apiKeyPair.Secret)
 	assert.True(t, len(apiKeyPair.Key) > 10)
 	assert.True(t, len(apiKeyPair.Secret) > 10)
-	
+
 	// Проверяем, что мок был вызван
 	apiKeyRepo.AssertExpectations(t)
 }
 
 func TestAuthService_ValidateAPIKey_InvalidSecret(t *testing.T) {
 	authService, _, _, apiKeyRepo, _ := setupAuthService()
-	
+
 	ctx := context.Background()
 	key := "upk_testkey123"
 	secret := "wrongsecret"
-	
+
 	// Создаем хеши
 	passwordHasher := password.NewBcryptHasher(10)
 	keyHash, _ := passwordHasher.Hash(key)
 	secretHash, _ := passwordHasher.Hash("correctsecret")
-	
+
 	existingAPIKey := &domain.APIKey{
 		ID:         "key-1",
 		TenantID:   "tenant-1",
@@ -301,18 +306,18 @@ func TestAuthService_ValidateAPIKey_InvalidSecret(t *testing.T) {
 		IsActive:   true,
 		ExpiresAt:  time.Now().Add(time.Hour), // Не истекший ключ
 	}
-	
+
 	// Мокаем поиск по хэшу ключа
 	apiKeyRepo.On("FindByKeyHash", ctx, mock.AnythingOfType("string")).Return(existingAPIKey, nil)
-	
+
 	// Вызываем метод
 	claims, err := authService.ValidateAPIKey(ctx, key, secret)
-	
+
 	// Проверяем результаты
 	assert.Error(t, err)
 	assert.Nil(t, claims)
 	assert.Equal(t, service.ErrUnauthorized, err)
-	
+
 	// Проверяем, что мок был вызван
 	apiKeyRepo.AssertExpectations(t)
 }

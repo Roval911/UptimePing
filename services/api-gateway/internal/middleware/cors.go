@@ -1,17 +1,25 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
+
+	"UptimePingPlatform/pkg/logger"
 )
 
 // CORSMiddleware настраивает CORS заголовки
-func CORSMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
+func CORSMiddleware(allowedOrigins []string, log logger.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
 			if origin == "" {
 				origin = "*"
 			}
+
+			log.Debug("CORS middleware processing request",
+				logger.String("method", r.Method),
+				logger.String("path", r.URL.Path),
+				logger.String("origin", origin))
 
 			// Проверяем, разрешен ли источник
 			allowed := false
@@ -24,6 +32,11 @@ func CORSMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 
 			if allowed {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
+				log.Debug("CORS origin allowed", logger.String("origin", origin))
+			} else {
+				log.Warn("CORS origin not allowed",
+					logger.String("origin", origin),
+					logger.String("allowed_origins", fmt.Sprintf("%v", allowedOrigins)))
 			}
 
 			// Разрешаем определенные методы
@@ -37,6 +50,9 @@ func CORSMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 
 			// Обработка preflight запросов
 			if r.Method == "OPTIONS" {
+				log.Debug("CORS preflight request handled",
+					logger.String("method", r.Method),
+					logger.String("path", r.URL.Path))
 				w.WriteHeader(http.StatusOK)
 				return
 			}

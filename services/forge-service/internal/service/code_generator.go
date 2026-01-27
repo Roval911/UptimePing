@@ -7,30 +7,30 @@ import (
 	"path/filepath"
 	"strings"
 
+	pkglogger "UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/forge-service/internal/domain"
 	"UptimePingPlatform/services/forge-service/internal/templates"
-	pkglogger "UptimePingPlatform/pkg/logger"
 )
 
 // CodeGenerator генерирует код и конфигурации на основе proto файлов
 type CodeGenerator struct {
-	logger     pkglogger.Logger
-	templates  *templates.TemplateManager
-	outputDir  string
+	logger    pkglogger.Logger
+	templates *templates.TemplateManager
+	outputDir string
 }
 
 // NewCodeGenerator создает новый экземпляр генератора кода
 func NewCodeGenerator(logger pkglogger.Logger, outputDir string) *CodeGenerator {
 	return &CodeGenerator{
-		logger:     logger,
-		templates:  templates.NewTemplateManager(),
-		outputDir:  outputDir,
+		logger:    logger,
+		templates: templates.NewTemplateManager(),
+		outputDir: outputDir,
 	}
 }
 
 // GenerateConfig генерирует YAML конфигурацию для UptimePing Core
 func (cg *CodeGenerator) GenerateConfig(services []domain.Service, configPath string) error {
-	cg.logger.Info("Generating YAML configuration", 
+	cg.logger.Info("Generating YAML configuration",
 		pkglogger.String("output", configPath),
 		pkglogger.Int("services", len(services)))
 
@@ -63,14 +63,14 @@ func (cg *CodeGenerator) GenerateConfig(services []domain.Service, configPath st
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
-	cg.logger.Info("YAML configuration generated successfully", 
+	cg.logger.Info("YAML configuration generated successfully",
 		pkglogger.String("path", configPath))
 	return nil
 }
 
 // GenerateGRPCCheckers генерирует Go код для проверки gRPC методов
 func (cg *CodeGenerator) GenerateGRPCCheckers(services []domain.Service, outputPath string) error {
-	cg.logger.Info("Generating gRPC checker code", 
+	cg.logger.Info("Generating gRPC checker code",
 		pkglogger.String("output", outputPath),
 		pkglogger.Int("services", len(services)))
 
@@ -82,7 +82,7 @@ func (cg *CodeGenerator) GenerateGRPCCheckers(services []domain.Service, outputP
 	// Генерируем код для каждого сервиса
 	for _, service := range services {
 		if err := cg.generateServiceChecker(service, outputPath); err != nil {
-			cg.logger.Error("Failed to generate checker for service", 
+			cg.logger.Error("Failed to generate checker for service",
 				pkglogger.String("service", service.Name),
 				pkglogger.Error(err))
 			continue
@@ -95,7 +95,7 @@ func (cg *CodeGenerator) GenerateGRPCCheckers(services []domain.Service, outputP
 
 // generateServiceChecker генерирует код для конкретного сервиса
 func (cg *CodeGenerator) generateServiceChecker(service domain.Service, outputPath string) error {
-	cg.logger.Debug("Generating checker for service", 
+	cg.logger.Debug("Generating checker for service",
 		pkglogger.String("service", service.Name),
 		pkglogger.String("package", service.Package))
 
@@ -131,7 +131,7 @@ func (cg *CodeGenerator) generateServiceChecker(service domain.Service, outputPa
 		return fmt.Errorf("failed to write checker file: %w", err)
 	}
 
-	cg.logger.Debug("Checker generated", 
+	cg.logger.Debug("Checker generated",
 		pkglogger.String("service", service.Name),
 		pkglogger.String("file", filename))
 
@@ -293,6 +293,8 @@ notifications:
 		config.Logger.Level,
 		config.Logger.Format,
 		config.Environment,
+		config.Telegram.Enabled,
+		config.Email.Enabled,
 		config.Email.SMTPHost,
 		config.Email.SMTPPort,
 		config.Email.FromAddress,

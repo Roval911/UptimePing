@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"UptimePingPlatform/pkg/errors"
+	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/api-gateway/internal/client"
 )
 
@@ -12,12 +13,19 @@ import (
 // Поддерживает два типа аутентификации:
 // 1. Bearer токены (JWT) - для пользователей
 // 2. APIKey - для сервисов
-func AuthMiddleware(authClient *client.GRPCAuthClient) func(http.Handler) http.Handler {
+func AuthMiddleware(authClient *client.GRPCAuthClient, log logger.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.Debug("Auth middleware processing request",
+				logger.String("method", r.Method),
+				logger.String("path", r.URL.Path))
+
 			// Проверка наличия заголовка Authorization
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
+				log.Warn("Authorization header missing",
+					logger.String("method", r.Method),
+					logger.String("path", r.URL.Path))
 				http.Error(w, "Authorization header missing", http.StatusUnauthorized)
 				return
 			}
@@ -25,23 +33,34 @@ func AuthMiddleware(authClient *client.GRPCAuthClient) func(http.Handler) http.H
 			// Определение типа аутентификации
 			if isBearerToken(authHeader) {
 				// Обработка Bearer токена (JWT)
+				log.Debug("Processing Bearer token authentication")
 				if err := handleBearerAuth(r, authHeader, authClient); err != nil {
+					log.Error("Bearer authentication failed", logger.Error(err))
 					http.Error(w, "Authentication failed", http.StatusUnauthorized)
 					return
 				}
+				log.Debug("Bearer authentication successful")
 			} else if isAPIKey(authHeader) {
 				// Обработка APIKey
+				log.Debug("Processing API key authentication")
 				if err := handleAPIKeyAuth(r, authHeader, authClient); err != nil {
+					log.Error("API key authentication failed", logger.Error(err))
 					http.Error(w, "Authentication failed", http.StatusUnauthorized)
 					return
 				}
+				log.Debug("API key authentication successful")
 			} else {
 				// Неподдерживаемый тип аутентификации
+				log.Warn("Unsupported authorization type",
+					logger.String("auth_header", authHeader),
+					logger.String("method", r.Method),
+					logger.String("path", r.URL.Path))
 				http.Error(w, "Unsupported authorization type", http.StatusUnauthorized)
 				return
 			}
 
 			// Продолжение выполнения
+			log.Debug("Authentication successful, proceeding to next handler")
 			next.ServeHTTP(w, r)
 		})
 	}

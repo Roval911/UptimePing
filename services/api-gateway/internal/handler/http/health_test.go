@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"UptimePingPlatform/pkg/health"
+	"UptimePingPlatform/pkg/logger"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,7 +17,8 @@ import (
 func TestHealthHandler(t *testing.T) {
 	// Arrange
 	checker := &health.SimpleHealthChecker{}
-	handler := NewHealthHandler(checker)
+	testLogger, _ := logger.NewLogger("test", "info", "test-service", false)
+	handler := NewHealthHandler(checker, testLogger)
 
 	// Act
 	req := httptest.NewRequest("GET", "/health", nil)
@@ -62,7 +64,8 @@ func TestHealthHandler_Methods(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			checker := &health.SimpleHealthChecker{}
-			handler := NewHealthHandler(checker)
+			testLogger, _ := logger.NewLogger("test", "info", "test-service", false)
+			handler := NewHealthHandler(checker, testLogger)
 
 			// Act
 			req := httptest.NewRequest(tt.method, "/health", nil)
@@ -79,7 +82,8 @@ func TestHealthHandler_Methods(t *testing.T) {
 func TestHealthHandler_ResponseFormat(t *testing.T) {
 	// Arrange
 	checker := &health.SimpleHealthChecker{}
-	handler := NewHealthHandler(checker)
+	testLogger, _ := logger.NewLogger("test", "info", "test-service", false)
+	handler := NewHealthHandler(checker, testLogger)
 
 	// Act
 	req := httptest.NewRequest("GET", "/health", nil)

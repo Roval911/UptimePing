@@ -86,13 +86,58 @@ import (
 	"fmt"
 	"time"
 
-	"UptimePingPlatform/services/core-service/internal/domain"
+	"UptimePingPlatform/gen/go/proto/api/core/v1"
 	"UptimePingPlatform/pkg/logger"
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
 )
+
+// Task представляет задачу на выполнение проверки
+type Task struct {
+	ID           string ` + "`json:\"id\"`" + `
+	CheckID      string ` + "`json:\"check_id\"`" + `
+	Target       string ` + "`json:\"target\"`" + `
+	Type         string ` + "`json:\"type\"`" + `
+	ExecutionID  string ` + "`json:\"execution_id\"`" + `
+}
+
+// TaskType представляет тип задачи
+type TaskType string
+
+const (
+	TaskTypeHTTP   TaskType = "http"
+	TaskTypeTCP    TaskType = "tcp"
+	TaskTypeGRPC   TaskType = "grpc"
+	TaskTypeICMP   TaskType = "icmp"
+	TaskTypeGraphQL TaskType = "graphql"
+)
+
+// CheckResult представляет результат выполнения проверки
+type CheckResult struct {
+	ID           string            ` + "`json:\"id\"`" + `
+	CheckID      string            ` + "`json:\"check_id\"`" + `
+	ExecutionID  string            ` + "`json:\"execution_id\"`" + `
+	Type         string            ` + "`json:\"type\"`" + `
+	Success      bool              ` + "`json:\"success\"`" + `
+	Status       string            ` + "`json:\"status\"`" + `
+	ResponseTime int64             ` + "`json:\"response_time\"`" + `
+	ErrorMessage string            ` + "`json:\"error_message,omitempty\"`" + `
+	Timestamp    time.Time         ` + "`json:\"timestamp\"`" + `
+	Metadata     map[string]interface{} ` + "`json:\"metadata,omitempty\"`" + `
+}
+
+// NewTask создает новую задачу
+func NewTask(checkID, target, taskType string) *Task {
+	return &Task{
+		ID:           fmt.Sprintf("task-%d", time.Now().UnixNano()),
+		CheckID:      checkID,
+		Target:       target,
+		Type:         taskType,
+		ExecutionID:  fmt.Sprintf("exec-%d", time.Now().UnixNano()),
+	}
+}
 
 // {{.CheckerName}} реализует Checker для gRPC сервиса {{.Service.Name}}
 type {{.CheckerName}} struct {
@@ -111,7 +156,7 @@ func New{{.CheckerName}}(timeout int64, log logger.Logger) *{{.CheckerName}} {
 }
 
 // Execute выполняет проверку gRPC сервиса
-func (c *{{.CheckerName}}) Execute(task *domain.Task) (*domain.CheckResult, error) {
+func (c *{{.CheckerName}}) Execute(task *Task) (*CheckResult, error) {
 	c.LogOperationStart(context.Background(), "grpc_check", map[string]interface{}{
 		"service": "{{.Service.Name}}",
 		"target":  task.Target,
@@ -158,7 +203,7 @@ func (c *{{.CheckerName}}) Execute(task *domain.Task) (*domain.CheckResult, erro
 	duration := time.Since(startTime)
 	success := resp.Status == grpc_health_v1.HealthCheckResponse_SERVING
 
-	result := &domain.CheckResult{
+	result := &CheckResult{
 		CheckID:      task.CheckID,
 		ExecutionID:   task.ExecutionID,
 		Type:         task.Type,
@@ -192,8 +237,8 @@ func (c *{{.CheckerName}}) Execute(task *domain.Task) (*domain.CheckResult, erro
 }
 
 // GetType возвращает тип checker'а
-func (c *{{.CheckerName}}) GetType() domain.TaskType {
-	return domain.TaskTypeGRPC
+func (c *{{.CheckerName}}) GetType() TaskType {
+	return TaskTypeGRPC
 }
 
 // ValidateConfig валидирует конфигурацию
@@ -253,8 +298,8 @@ func (c *{{.CheckerName}}) getStatusCode(status grpc_health_v1.HealthCheckRespon
 }
 
 // createErrorResult создает результат с ошибкой
-func (c *{{.CheckerName}}) createErrorResult(task *domain.Task, statusCode int, responseTime int64, err error) *domain.CheckResult {
-	return &domain.CheckResult{
+func (c *{{.CheckerName}}) createErrorResult(task *Task, statusCode int, responseTime int64, err error) *CheckResult {
+	return &CheckResult{
 		CheckID:      task.CheckID,
 		ExecutionID:   task.ExecutionID,
 		Type:         task.Type,
@@ -270,18 +315,11 @@ func (c *{{.CheckerName}}) createErrorResult(task *domain.Task, statusCode int, 
 
 {{range .Service.Methods}}
 // {{.Name}}Checker выполняет проверку конкретного метода {{.Name}}
-func (c *{{$.CheckerName}}) Check{{.Name}}(ctx context.Context, target string) (*domain.CheckResult, error) {
-	task := domain.NewTask(
+func (c *{{$.CheckerName}}) Check{{.Name}}(ctx context.Context, target string) (*CheckResult, error) {
+	task := NewTask(
 		"check-{{.Name}}",
 		target,
 		"grpc",
-		"exec-{{.Name}}",
-		time.Now(),
-		map[string]interface{}{
-			"service": "{{$.Service.Package}}.{{$.Service.Name}}",
-			"method":  "{{.Name}}",
-			"timeout": "{{.Timeout}}",
-		},
 	)
 	
 	return c.Execute(task)

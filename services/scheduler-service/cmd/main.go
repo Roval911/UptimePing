@@ -35,7 +35,7 @@ func main() {
 	}
 	defer func() {
 		if err := appLogger.Sync(); err != nil {
-			log.Printf("Error syncing logger: %v", err)
+			appLogger.Error("Error syncing logger", logger.Error(err))
 		}
 	}()
 
