@@ -14,6 +14,8 @@ import (
 	"UptimePingPlatform/pkg/health"
 	pkglogger "UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
+	"UptimePingPlatform/services/forge-service/internal/domain"
+	"UptimePingPlatform/services/forge-service/internal/handler"
 	"UptimePingPlatform/services/forge-service/internal/service"
 )
 
@@ -66,11 +68,66 @@ func main() {
 	// Анализ сервисов
 	services := parser.GetServices()
 	logger.Info("Found services", pkglogger.Int("count", len(services)))
+	
+	// Конвертируем ServiceInfo в domain.Service
+	domainServices := make([]domain.Service, 0, len(services))
 	for _, svc := range services {
+		methods := make([]domain.Method, 0, len(svc.Methods))
+		for _, method := range svc.Methods {
+			methods = append(methods, domain.Method{
+				Name:    method.Name,
+				Timeout: "30s", // Default timeout
+				Enabled: true,
+			})
+		}
+		
+		domainServices = append(domainServices, domain.Service{
+			Name:    svc.Name,
+			Package: svc.Package,
+			Host:    "localhost", // Default host
+			Port:    50051,      // Default port
+			Methods: methods,
+		})
+	}
+	
+	for _, svc := range domainServices {
 		logger.Info("Service parsed",
 			pkglogger.String("name", svc.Name),
 			pkglogger.String("package", svc.Package),
 			pkglogger.Int("methods", len(svc.Methods)))
+	}
+
+	// Создаем генератор кода
+	outputDir := cfg.Forge.OutputDir
+	if outputDir == "" {
+		outputDir = "generated"
+	}
+	
+	codeGenerator := service.NewCodeGenerator(logger, outputDir)
+
+	// Генерируем YAML конфигурацию для UptimePing Core
+	configPath := fmt.Sprintf("%s/uptime_config.yaml", outputDir)
+	if err := codeGenerator.GenerateConfig(domainServices, configPath); err != nil {
+		logger.Error("Failed to generate config", pkglogger.Error(err))
+	} else {
+		logger.Info("YAML config generated", pkglogger.String("path", configPath))
+	}
+
+	// Генерируем Go код для gRPC checker'ов
+	checkersPath := fmt.Sprintf("%s/checkers", outputDir)
+	if err := codeGenerator.GenerateGRPCCheckers(domainServices, checkersPath); err != nil {
+		logger.Error("Failed to generate gRPC checkers", pkglogger.Error(err))
+	} else {
+		logger.Info("gRPC checkers generated", pkglogger.String("path", checkersPath))
+	}
+
+	// Создаем интерактивную конфигурацию по умолчанию
+	interactiveConfig := domain.NewDefaultInteractiveConfig()
+	interactiveConfigPath := fmt.Sprintf("%s/interactive", outputDir)
+	if err := codeGenerator.GenerateInteractiveConfig(interactiveConfig); err != nil {
+		logger.Error("Failed to generate interactive config", pkglogger.Error(err))
+	} else {
+		logger.Info("Interactive config generated", pkglogger.String("path", interactiveConfigPath))
 	}
 
 	// Анализ сообщений
@@ -90,13 +147,38 @@ func main() {
 		pkglogger.String("host", cfg.Server.Host),
 		pkglogger.Int("port", cfg.Server.Port))
 
+	// Создаем HTTP обработчики
+	httpHandler := handler.NewHTTPHandler(logger, codeGenerator)
+	
+	// Создаем mux для регистрации маршрутов
+	mux := http.NewServeMux()
+	
 	// Регистрируем обработчики
-	http.HandleFunc("/health", health.Handler(healthChecker))
-	http.HandleFunc("/ready", health.ReadyHandler(healthChecker))
-	http.HandleFunc("/live", health.LiveHandler())
+	mux.HandleFunc("/health", health.Handler(healthChecker))
+	mux.HandleFunc("/ready", health.ReadyHandler(healthChecker))
+	mux.HandleFunc("/live", health.LiveHandler())
+	
+	// Статические файлы для веб-интерфейса
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.ServeFile(w, r, "web/index.html")
+			return
+		}
+		http.NotFound(w, r)
+	})
+	
+	// Регистрируем API маршруты
+	httpHandler.RegisterRoutes(mux)
+	
+	// Применяем middleware
+	handlerWithLogging := httpHandler.LoggingMiddleware(mux)
+	handlerWithCORS := httpHandler.CORSMiddleware(handlerWithLogging)
+	
+	server.Handler = handlerWithCORS
 
 	if metricsInstance != nil {
-		http.Handle("/metrics", metricsInstance.GetHandler())
+		// Добавляем metrics middleware
+		server.Handler = metricsInstance.Middleware(server.Handler)
 	}
 
 	logger.Info("HTTP handlers registered")

@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Forge Service - UptimePing Platform</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #e1e8ed;
+            margin-bottom: 30px;
+        }
+
+        .tab {
+            padding: 15px 30px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1rem;
+            color: #657786;
+            border-bottom: 2px solid transparent;
+            transition: all 0.3s ease;
+        }
+
+        .tab:hover {
+            color: #667eea;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #14171a;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e1e8ed;
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .form-group input[type="checkbox"] {
+            width: auto;
+            margin-right: 8px;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-right: 10px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-secondary {
+            background: #e1e8ed;
+            color: #14171a;
+        }
+
+        .btn-secondary:hover {
+            background: #d1d8dd;
+        }
+
+        .status {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #e1e8ed;
+        }
+
+        .card h3 {
+            margin-bottom: 15px;
+            color: #14171a;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔨 Forge Service</h1>
+            <p>Генератор конфигураций и кода для UptimePing Platform</p>
+        </div>
+
+        <div class="content">
+            <div id="status" class="status info" style="display: none;">
+                <span id="statusMessage"></span>
+            </div>
+
+            <div class="tabs">
+                <button class="tab active" onclick="showTab('overview')">Обзор</button>
+                <button class="tab" onclick="showTab('config')">Конфигурация</button>
+                <button class="tab" onclick="showTab('telegram')">Telegram</button>
+                <button class="tab" onclick="showTab('email')">Email</button>
+                <button class="tab" onclick="showTab('generate')">Генерация</button>
+            </div>
+
+            <!-- Обзор -->
+            <div id="overview" class="tab-content active">
+                <div class="grid">
+                    <div class="card">
+                        <h3>📊 Статус сервиса</h3>
+                        <div id="serviceStatus">
+                            <div class="loading">
+                                <div class="spinner"></div>
+                                <p>Загрузка...</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h3>🔧 Функции</h3>
+                        <ul>
+                            <li>Парсинг proto файлов</li>
+                            <li>Генерация YAML конфигураций</li>
+                            <li>Создание gRPC checker'ов</li>
+                            <li>Интерактивная настройка</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Основная конфигурация -->
+            <div id="config" class="tab-content">
+                <form id="configForm">
+                    <div class="grid">
+                        <div class="form-group">
+                            <label for="serverHost">Хост сервера:</label>
+                            <input type="text" id="serverHost" name="serverHost" value="0.0.0.0">
+                        </div>
+                        <div class="form-group">
+                            <label for="serverPort">Порт сервера:</label>
+                            <input type="number" id="serverPort" name="serverPort" value="8080">
+                        </div>
+                    </div>
+                    
+                    <div class="grid">
+                        <div class="form-group">
+                            <label for="dbHost">Хост базы данных:</label>
+                            <input type="text" id="dbHost" name="dbHost" value="localhost">
+                        </div>
+                        <div class="form-group">
+                            <label for="dbPort">Порт базы данных:</label>
+                            <input type="number" id="dbPort" name="dbPort" value="5432">
+                        </div>
+                    </div>
+
+                    <div class="grid">
+                        <div class="form-group">
+                            <label for="dbName">Имя базы данных:</label>
+                            <input type="text" id="dbName" name="dbName" value="uptimeping">
+                        </div>
+                        <div class="form-group">
+                            <label for="dbUser">Пользователь БД:</label>
+                            <input type="text" id="dbUser" name="dbUser" value="uptimeping">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="dbPassword">Пароль БД:</label>
+                        <input type="password" id="dbPassword" name="dbPassword" value="uptimeping">
+                    </div>
+
+                    <div class="grid">
+                        <div class="form-group">
+                            <label for="redisAddr">Redis адрес:</label>
+                            <input type="text" id="redisAddr" name="redisAddr" value="localhost:6379">
+                        </div>
+                        <div class="form-group">
+                            <label for="logLevel">Уровень логирования:</label>
+                            <select id="logLevel" name="logLevel">
+                                <option value="debug">Debug</option>
+                                <option value="info" selected>Info</option>
+                                <option value="warn">Warn</option>
+                                <option value="error">Error</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <button type="button" class="btn" onclick="saveConfig()">Сохранить конфигурацию</button>
+                </form>
+            </div>
+
+            <!-- Настройка Telegram -->
+            <div id="telegram" class="tab-content">
+                <form id="telegramForm">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="telegramEnabled" name="telegramEnabled">
+                        <label for="telegramEnabled">Включить Telegram уведомления</label>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="telegramBotToken">Bot Token:</label>
+                        <input type="text" id="telegramBotToken" name="telegramBotToken" placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="telegramChatID">Chat ID:</label>
+                        <input type="text" id="telegramChatID" name="telegramChatID" placeholder="123456789">
+                    </div>
+
+                    <button type="button" class="btn" onclick="saveTelegramConfig()">Сохранить Telegram</button>
+                </form>
+            </div>
+
+            <!-- Настройка Email -->
+            <div id="email" class="tab-content">
+                <form id="emailForm">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="emailEnabled" name="emailEnabled">
+                        <label for="emailEnabled">Включить Email уведомления</label>
+                    </div>
+
+                    <div class="grid">
+                        <div class="form-group">
+                            <label for="smtpHost">SMTP хост:</label>
+                            <input type="text" id="smtpHost" name="smtpHost" value="smtp.gmail.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="smtpPort">SMTP порт:</label>
+                            <input type="number" id="smtpPort" name="smtpPort" value="587">
+                        </div>
+                    </div>
+
+                    <div class="grid">
+                        <div class="form-group">
+                            <label for="emailUsername">Имя пользователя:</label>
+                            <input type="text" id="emailUsername" name="emailUsername" placeholder="your-email@gmail.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="emailPassword">Пароль:</label>
+                            <input type="password" id="emailPassword" name="emailPassword" placeholder="your-app-password">
+                        </div>
+                    </div>
+
+                    <div class="grid">
+                        <div class="form-group">
+                            <label for="fromAddress">Адрес отправителя:</label>
+                            <input type="email" id="fromAddress" name="fromAddress" value="noreply@uptimeping.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="fromName">Имя отправителя:</label>
+                            <input type="text" id="fromName" name="fromName" value="UptimePing Platform">
+                        </div>
+                    </div>
+
+                    <button type="button" class="btn" onclick="saveEmailConfig()">Сохранить Email</button>
+                </form>
+            </div>
+
+            <!-- Генерация -->
+            <div id="generate" class="tab-content">
+                <div class="grid">
+                    <div class="card">
+                        <h3>📄 Генерация конфигурации</h3>
+                        <p>Сгенерировать YAML конфигурацию и .env файлы для UptimePing Core</p>
+                        <button type="button" class="btn" onclick="generateConfig()">Генерировать конфигурацию</button>
+                    </div>
+                    <div class="card">
+                        <h3>🔧 Генерация кода</h3>
+                        <p>Сгенерировать Go код для gRPC checker'ов</p>
+                        <button type="button" class="btn" onclick="generateCheckers()">Генерировать checker'ы</button>
+                    </div>
+                </div>
+
+                <div id="generateStatus" class="loading" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>Генерация...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Глобальные переменные
+        let currentConfig = {};
+
+        // Показать вкладку
+        function showTab(tabName) {
+            // Скрыть все вкладки
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            
+            // Убрать активный класс со всех кнопок
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Показать выбранную вкладку
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        // Показать статус
+        function showStatus(message, type = 'info') {
+            const statusEl = document.getElementById('status');
+            const messageEl = document.getElementById('statusMessage');
+            
+            statusEl.className = `status ${type}`;
+            messageEl.textContent = message;
+            statusEl.style.display = 'block';
+            
+            // Скрыть через 5 секунд
+            setTimeout(() => {
+                statusEl.style.display = 'none';
+            }, 5000);
+        }
+
+        // Загрузить конфигурацию
+        async function loadConfig() {
+            try {
+                const response = await fetch('/api/config');
+                currentConfig = await response.json();
+                
+                // Заполнить форму
+                document.getElementById('serverHost').value = currentConfig.server.host;
+                document.getElementById('serverPort').value = currentConfig.server.port;
+                document.getElementById('dbHost').value = currentConfig.database.host;
+                document.getElementById('dbPort').value = currentConfig.database.port;
+                document.getElementById('dbName').value = currentConfig.database.name;
+                document.getElementById('dbUser').value = currentConfig.database.user;
+                document.getElementById('dbPassword').value = currentConfig.database.password;
+                document.getElementById('redisAddr').value = currentConfig.redis.addr;
+                document.getElementById('logLevel').value = currentConfig.logger.level;
+                
+                // Telegram
+                document.getElementById('telegramEnabled').checked = currentConfig.telegram.enabled;
+                document.getElementById('telegramBotToken').value = currentConfig.telegram.bot_token;
+                document.getElementById('telegramChatID').value = currentConfig.telegram.chat_id;
+                
+                // Email
+                document.getElementById('emailEnabled').checked = currentConfig.email.enabled;
+                document.getElementById('smtpHost').value = currentConfig.email.smtp_host;
+                document.getElementById('smtpPort').value = currentConfig.email.smtp_port;
+                document.getElementById('emailUsername').value = currentConfig.email.username;
+                document.getElementById('emailPassword').value = currentConfig.email.password;
+                document.getElementById('fromAddress').value = currentConfig.email.from_address;
+                document.getElementById('fromName').value = currentConfig.email.from_name;
+                
+            } catch (error) {
+                showStatus('Ошибка загрузки конфигурации', 'error');
+            }
+        }
+
+        // Сохранить конфигурацию
+        async function saveConfig() {
+            try {
+                const formData = {
+                    server: {
+                        host: document.getElementById('serverHost').value,
+                        port: parseInt(document.getElementById('serverPort').value)
+                    },
+                    database: {
+                        host: document.getElementById('dbHost').value,
+                        port: parseInt(document.getElementById('dbPort').value),
+                        name: document.getElementById('dbName').value,
+                        user: document.getElementById('dbUser').value,
+                        password: document.getElementById('dbPassword').value
+                    },
+                    redis: {
+                        addr: document.getElementById('redisAddr').value,
+                        password: '',
+                        db: 0
+                    },
+                    logger: {
+                        level: document.getElementById('logLevel').value,
+                        format: 'json'
+                    },
+                    environment: 'dev'
+                };
+
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData)
+                });
+
+                if (response.ok) {
+                    showStatus('Конфигурация сохранена успешно', 'success');
+                    await loadConfig(); // Перезагрузить конфигурацию
+                } else {
+                    showStatus('Ошибка сохранения конфигурации', 'error');
+                }
+            } catch (error) {
+                showStatus('Ошибка сети', 'error');
+            }
+        }
+
+        // Сохранить Telegram конфигурацию
+        async function saveTelegramConfig() {
+            try {
+                const formData = {
+                    enabled: document.getElementById('telegramEnabled').checked,
+                    bot_token: document.getElementById('telegramBotToken').value,
+                    chat_id: document.getElementById('telegramChatID').value
+                };
+
+                const response = await fetch('/api/config/telegram', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData)
+                });
+
+                if (response.ok) {
+                    showStatus('Telegram конфигурация сохранена', 'success');
+                } else {
+                    showStatus('Ошибка сохранения Telegram конфигурации', 'error');
+                }
+            } catch (error) {
+                showStatus('Ошибка сети', 'error');
+            }
+        }
+
+        // Сохранить Email конфигурацию
+        async function saveEmailConfig() {
+            try {
+                const formData = {
+                    enabled: document.getElementById('emailEnabled').checked,
+                    smtp_host: document.getElementById('smtpHost').value,
+                    smtp_port: parseInt(document.getElementById('smtpPort').value),
+                    username: document.getElementById('emailUsername').value,
+                    password: document.getElementById('emailPassword').value,
+                    from_address: document.getElementById('fromAddress').value,
+                    from_name: document.getElementById('fromName').value
+                };
+
+                const response = await fetch('/api/config/email', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData)
+                });
+
+                if (response.ok) {
+                    showStatus('Email конфигурация сохранена', 'success');
+                } else {
+                    showStatus('Ошибка сохранения Email конфигурации', 'error');
+                }
+            } catch (error) {
+                showStatus('Ошибка сети', 'error');
+            }
+        }
+
+        // Генерировать конфигурацию
+        async function generateConfig() {
+            const statusEl = document.getElementById('generateStatus');
+            statusEl.style.display = 'block';
+
+            try {
+                const response = await fetch('/api/config/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showStatus('Конфигурация сгенерирована успешно', 'success');
+                } else {
+                    showStatus('Ошибка генерации конфигурации', 'error');
+                }
+            } catch (error) {
+                showStatus('Ошибка сети', 'error');
+            } finally {
+                statusEl.style.display = 'none';
+            }
+        }
+
+        // Генерировать checker'ы
+        async function generateCheckers() {
+            const statusEl = document.getElementById('generateStatus');
+            statusEl.style.display = 'block';
+
+            try {
+                const response = await fetch('/api/checkers/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showStatus('gRPC checker\'ы сгенерированы успешно', 'success');
+                } else {
+                    showStatus('Ошибка генерации checker\'ов', 'error');
+                }
+            } catch (error) {
+                showStatus('Ошибка сети', 'error');
+            } finally {
+                statusEl.style.display = 'none';
+            }
+        }
+
+        // Загрузить статус сервиса
+        async function loadServiceStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const status = await response.json();
+                
+                const statusEl = document.getElementById('serviceStatus');
+                statusEl.innerHTML = `
+                    <p><strong>Сервис:</strong> ${status.service}</p>
+                    <p><strong>Версия:</strong> ${status.version}</p>
+                    <p><strong>Статус:</strong> ${status.status}</p>
+                    <p><strong>Окружение:</strong> ${status.config.environment}</p>
+                    <p><strong>Telegram:</strong> ${status.config.telegram_enabled ? 'Включен' : 'Выключен'}</p>
+                    <p><strong>Email:</strong> ${status.config.email_enabled ? 'Включен' : 'Выключен'}</p>
+                `;
+            } catch (error) {
+                document.getElementById('serviceStatus').innerHTML = '<p>Ошибка загрузки статуса</p>';
+            }
+        }
+
+        // Инициализация при загрузке страницы
+        document.addEventListener('DOMContentLoaded', function() {
+            loadConfig();
+            loadServiceStatus();
+            
+            // Обновлять статус каждые 30 секунд
+            setInterval(loadServiceStatus, 30000);
+        });
+    </script>
+</body>
+</html>
