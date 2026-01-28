@@ -21,6 +21,7 @@ import (
 	pkg_rabbitmq "UptimePingPlatform/pkg/rabbitmq"
 
 	grpcHandler "UptimePingPlatform/services/incident-manager/internal/handler/grpc"
+	httpHandler "UptimePingPlatform/services/incident-manager/internal/handler"
 	incidentProducer "UptimePingPlatform/services/incident-manager/internal/producer/rabbitmq"
 	"UptimePingPlatform/services/incident-manager/internal/service"
 
@@ -142,6 +143,10 @@ func main() {
 	
 	metricsPath := metricsInstance.GetMetricsPath(&cfg.Metrics)
 	mux.Handle(metricsPath, metricsInstance.GetHandler())
+
+	// Создаем и регистрируем HTTP обработчики для Incident API
+	incidentHTTPHandler := httpHandler.NewHTTPHandler(appLogger, incidentService)
+	incidentHTTPHandler.RegisterRoutes(mux)
 
 	httpServer.Handler = metricsInstance.Middleware(mux)
 

@@ -1,38 +1,42 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
-	"github.com/spf13/cobra"
+	"UptimePingPlatform/pkg/config"
+	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/cli-service/cmd"
 )
 
-var rootCmd = &cobra.Command{
-	Use:   "uptimeping",
-	Short: "UptimePing CLI",
-	Long:  `UptimePing CLI - инструмент командной строки для мониторинга доступности сервисов.`,
-}
-
-var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Показать версию",
-	Long:  "Показать информацию о версии CLI",
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("UptimePing CLI v1.0.0\n")
-		fmt.Printf("Built for UptimePing Platform\n")
-	},
-}
-
-func init() {
-	rootCmd.AddCommand(versionCmd)
-	rootCmd.AddCommand(cmd.GetConfigCmd())
-	rootCmd.AddCommand(cmd.GetAuthCmd())
-	rootCmd.AddCommand(cmd.GetChecksCmd())
-}
-
 func main() {
-	if err := rootCmd.Execute(); err != nil {
+	// Создаем конфигурацию по умолчанию
+	cfg, err := config.LoadConfig("")
+	if err != nil {
+		cfg = &config.Config{
+			Server: config.ServerConfig{
+				Host: "localhost",
+				Port: 8080,
+			},
+			Logger: config.LoggerConfig{
+				Level:  "info",
+				Format: "console",
+			},
+			Environment: "dev",
+		}
+	}
+
+	// Создаем логгер
+	log, err := logger.NewLogger(cfg.Logger.Level, cfg.Logger.Format, "cli-service", false)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка создания логгера: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Выполняем команду
+	ctx := context.Background()
+	if err := cmd.Execute(ctx, cfg, log); err != nil {
 		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
 		os.Exit(1)
 	}

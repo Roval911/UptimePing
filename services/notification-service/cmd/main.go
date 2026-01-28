@@ -23,6 +23,7 @@ import (
 
 	notificationConfig "UptimePingPlatform/services/notification-service/config"
 	grpcHandler "UptimePingPlatform/services/notification-service/internal/handler/grpc"
+	httpHandler "UptimePingPlatform/services/notification-service/internal/handler"
 	"UptimePingPlatform/services/notification-service/internal/consumer/rabbitmq"
 	"UptimePingPlatform/services/notification-service/internal/filter"
 	"UptimePingPlatform/services/notification-service/internal/grouper"
@@ -180,6 +181,10 @@ func main() {
 	
 	metricsPath := metricsInstance.GetMetricsPath(&cfg.Metrics)
 	mux.Handle(metricsPath, metricsInstance.GetHandler())
+
+	// Создаем и регистрируем HTTP обработчики для Notification API
+	notificationHTTPHandler := httpHandler.NewHTTPHandler(appLogger, notificationService)
+	notificationHTTPHandler.RegisterRoutes(mux)
 
 	httpServer.Handler = metricsInstance.Middleware(mux)
 

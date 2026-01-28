@@ -7,10 +7,12 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"google.golang.org/grpc"
 
 	"UptimePingPlatform/pkg/errors"
-	// incidentv1 "UptimePingPlatform/proto/incident/v1"
+	"UptimePingPlatform/pkg/logger"
+	cliClient "UptimePingPlatform/services/cli-service/internal/client"
+	cliConfig "UptimePingPlatform/services/cli-service/internal/config"
+	"UptimePingPlatform/services/cli-service/internal/output"
 )
 
 var incidentsCmd = &cobra.Command{
@@ -28,6 +30,32 @@ var incidentsListCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return handleIncidentsList(cmd, args)
 	},
+}
+
+func init() {
+	incidentsCmd.AddCommand(incidentsListCmd)
+	incidentsCmd.AddCommand(incidentsGetCmd)
+	incidentsCmd.AddCommand(incidentsAcknowledgeCmd)
+	incidentsCmd.AddCommand(incidentsResolveCmd)
+
+	// Incidents list flags
+	incidentsListCmd.Flags().StringP("status", "a", "", "фильтр по статусу (open, acknowledged, resolved)")
+	incidentsListCmd.Flags().StringP("severity", "S", "", "фильтр по важности (low, medium, high, critical)")
+	incidentsListCmd.Flags().StringP("tenant", "n", "", "фильтр по тенанту")
+	incidentsListCmd.Flags().StringP("from", "f", "", "начальная дата (RFC3339)")
+	incidentsListCmd.Flags().StringP("to", "e", "", "конечная дата (RFC3339)")
+	incidentsListCmd.Flags().IntP("limit", "l", 50, "лимит записей")
+	
+	// Флаги формата вывода
+	incidentsListCmd.Flags().StringP("format", "o", "", "Формат вывода (table, json, yaml)")
+	incidentsListCmd.Flags().BoolP("pretty", "p", true, "Pretty JSON/YAML вывод")
+	incidentsListCmd.Flags().BoolP("colors", "c", true, "Цветной вывод")
+
+	// Incidents acknowledge flags
+	incidentsAcknowledgeCmd.Flags().StringP("message", "m", "", "сообщение подтверждения")
+
+	// Incidents resolve flags
+	incidentsResolveCmd.Flags().StringP("message", "m", "", "сообщение разрешения")
 }
 
 // incidentsGetCmd represents the incidents get command
@@ -63,30 +91,27 @@ var incidentsResolveCmd = &cobra.Command{
 	},
 }
 
-func init() {
-	incidentsCmd.AddCommand(incidentsListCmd)
-	incidentsCmd.AddCommand(incidentsGetCmd)
-	incidentsCmd.AddCommand(incidentsAcknowledgeCmd)
-	incidentsCmd.AddCommand(incidentsResolveCmd)
+// getIncidentClient создает клиент для работы с инцидентами
+func getIncidentClient() (cliClient.IncidentClientInterface, error) {
+	// Создаем логгер
+	log, err := logger.NewLogger("dev", "info", "cli-service", false)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка создания логгера: %w", err)
+	}
 
-	// Incidents list flags
-	incidentsListCmd.Flags().StringP("status", "a", "", "фильтр по статусу (open, acknowledged, resolved)")
-	incidentsListCmd.Flags().StringP("severity", "S", "", "фильтр по важности (low, medium, high, critical)")
-	incidentsListCmd.Flags().StringP("tenant", "n", "", "фильтр по тенанту")
-	incidentsListCmd.Flags().StringP("from", "f", "", "начальная дата (RFC3339)")
-	incidentsListCmd.Flags().StringP("to", "e", "", "конечная дата (RFC3339)")
-	incidentsListCmd.Flags().IntP("limit", "l", 50, "лимит записей")
+	// Загружаем реальную конфигурацию из файла или переменных окружения
+	config, err := cliConfig.LoadConfig("")
+	if err != nil {
+		log.Warn("не удалось загрузить конфигурацию, используем значения по умолчанию", logger.Error(err))
+		config = cliConfig.DefaultConfig()
+	}
 
-	// Incidents acknowledge flags
-	incidentsAcknowledgeCmd.Flags().StringP("message", "m", "", "сообщение подтверждения")
+	baseURL := config.API.BaseURL
+	if baseURL == "" {
+		baseURL = "http://localhost:8080" // Значение по умолчанию
+	}
 
-	// Incidents resolve flags
-	incidentsResolveCmd.Flags().StringP("message", "m", "", "сообщение разрешения")
-}
-
-// getIncidentClient creates a gRPC client for incident service
-func getIncidentClient() (*MockIncidentClient, *grpc.ClientConn, error) {
-	return getMockIncidentClient()
+	return cliClient.NewIncidentClient(baseURL, log), nil
 }
 
 func handleIncidentsList(cmd *cobra.Command, args []string) error {
@@ -96,29 +121,25 @@ func handleIncidentsList(cmd *cobra.Command, args []string) error {
 	from, _ := cmd.Flags().GetString("from")
 	to, _ := cmd.Flags().GetString("to")
 	limit, _ := cmd.Flags().GetInt("limit")
+	
+	// Получаем флаги формата
+	formatStr, _ := cmd.Flags().GetString("format")
+	pretty, _ := cmd.Flags().GetBool("pretty")
+	useColors, _ := cmd.Flags().GetBool("colors")
 
-	client, conn, err := getIncidentClient()
+	client, err := getIncidentClient()
 	if err != nil {
 		return handleError(err, cmd)
 	}
-	if conn != nil {
-		defer conn.Close()
-	}
+	defer client.Close()
 
 	ctx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
 	defer cancel()
 
-	req := &struct {
-		Status   string     `json:"status"`
-		Severity string     `json:"severity"`
-		TenantId string     `json:"tenant_id"`
-		Limit    int32      `json:"limit"`
-		From     *time.Time `json:"from,omitempty"`
-		To       *time.Time `json:"to,omitempty"`
-	}{
+	req := &cliClient.ListIncidentsRequest{
 		Status:   status,
 		Severity: severity,
-		TenantId: tenant,
+		TenantID: tenant,
 		Limit:    int32(limit),
 	}
 
@@ -143,47 +164,61 @@ func handleIncidentsList(cmd *cobra.Command, args []string) error {
 		return handleError(err, cmd)
 	}
 
-	incidentsResp := resp.(*ListIncidentsResponse)
-
-	if len(incidentsResp.Incidents) == 0 {
-		fmt.Println("No incidents found")
+	if len(resp.Incidents) == 0 {
+		// Используем новый форматировщик
+		var format output.FormatType = output.FormatTable
+		if formatStr != "" {
+			switch formatStr {
+			case "json":
+				format = output.FormatJSON
+			case "yaml":
+				format = output.FormatYAML
+			}
+		}
+		
+		formatter := output.GetFormatter(format, pretty, useColors)
+		emptyOutput, _ := formatter.Format("No incidents found")
+		fmt.Println(emptyOutput)
 		return nil
 	}
 
-	outputFormat := viper.GetString("output")
-	switch outputFormat {
-	case "json":
-		fmt.Println("[")
-		for i, incident := range incidentsResp.Incidents {
-			if i > 0 {
-				fmt.Println(",")
-			}
-			fmt.Printf(`  {"id": "%s", "title": "%s", "status": "%s", "severity": "%s", "created_at": "%s"}`,
-				incident.IncidentId, incident.Title, incident.Status, incident.Severity,
-				incident.CreatedAt.Format(time.RFC3339))
+	// Определяем формат вывода
+	var format output.FormatType = output.FormatTable
+	if formatStr != "" {
+		switch formatStr {
+		case "json":
+			format = output.FormatJSON
+		case "yaml":
+			format = output.FormatYAML
 		}
-		fmt.Println("\n]")
+	}
+
+	switch format {
+	case output.FormatJSON:
+		// Конвертируем []client.IncidentInfo в []interface{}
+		incidents := make([]interface{}, len(resp.Incidents))
+		for i, incident := range resp.Incidents {
+			incidents[i] = incident
+		}
+		jsonOutput := output.CreateIncidentsJSONResponse(incidents, len(resp.Incidents), 1, len(resp.Incidents))
+		output.PrintJSON(jsonOutput, pretty)
+	case output.FormatYAML:
+		// Конвертируем []client.IncidentInfo в []interface{}
+		incidents := make([]interface{}, len(resp.Incidents))
+		for i, incident := range resp.Incidents {
+			incidents[i] = incident
+		}
+		yamlOutput := output.CreateIncidentsYAMLResponse(incidents, len(resp.Incidents), 1, len(resp.Incidents))
+		output.PrintYAML(yamlOutput)
 	default:
-		fmt.Printf("Incidents (%d total):\n", len(incidentsResp.Incidents))
-		fmt.Printf("%-20s %-30s %-12s %-10s %-20s\n", "ID", "Title", "Status", "Severity", "Created")
-		fmt.Println("----------------------------------------------------------------------------------------")
-
-		for _, incident := range incidentsResp.Incidents {
-			id := incident.IncidentId
-			if len(id) > 18 {
-				id = id[:15] + "..."
-			}
-
-			title := incident.Title
-			if len(title) > 28 {
-				title = title[:25] + "..."
-			}
-
-			created := incident.CreatedAt.Format("2006-01-02 15:04:05")
-
-			fmt.Printf("%-20s %-30s %-12s %-10s %-20s\n",
-				id, title, incident.Status, incident.Severity, created)
+		// Конвертируем []client.IncidentInfo в []interface{}
+		incidents := make([]interface{}, len(resp.Incidents))
+		for i, incident := range resp.Incidents {
+			incidents[i] = incident
 		}
+		// Табличный формат
+		table := output.CreateIncidentsTable(incidents, useColors)
+		output.PrintTable(table)
 	}
 
 	return nil
@@ -192,21 +227,17 @@ func handleIncidentsList(cmd *cobra.Command, args []string) error {
 func handleIncidentsGet(cmd *cobra.Command, args []string) error {
 	incidentID := args[0]
 
-	client, conn, err := getIncidentClient()
+	client, err := getIncidentClient()
 	if err != nil {
 		return handleError(err, cmd)
 	}
-	if conn != nil {
-		defer conn.Close()
-	}
+	defer client.Close()
 
 	ctx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
 	defer cancel()
 
-	req := &struct {
-		IncidentId string `json:"incident_id"`
-	}{
-		IncidentId: incidentID,
+	req := &cliClient.GetIncidentRequest{
+		IncidentID: incidentID,
 	}
 
 	resp, err := client.GetIncident(ctx, req)
@@ -214,32 +245,30 @@ func handleIncidentsGet(cmd *cobra.Command, args []string) error {
 		return handleError(err, cmd)
 	}
 
-	incidentResp := resp.(*GetIncidentResponse)
-
 	fmt.Printf("Incident Details:\n")
-	fmt.Printf("ID: %s\n", incidentResp.IncidentId)
-	fmt.Printf("Title: %s\n", incidentResp.Title)
-	fmt.Printf("Description: %s\n", incidentResp.Description)
-	fmt.Printf("Status: %s\n", incidentResp.Status)
-	fmt.Printf("Severity: %s\n", incidentResp.Severity)
-	fmt.Printf("Tenant: %s\n", incidentResp.TenantId)
-	fmt.Printf("Check ID: %s\n", incidentResp.CheckId)
-	fmt.Printf("Created: %s\n", incidentResp.CreatedAt.Format(time.RFC3339))
-	fmt.Printf("Updated: %s\n", incidentResp.UpdatedAt.Format(time.RFC3339))
+	fmt.Printf("ID: %s\n", resp.IncidentID)
+	fmt.Printf("Title: %s\n", resp.Title)
+	fmt.Printf("Description: %s\n", resp.Description)
+	fmt.Printf("Status: %s\n", resp.Status)
+	fmt.Printf("Severity: %s\n", resp.Severity)
+	fmt.Printf("Tenant: %s\n", resp.TenantID)
+	fmt.Printf("Check ID: %s\n", resp.CheckID)
+	fmt.Printf("Created: %s\n", resp.CreatedAt.Format(time.RFC3339))
+	fmt.Printf("Updated: %s\n", resp.UpdatedAt.Format(time.RFC3339))
 
-	if incidentResp.AcknowledgedAt != nil {
-		fmt.Printf("Acknowledged: %s\n", incidentResp.AcknowledgedAt.Format(time.RFC3339))
-		fmt.Printf("Acknowledged By: %s\n", incidentResp.AcknowledgedBy)
+	if resp.AcknowledgedAt != nil {
+		fmt.Printf("Acknowledged: %s\n", resp.AcknowledgedAt.Format(time.RFC3339))
+		fmt.Printf("Acknowledged By: %s\n", resp.AcknowledgedBy)
 	}
 
-	if incidentResp.ResolvedAt != nil {
-		fmt.Printf("Resolved: %s\n", incidentResp.ResolvedAt.Format(time.RFC3339))
-		fmt.Printf("Resolved By: %s\n", incidentResp.ResolvedBy)
+	if resp.ResolvedAt != nil {
+		fmt.Printf("Resolved: %s\n", resp.ResolvedAt.Format(time.RFC3339))
+		fmt.Printf("Resolved By: %s\n", resp.ResolvedBy)
 	}
 
 	if viper.GetBool("verbose") {
 		fmt.Printf("\nEvents:\n")
-		for _, event := range incidentResp.Events {
+		for _, event := range resp.Events {
 			fmt.Printf("  %s: %s - %s\n",
 				event.Timestamp.Format("2006-01-02 15:04:05"),
 				event.Type, event.Message)
@@ -253,22 +282,17 @@ func handleIncidentsAcknowledge(cmd *cobra.Command, args []string) error {
 	incidentID := args[0]
 	message, _ := cmd.Flags().GetString("message")
 
-	client, conn, err := getIncidentClient()
+	client, err := getIncidentClient()
 	if err != nil {
 		return handleError(err, cmd)
 	}
-	if conn != nil {
-		defer conn.Close()
-	}
+	defer client.Close()
 
 	ctx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
 	defer cancel()
 
-	req := &struct {
-		IncidentId string `json:"incident_id"`
-		Message    string `json:"message"`
-	}{
-		IncidentId: incidentID,
+	req := &cliClient.AcknowledgeIncidentRequest{
+		IncidentID: incidentID,
 		Message:    message,
 	}
 
@@ -277,12 +301,10 @@ func handleIncidentsAcknowledge(cmd *cobra.Command, args []string) error {
 		return handleError(err, cmd)
 	}
 
-	ackResp := resp.(*AcknowledgeIncidentResponse)
-
 	fmt.Printf("✅ Incident '%s' acknowledged successfully\n", incidentID)
 	if viper.GetBool("verbose") {
-		fmt.Printf("Acknowledged at: %s\n", ackResp.AcknowledgedAt.Format(time.RFC3339))
-		fmt.Printf("Acknowledged by: %s\n", ackResp.AcknowledgedBy)
+		fmt.Printf("Acknowledged at: %s\n", resp.AcknowledgedAt.Format(time.RFC3339))
+		fmt.Printf("Acknowledged by: %s\n", resp.AcknowledgedBy)
 	}
 
 	return nil
@@ -292,22 +314,17 @@ func handleIncidentsResolve(cmd *cobra.Command, args []string) error {
 	incidentID := args[0]
 	message, _ := cmd.Flags().GetString("message")
 
-	client, conn, err := getIncidentClient()
+	client, err := getIncidentClient()
 	if err != nil {
 		return handleError(err, cmd)
 	}
-	if conn != nil {
-		defer conn.Close()
-	}
+	defer client.Close()
 
 	ctx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
 	defer cancel()
 
-	req := &struct {
-		IncidentId string `json:"incident_id"`
-		Message    string `json:"message"`
-	}{
-		IncidentId: incidentID,
+	req := &cliClient.ResolveIncidentRequest{
+		IncidentID: incidentID,
 		Message:    message,
 	}
 
@@ -316,12 +333,10 @@ func handleIncidentsResolve(cmd *cobra.Command, args []string) error {
 		return handleError(err, cmd)
 	}
 
-	resolveResp := resp.(*ResolveIncidentResponse)
-
 	fmt.Printf("✅ Incident '%s' resolved successfully\n", incidentID)
 	if viper.GetBool("verbose") {
-		fmt.Printf("Resolved at: %s\n", resolveResp.ResolvedAt.Format(time.RFC3339))
-		fmt.Printf("Resolved by: %s\n", resolveResp.ResolvedBy)
+		fmt.Printf("Resolved at: %s\n", resp.ResolvedAt.Format(time.RFC3339))
+		fmt.Printf("Resolved by: %s\n", resp.ResolvedBy)
 	}
 
 	return nil

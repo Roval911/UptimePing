@@ -1,0 +1,15 @@
+api:
+  base_url: "http://localhost:8080"
+
+grpc:
+  use_grpc: false  # Отключаем gRPC для демонстрации HTTP fallback
+  scheduler_address: "localhost:50051"
+  core_address: "localhost:50052"
+
+auth:
+  token_expiry: 3600
+  refresh_threshold: 300
+
+logger:
+  level: "info"
+  format: "json"

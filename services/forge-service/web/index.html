@@ -32,6 +32,33 @@
             color: white;
             padding: 30px;
             text-align: center;
+            position: relative;
+        }
+
+        .user-info {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.9rem;
+        }
+
+        .btn-logout {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: all 0.3s ease;
+        }
+
+        .btn-logout:hover {
+            background: rgba(255, 255, 255, 0.3);
+            border-color: rgba(255, 255, 255, 0.5);
         }
 
         .header h1 {
@@ -215,6 +242,10 @@
         <div class="header">
             <h1>🔨 Forge Service</h1>
             <p>Генератор конфигураций и кода для UptimePing Platform</p>
+            <div class="user-info">
+                <span id="userInfo">Загрузка...</span>
+                <button class="btn-logout" onclick="logout()">Выйти</button>
+            </div>
         </div>
 
         <div class="content">
@@ -444,7 +475,25 @@
         // Загрузить конфигурацию
         async function loadConfig() {
             try {
-                const response = await fetch('/api/config');
+                const token = localStorage.getItem('forge_token');
+                const response = await fetch('/api/config', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        // Токен недействителен, перенаправляем на страницу входа
+                        localStorage.removeItem('forge_token');
+                        localStorage.removeItem('forge_tenant_id');
+                        localStorage.removeItem('forge_user_id');
+                        window.location.href = '/';
+                        return;
+                    }
+                    throw new Error('Failed to load config');
+                }
+                
                 currentConfig = await response.json();
                 
                 // Заполнить форму
@@ -507,7 +556,8 @@
                 const response = await fetch('/api/config', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
                     },
                     body: JSON.stringify(formData)
                 });
@@ -535,7 +585,8 @@
                 const response = await fetch('/api/config/telegram', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
                     },
                     body: JSON.stringify(formData)
                 });
@@ -566,7 +617,8 @@
                 const response = await fetch('/api/config/email', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
                     },
                     body: JSON.stringify(formData)
                 });
@@ -590,7 +642,8 @@
                 const response = await fetch('/api/config/generate', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
                     }
                 });
 
@@ -617,7 +670,8 @@
                 const response = await fetch('/api/checkers/generate', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
                     }
                 });
 
@@ -638,7 +692,25 @@
         // Загрузить статус сервиса
         async function loadServiceStatus() {
             try {
-                const response = await fetch('/api/status');
+                const token = localStorage.getItem('forge_token');
+                const response = await fetch('/api/status', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        // Токен недействителен, перенаправляем на страницу входа
+                        localStorage.removeItem('forge_token');
+                        localStorage.removeItem('forge_tenant_id');
+                        localStorage.removeItem('forge_user_id');
+                        window.location.href = '/';
+                        return;
+                    }
+                    throw new Error('Failed to load status');
+                }
+                
                 const status = await response.json();
                 
                 const statusEl = document.getElementById('serviceStatus');
@@ -655,8 +727,29 @@
             }
         }
 
+        // Выход из системы
+        function logout() {
+            localStorage.removeItem('forge_token');
+            localStorage.removeItem('forge_tenant_id');
+            localStorage.removeItem('forge_user_id');
+            window.location.href = '/';
+        }
+
+        // Показать информацию о пользователе
+        function showUserInfo() {
+            const tenantId = localStorage.getItem('forge_tenant_id');
+            const userId = localStorage.getItem('forge_user_id');
+            
+            if (tenantId && userId) {
+                document.getElementById('userInfo').textContent = `Tenant: ${tenantId} | User: ${userId}`;
+            } else {
+                document.getElementById('userInfo').textContent = 'Unknown User';
+            }
+        }
+
         // Инициализация при загрузке страницы
         document.addEventListener('DOMContentLoaded', function() {
+            showUserInfo();
             loadConfig();
             loadServiceStatus();
             

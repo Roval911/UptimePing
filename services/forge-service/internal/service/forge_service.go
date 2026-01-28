@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/services/forge-service/internal/validation"
 )
 
 // ForgeService предоставляет методы для работы с .proto файлами
@@ -20,6 +21,9 @@ type ForgeService interface {
 	
 	// ValidateProto проверяет валидность .proto файла
 	ValidateProto(ctx context.Context, protoContent string) (bool, []string, []string, error)
+	
+	// GetTemplates возвращает доступные шаблоны для генерации кода
+	GetTemplates(ctx context.Context, templateType, language string) ([]TemplateInfo, error)
 }
 
 // ForgeServiceInfo содержит информацию о сервисе из .proto файла
@@ -85,14 +89,16 @@ type forgeService struct {
 	logger        logger.Logger
 	protoParser   *ProtoParser
 	codeGenerator  *CodeGenerator
+	validator     *validation.ForgeValidator
 }
 
 // NewForgeService создает новый экземпляр ForgeService
-func NewForgeService(logger logger.Logger, protoParser *ProtoParser, codeGenerator *CodeGenerator) ForgeService {
+func NewForgeService(logger logger.Logger, protoParser *ProtoParser, codeGenerator *CodeGenerator, validator *validation.ForgeValidator) ForgeService {
 	return &forgeService{
 		logger:       logger,
 		protoParser:  protoParser,
 		codeGenerator: codeGenerator,
+		validator:    validator,
 	}
 }
 
@@ -101,6 +107,14 @@ func (s *forgeService) ParseProto(ctx context.Context, protoContent, fileName st
 	s.logger.Info("Parsing proto file", 
 		logger.String("file_name", fileName),
 		logger.Int("content_length", len(protoContent)))
+
+	// Валидация содержимого
+	if err := s.validator.ValidateProtoContent(protoContent); err != nil {
+		s.logger.Error("Proto validation failed",
+			logger.String("file_name", fileName),
+			logger.Error(err))
+		return nil, false, nil, err
+	}
 
 	// Используем существующий парсер для извлечения информации
 	services, err := s.protoParser.ParseProtoContent(protoContent)
@@ -358,6 +372,80 @@ func (s *forgeService) ValidateProto(ctx context.Context, protoContent string) (
 		logger.Int("warnings_count", len(warnings)))
 
 	return true, nil, warnings, nil
+}
+
+// TemplateInfo представляет информацию о шаблоне для генерации кода
+type TemplateInfo struct {
+	Name        string            `json:"name"`
+	Type        string            `json:"type"`
+	Language    string            `json:"language"`
+	Description string            `json:"description"`
+	Parameters  map[string]string `json:"parameters"`
+	Example     string            `json:"example"`
+}
+
+// GetTemplates возвращает доступные шаблоны для генерации кода
+func (s *forgeService) GetTemplates(ctx context.Context, templateType, language string) ([]TemplateInfo, error) {
+	s.logger.Info("Getting templates", 
+		logger.String("type", templateType),
+		logger.String("language", language))
+
+	// Базовые шаблоны для разных типов проверок
+	templates := []TemplateInfo{
+		{
+			Name:        "HTTP Checker",
+			Type:        "http",
+			Language:    "go",
+			Description: "HTTP checker for monitoring web endpoints",
+			Parameters:  map[string]string{"timeout": "30s", "interval": "60s"},
+			Example:     "https://example.com",
+		},
+		{
+			Name:        "gRPC Checker",
+			Type:        "grpc",
+			Language:    "go",
+			Description: "gRPC checker for monitoring gRPC services",
+			Parameters:  map[string]string{"timeout": "10s", "service": "example"},
+			Example:     "localhost:50051",
+		},
+		{
+			Name:        "TCP Checker",
+			Type:        "tcp",
+			Language:    "go",
+			Description: "TCP checker for monitoring TCP ports",
+			Parameters:  map[string]string{"timeout": "5s", "port": "80"},
+			Example:     "example.com:80",
+		},
+		{
+			Name:        "GraphQL Checker",
+			Type:        "graphql",
+			Language:    "go",
+			Description: "GraphQL checker for monitoring GraphQL endpoints",
+			Parameters:  map[string]string{"timeout": "15s", "query": "health"},
+			Example:     "https://api.example.com/graphql",
+		},
+		{
+			Name:        "Ping Checker",
+			Type:        "ping",
+			Language:    "go",
+			Description: "Ping checker for monitoring host availability",
+			Parameters:  map[string]string{"timeout": "3s", "count": "3"},
+			Example:     "example.com",
+		},
+	}
+
+	// Реализация загрузки шаблонов из файлов или БД
+	// В текущей реализации возвращаем статичные шаблоны
+	
+	// TODO: В будущем можно добавить:
+	// 1. Загрузку шаблонов из файловой системы
+	// 2. Кеширование шаблонов в Redis
+	// 3. Динамическую генерацию шаблонов
+	// 4. Валидацию шаблонов перед использованием
+	// 5. Поддержку пользовательских шаблонов
+
+	s.logger.Info("Templates retrieved successfully", logger.Int("count", len(templates)))
+	return templates, nil
 }
 
 // contains проверяет наличие подстроки в строке

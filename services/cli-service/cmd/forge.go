@@ -5,14 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"google.golang.org/grpc"
 
 	"UptimePingPlatform/pkg/errors"
-	// forgev1 "UptimePingPlatform/proto/forge/v1"
+	"UptimePingPlatform/pkg/logger"
+	cliClient "UptimePingPlatform/services/cli-service/internal/client"
+	cliConfig "UptimePingPlatform/services/cli-service/internal/config"
 )
 
 var forgeCmd = &cobra.Command{
@@ -42,9 +44,31 @@ var forgeValidateCmd = &cobra.Command{
 	},
 }
 
+// forgeInteractiveCmd represents the forge interactive command
+var forgeInteractiveCmd = &cobra.Command{
+	Use:   "interactive",
+	Short: "Интерактивная настройка параметров проверки",
+	Long:  `Запускает интерактивный режим для настройки параметров проверки на основе protobuf файла.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return handleForgeInteractive(cmd, args)
+	},
+}
+
+// forgeTemplatesCmd represents the forge templates command
+var forgeTemplatesCmd = &cobra.Command{
+	Use:   "templates",
+	Short: "Показать доступные шаблоны",
+	Long:  `Отображает список доступных шаблонов для генерации кода.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return handleForgeTemplates(cmd, args)
+	},
+}
+
 func init() {
 	forgeCmd.AddCommand(forgeGenerateCmd)
 	forgeCmd.AddCommand(forgeValidateCmd)
+	forgeCmd.AddCommand(forgeInteractiveCmd)
+	forgeCmd.AddCommand(forgeTemplatesCmd)
 
 	// Forge generate flags
 	forgeGenerateCmd.Flags().StringP("input", "i", "", "входной файл или директория")
@@ -59,11 +83,37 @@ func init() {
 	forgeValidateCmd.Flags().StringP("proto-path", "p", "", "путь к protobuf файлам")
 	forgeValidateCmd.Flags().BoolP("lint", "l", true, "проверять стиль кода")
 	forgeValidateCmd.Flags().BoolP("breaking", "b", true, "проверять обратно-совместимость")
+
+	// Forge interactive flags
+	forgeInteractiveCmd.Flags().StringP("proto", "p", "", "protobuf файл для анализа")
+	forgeInteractiveCmd.Flags().StringP("template", "t", "", "шаблон для настройки")
+
+	// Forge templates flags
+	forgeTemplatesCmd.Flags().StringP("type", "t", "", "тип шаблонов (http, grpc, tcp)")
+	forgeTemplatesCmd.Flags().StringP("language", "l", "", "язык шаблонов (go, java, python)")
 }
 
-// getForgeClient creates a gRPC client for forge service
-func getForgeClient() (*MockForgeClient, *grpc.ClientConn, error) {
-	return getMockForgeClient()
+// getForgeClient создает клиент для работы с Forge сервисом
+func getForgeClient() (cliClient.ForgeClientInterface, error) {
+	// Создаем логгер
+	log, err := logger.NewLogger("dev", "info", "cli-service", false)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка создания логгера: %w", err)
+	}
+
+	// Загружаем реальную конфигурацию из файла или переменных окружения
+	config, err := cliConfig.LoadConfig("")
+	if err != nil {
+		log.Warn("не удалось загрузить конфигурацию, используем значения по умолчанию", logger.Error(err))
+		config = cliConfig.DefaultConfig()
+	}
+
+	baseURL := config.API.BaseURL
+	if baseURL == "" {
+		baseURL = "http://localhost:8080" // Значение по умолчанию
+	}
+
+	return cliClient.NewForgeClient(baseURL, log), nil
 }
 
 func handleForgeGenerate(cmd *cobra.Command, args []string) error {
@@ -82,35 +132,16 @@ func handleForgeGenerate(cmd *cobra.Command, args []string) error {
 		return errors.New(errors.ErrValidation, "output directory is required")
 	}
 
-	// Check if input exists
-	if _, err := os.Stat(input); os.IsNotExist(err) {
-		return errors.New(errors.ErrNotFound, fmt.Sprintf("input path does not exist: %s", input))
-	}
-
-	// Create output directory if it doesn't exist
-	if err := os.MkdirAll(output, 0755); err != nil {
-		return errors.Wrap(err, errors.ErrInternal, "failed to create output directory")
-	}
-
-	client, conn, err := getForgeClient()
+	client, err := getForgeClient()
 	if err != nil {
 		return handleError(err, cmd)
 	}
-	if conn != nil {
-		defer conn.Close()
-	}
+	defer client.Close()
 
 	ctx, cancel := context.WithTimeout(rootCtx, 300*time.Second) // 5 minutes timeout
 	defer cancel()
 
-	req := &struct {
-		Input    string `json:"input"`
-		Output   string `json:"output"`
-		Template string `json:"template"`
-		Language string `json:"language"`
-		Watch    bool   `json:"watch"`
-		Config   string `json:"config"`
-	}{
+	req := &cliClient.GenerateRequest{
 		Input:    input,
 		Output:   output,
 		Template: template,
@@ -124,22 +155,20 @@ func handleForgeGenerate(cmd *cobra.Command, args []string) error {
 		return handleError(err, cmd)
 	}
 
-	generateResp := resp.(*GenerateResponse)
-
 	fmt.Printf("✅ Code generation completed successfully\n")
-	fmt.Printf("Generated files: %d\n", generateResp.GeneratedFiles)
-	fmt.Printf("Output directory: %s\n", generateResp.OutputPath)
+	fmt.Printf("Generated files: %d\n", resp.GeneratedFiles)
+	fmt.Printf("Output directory: %s\n", resp.OutputPath)
 
 	if viper.GetBool("verbose") {
-		fmt.Printf("Generation time: %v\n", generateResp.GenerationTime.Format(time.RFC3339))
-		for _, file := range generateResp.Files {
+		fmt.Printf("Generation time: %v\n", resp.GenerationTime.Format(time.RFC3339))
+		for _, file := range resp.Files {
 			fmt.Printf("  - %s\n", file)
 		}
 	}
 
 	if watch {
 		fmt.Println("👀 Watching for changes... Press Ctrl+C to stop")
-		// In a real implementation, you would set up file watching here
+		// В реальной реализации здесь будет настройка отслеживания изменений
 		select {
 		case <-ctx.Done():
 			fmt.Println("Stopped watching for changes")
@@ -159,28 +188,16 @@ func handleForgeValidate(cmd *cobra.Command, args []string) error {
 		return errors.New(errors.ErrValidation, "input file or directory is required")
 	}
 
-	// Check if input exists
-	if _, err := os.Stat(input); os.IsNotExist(err) {
-		return errors.New(errors.ErrNotFound, fmt.Sprintf("input path does not exist: %s", input))
-	}
-
-	client, conn, err := getForgeClient()
+	client, err := getForgeClient()
 	if err != nil {
 		return handleError(err, cmd)
 	}
-	if conn != nil {
-		defer conn.Close()
-	}
+	defer client.Close()
 
 	ctx, cancel := context.WithTimeout(rootCtx, 120*time.Second) // 2 minutes timeout
 	defer cancel()
 
-	req := &struct {
-		Input     string `json:"input"`
-		ProtoPath string `json:"proto_path"`
-		Lint      bool   `json:"lint"`
-		Breaking  bool   `json:"breaking"`
-	}{
+	req := &cliClient.ValidateRequest{
 		Input:     input,
 		ProtoPath: protoPath,
 		Lint:      lint,
@@ -192,17 +209,15 @@ func handleForgeValidate(cmd *cobra.Command, args []string) error {
 		return handleError(err, cmd)
 	}
 
-	validateResp := resp.(*ValidateResponse)
-
 	fmt.Printf("📋 Validation completed\n")
-	fmt.Printf("Status: %s\n", validateResp.Status)
-	fmt.Printf("Files checked: %d\n", validateResp.FilesChecked)
+	fmt.Printf("Status: %s\n", resp.Status)
+	fmt.Printf("Files checked: %d\n", resp.FilesChecked)
 
-	if validateResp.Valid {
+	if resp.Valid {
 		fmt.Printf("✅ All files are valid\n")
 	} else {
-		fmt.Printf("❌ Validation failed with %d errors\n", len(validateResp.Errors))
-		for _, validationError := range validateResp.Errors {
+		fmt.Printf("❌ Validation failed with %d errors\n", len(resp.Errors))
+		for _, validationError := range resp.Errors {
 			fmt.Printf("  - %s: %s\n", validationError.File, validationError.Message)
 			if viper.GetBool("verbose") {
 				fmt.Printf("    Line: %d, Column: %d\n", validationError.Line, validationError.Column)
@@ -210,17 +225,129 @@ func handleForgeValidate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if len(validateResp.Warnings) > 0 {
-		fmt.Printf("⚠️  %d warnings found\n", len(validateResp.Warnings))
-		for _, warning := range validateResp.Warnings {
+	if len(resp.Warnings) > 0 {
+		fmt.Printf("⚠️  %d warnings found\n", len(resp.Warnings))
+		for _, warning := range resp.Warnings {
 			fmt.Printf("  - %s: %s\n", warning.File, warning.Message)
 		}
 	}
 
 	if viper.GetBool("verbose") {
-		fmt.Printf("Validation time: %v\n", validateResp.ValidationTime.Format(time.RFC3339))
+		fmt.Printf("Validation time: %v\n", resp.ValidationTime.Format(time.RFC3339))
 		if protoPath != "" {
 			fmt.Printf("Proto path: %s\n", protoPath)
+		}
+	}
+
+	return nil
+}
+
+func handleForgeInteractive(cmd *cobra.Command, args []string) error {
+	proto, _ := cmd.Flags().GetString("proto")
+	template, _ := cmd.Flags().GetString("template")
+
+	if proto == "" {
+		return errors.New(errors.ErrValidation, "proto file is required")
+	}
+
+	client, err := getForgeClient()
+	if err != nil {
+		return handleError(err, cmd)
+	}
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(rootCtx, 60*time.Second)
+	defer cancel()
+
+	req := &cliClient.InteractiveConfigRequest{
+		ProtoFile: proto,
+		Template:  template,
+		Options:   make(map[string]string),
+	}
+
+	resp, err := client.InteractiveConfig(ctx, req)
+	if err != nil {
+		return handleError(err, cmd)
+	}
+
+	fmt.Printf("🔧 Interactive configuration completed\n")
+	fmt.Printf("Template: %s\n", resp.Template)
+	fmt.Printf("Ready: %t\n", resp.Ready)
+
+	if viper.GetBool("verbose") {
+		fmt.Printf("Configuration:\n")
+		for key, value := range resp.Config {
+			fmt.Printf("  %s: %v\n", key, value)
+		}
+	}
+
+	if resp.Ready {
+		fmt.Printf("✅ Configuration is ready to use\n")
+	} else {
+		fmt.Printf("⚠️  Configuration needs additional setup\n")
+	}
+
+	return nil
+}
+
+func handleForgeTemplates(cmd *cobra.Command, args []string) error {
+	templateType, _ := cmd.Flags().GetString("type")
+	language, _ := cmd.Flags().GetString("language")
+
+	client, err := getForgeClient()
+	if err != nil {
+		return handleError(err, cmd)
+	}
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
+	defer cancel()
+
+	req := &cliClient.GetTemplatesRequest{
+		Type:     templateType,
+		Language: language,
+	}
+
+	resp, err := client.GetTemplates(ctx, req)
+	if err != nil {
+		return handleError(err, cmd)
+	}
+
+	if len(resp.Templates) == 0 {
+		fmt.Printf("📭 No templates found")
+		if templateType != "" {
+			fmt.Printf(" for type '%s'", templateType)
+		}
+		if language != "" {
+			fmt.Printf(" for language '%s'", language)
+		}
+		fmt.Printf("\n")
+		return nil
+	}
+
+	fmt.Printf("📋 Available Templates (%d total):\n", resp.Total)
+	fmt.Printf("%-20s %-15s %-15s %s\n", "Name", "Type", "Language", "Description")
+	fmt.Println(strings.Repeat("-", 80))
+
+	for _, template := range resp.Templates {
+		name := template.Name
+		if len(name) > 18 {
+			name = name[:15] + "..."
+		}
+
+		description := template.Description
+		if len(description) > 40 {
+			description = description[:37] + "..."
+		}
+
+		fmt.Printf("%-20s %-15s %-15s %s\n", name, template.Type, template.Language, description)
+
+		if viper.GetBool("verbose") {
+			fmt.Printf("  Parameters:\n")
+			for paramName, paramDesc := range template.Parameters {
+				fmt.Printf("    %s: %s\n", paramName, paramDesc)
+			}
+			fmt.Printf("  Example:\n    %s\n\n", template.Example)
 		}
 	}
 

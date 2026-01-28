@@ -7,10 +7,11 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"google.golang.org/grpc"
 
 	"UptimePingPlatform/pkg/errors"
-	// notificationv1 "UptimePingPlatform/proto/notification/v1"
+	"UptimePingPlatform/pkg/logger"
+	cliClient "UptimePingPlatform/services/cli-service/internal/client"
+	cliConfig "UptimePingPlatform/services/cli-service/internal/config"
 )
 
 var notificationCmd = &cobra.Command{
@@ -90,9 +91,27 @@ func init() {
 	notificationTestCmd.Flags().StringP("severity", "s", "info", "важность (info, warning, error, critical)")
 }
 
-// getNotificationClient creates a gRPC client for notification service
-func getNotificationClient() (*MockNotificationClient, *grpc.ClientConn, error) {
-	return getMockNotificationClient()
+// getNotificationClient создает клиент для работы с уведомлениями
+func getNotificationClient() (cliClient.NotificationClientInterface, error) {
+	// Создаем логгер
+	log, err := logger.NewLogger("dev", "info", "cli-service", false)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка создания логгера: %w", err)
+	}
+
+	// Загружаем реальную конфигурацию из файла или переменных окружения
+	config, err := cliConfig.LoadConfig("")
+	if err != nil {
+		log.Warn("не удалось загрузить конфигурацию, используем значения по умолчанию", logger.Error(err))
+		config = cliConfig.DefaultConfig()
+	}
+
+	baseURL := config.API.BaseURL
+	if baseURL == "" {
+		baseURL = "http://localhost:8080" // Значение по умолчанию
+	}
+
+	return cliClient.NewNotificationClient(baseURL, log), nil
 }
 
 func handleNotificationChannelsAdd(cmd *cobra.Command, args []string) error {
@@ -114,24 +133,16 @@ func handleNotificationChannelsAdd(cmd *cobra.Command, args []string) error {
 		return errors.New(errors.ErrValidation, "channel address is required")
 	}
 
-	client, conn, err := getNotificationClient()
+	client, err := getNotificationClient()
 	if err != nil {
 		return handleError(err, cmd)
 	}
-	if conn != nil {
-		defer conn.Close()
-	}
+	defer client.Close()
 
 	ctx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
 	defer cancel()
 
-	req := &struct {
-		Name    string `json:"name"`
-		Type    string `json:"type"`
-		Address string `json:"address"`
-		Config  string `json:"config"`
-		Enabled bool   `json:"enabled"`
-	}{
+	req := &cliClient.CreateChannelRequest{
 		Name:    name,
 		Type:    channelType,
 		Address: address,
@@ -144,10 +155,8 @@ func handleNotificationChannelsAdd(cmd *cobra.Command, args []string) error {
 		return handleError(err, cmd)
 	}
 
-	channelResp := resp.(*CreateChannelResponse)
-
 	fmt.Printf("✅ Notification channel '%s' created successfully\n", name)
-	fmt.Printf("Channel ID: %s\n", channelResp.ChannelId)
+	fmt.Printf("Channel ID: %s\n", resp.ChannelID)
 	if viper.GetBool("verbose") {
 		fmt.Printf("Type: %s\n", channelType)
 		fmt.Printf("Address: %s\n", address)
@@ -160,21 +169,17 @@ func handleNotificationChannelsAdd(cmd *cobra.Command, args []string) error {
 func handleNotificationChannelsRemove(cmd *cobra.Command, args []string) error {
 	channelID := args[0]
 
-	client, conn, err := getNotificationClient()
+	client, err := getNotificationClient()
 	if err != nil {
 		return handleError(err, cmd)
 	}
-	if conn != nil {
-		defer conn.Close()
-	}
+	defer client.Close()
 
 	ctx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
 	defer cancel()
 
-	req := &struct {
-		ChannelId string `json:"channel_id"`
-	}{
-		ChannelId: channelID,
+	req := &cliClient.DeleteChannelRequest{
+		ChannelID: channelID,
 	}
 
 	_, err = client.DeleteChannel(ctx, req)
@@ -187,26 +192,22 @@ func handleNotificationChannelsRemove(cmd *cobra.Command, args []string) error {
 }
 
 func handleNotificationChannelsList(cmd *cobra.Command, args []string) error {
-	client, conn, err := getNotificationClient()
+	client, err := getNotificationClient()
 	if err != nil {
 		return handleError(err, cmd)
 	}
-	if conn != nil {
-		defer conn.Close()
-	}
+	defer client.Close()
 
 	ctx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
 	defer cancel()
 
-	req := &struct{}{}
+	req := &cliClient.ListChannelsRequest{}
 	resp, err := client.ListChannels(ctx, req)
 	if err != nil {
 		return handleError(err, cmd)
 	}
 
-	channelsResp := resp.(*ListChannelsResponse)
-
-	if len(channelsResp.Channels) == 0 {
+	if len(resp.Channels) == 0 {
 		fmt.Println("No notification channels found")
 		return nil
 	}
@@ -215,21 +216,21 @@ func handleNotificationChannelsList(cmd *cobra.Command, args []string) error {
 	switch outputFormat {
 	case "json":
 		fmt.Println("[")
-		for i, channel := range channelsResp.Channels {
+		for i, channel := range resp.Channels {
 			if i > 0 {
 				fmt.Println(",")
 			}
 			fmt.Printf(`  {"id": "%s", "name": "%s", "type": "%s", "address": "%s", "enabled": %t}`,
-				channel.ChannelId, channel.Name, channel.Type, channel.Address, channel.Enabled)
+				channel.ChannelID, channel.Name, channel.Type, channel.Address, channel.Enabled)
 		}
 		fmt.Println("\n]")
 	default:
-		fmt.Printf("Notification Channels (%d total):\n", len(channelsResp.Channels))
+		fmt.Printf("Notification Channels (%d total):\n", len(resp.Channels))
 		fmt.Printf("%-20s %-20s %-12s %-30s %-10s\n", "ID", "Name", "Type", "Address", "Enabled")
 		fmt.Println("--------------------------------------------------------------------------------")
 
-		for _, channel := range channelsResp.Channels {
-			id := channel.ChannelId
+		for _, channel := range resp.Channels {
+			id := channel.ChannelID
 			if len(id) > 18 {
 				id = id[:15] + "..."
 			}
@@ -267,25 +268,17 @@ func handleNotificationTest(cmd *cobra.Command, args []string) error {
 		return errors.New(errors.ErrValidation, "channel ID is required")
 	}
 
-	client, conn, err := getNotificationClient()
+	client, err := getNotificationClient()
 	if err != nil {
 		return handleError(err, cmd)
 	}
-	if conn != nil {
-		defer conn.Close()
-	}
+	defer client.Close()
 
 	ctx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
 	defer cancel()
 
-	req := &struct {
-		ChannelId string `json:"channel_id"`
-		Title     string `json:"title"`
-		Message   string `json:"message"`
-		Severity  string `json:"severity"`
-		Test      bool   `json:"test"`
-	}{
-		ChannelId: channelID,
+	req := &cliClient.SendNotificationRequest{
+		ChannelID: channelID,
 		Title:     title,
 		Message:   message,
 		Severity:  severity,
@@ -297,14 +290,12 @@ func handleNotificationTest(cmd *cobra.Command, args []string) error {
 		return handleError(err, cmd)
 	}
 
-	notificationResp := resp.(*SendNotificationResponse)
-
 	fmt.Printf("✅ Test notification sent successfully\n")
-	fmt.Printf("Notification ID: %s\n", notificationResp.NotificationId)
-	fmt.Printf("Status: %s\n", notificationResp.Status)
+	fmt.Printf("Notification ID: %s\n", resp.NotificationID)
+	fmt.Printf("Status: %s\n", resp.Status)
 
 	if viper.GetBool("verbose") {
-		fmt.Printf("Sent at: %s\n", notificationResp.SentAt.Format(time.RFC3339))
+		fmt.Printf("Sent at: %s\n", resp.SentAt.Format(time.RFC3339))
 		fmt.Printf("Channel: %s\n", channelID)
 		fmt.Printf("Title: %s\n", title)
 		fmt.Printf("Message: %s\n", message)

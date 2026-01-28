@@ -18,6 +18,7 @@ import (
 	"UptimePingPlatform/pkg/health"
 	pkglogger "UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
+	"UptimePingPlatform/services/forge-service/internal/validation"
 	"UptimePingPlatform/services/forge-service/internal/domain"
 	grpcHandler "UptimePingPlatform/services/forge-service/internal/handler/grpc"
 	"UptimePingPlatform/services/forge-service/internal/handler"
@@ -148,12 +149,64 @@ func main() {
 	logger.Info("Found enums", pkglogger.Int("count", len(enums)))
 
 	// Создаем сервис Forge
-	forgeService := service.NewForgeService(logger, parser, codeGenerator)
+	validator := validation.NewForgeValidator()
+	forgeService := service.NewForgeService(logger, parser, codeGenerator, validator)
+
+	// Создаем HTTP обработчик с gRPC клиентом для Auth Service
+	apiGatewayAddress := os.Getenv("API_GATEWAY_ADDRESS")
+	if apiGatewayAddress == "" {
+		apiGatewayAddress = "localhost:50051" // По умолчанию для API Gateway
+	}
+	
+	httpHandler := handler.NewHTTPHandler(logger, codeGenerator, parser, forgeService, apiGatewayAddress)
+	if httpHandler == nil {
+		log.Fatalf("Failed to create HTTP handler")
+	}
+
+	// Создаем HTTP сервер
+	httpPortStr := os.Getenv("FORGE_HTTP_PORT")
+	if httpPortStr == "" {
+		httpPortStr = "8080" // По умолчанию для Forge Service
+	}
+	
+	httpPort := 8080
+	if _, err := fmt.Sscanf(httpPortStr, "%d", &httpPort); err != nil {
+		httpPort = 8080
+	}
+
+	httpAddr := fmt.Sprintf(":%d", httpPort)
+	mux := http.NewServeMux()
+	
+	// Регистрируем HTTP маршруты
+	httpHandler.RegisterRoutes(mux)
+	
+	httpServer := &http.Server{
+		Addr:    httpAddr,
+		Handler: mux,
+	}
+
+	logger.Info("HTTP server configured",
+		pkglogger.String("address", httpAddr),
+		pkglogger.Int("port", httpPort),
+		pkglogger.String("api_gateway", apiGatewayAddress))
+
+	// Запускаем HTTP сервер в горутине
+	go func() {
+		logger.Info("Starting HTTP server", pkglogger.String("address", httpAddr))
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("HTTP server failed", pkglogger.Error(err))
+		}
+	}()
 
 	// Создаем gRPC сервер
-	grpcPort := cfg.GRPC.Port
-	if grpcPort == 0 {
-		grpcPort = 50054 // По умолчанию для Forge Service
+	grpcPortStr := os.Getenv("FORGE_GRPC_PORT")
+	if grpcPortStr == "" {
+		grpcPortStr = "50054" // По умолчанию для Forge Service
+	}
+	
+	grpcPort := 50054
+	if _, err := fmt.Sscanf(grpcPortStr, "%d", &grpcPort); err != nil {
+		grpcPort = 50054
 	}
 
 	grpcAddr := fmt.Sprintf(":%d", grpcPort)
@@ -190,11 +243,8 @@ func main() {
 		pkglogger.String("host", cfg.Server.Host),
 		pkglogger.Int("port", cfg.Server.Port))
 
-	// Создаем HTTP обработчики
-	httpHandler := handler.NewHTTPHandler(logger, codeGenerator, parser)
-
 	// Создаем mux для регистрации маршрутов
-	mux := http.NewServeMux()
+	mux = http.NewServeMux()
 
 	// Регистрируем обработчики
 	mux.HandleFunc("/health", health.Handler(healthChecker))
@@ -204,22 +254,13 @@ func main() {
 	metricsPath := metricsInstance.GetMetricsPath(&cfg.Metrics)
 	mux.Handle(metricsPath, metricsInstance.GetHandler())
 
-	// Статические файлы для веб-интерфейса
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			http.ServeFile(w, r, "web/index.html")
-			return
-		}
-		http.NotFound(w, r)
-	})
-
-	// Регистрируем API маршруты
-	httpHandler.RegisterRoutes(mux)
-
 	// Применяем middleware
 	handlerWithMetrics := metricsInstance.Middleware(mux)
 	handlerWithLogging := httpHandler.LoggingMiddleware(handlerWithMetrics)
 	handlerWithCORS := httpHandler.CORSMiddleware(handlerWithLogging)
+
+	// Регистрируем API маршруты
+	httpHandler.RegisterRoutes(mux)
 
 	server.Handler = handlerWithCORS
 
