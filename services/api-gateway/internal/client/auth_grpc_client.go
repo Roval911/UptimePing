@@ -10,7 +10,7 @@ import (
 
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
-	authv1 "UptimePingPlatform/gen/go/proto/api/auth/v1"
+	authv1 "UptimePingPlatform/gen/proto/api/auth/v1"
 )
 
 // GRPCAuthClient gRPC клиент для AuthService
@@ -84,7 +84,7 @@ func (c *GRPCAuthClient) ValidateToken(ctx context.Context, token string) (*Toke
 	return &TokenClaims{
 		UserID:   resp.UserId,
 		TenantID: resp.TenantId,
-		IsAdmin:  false, // TODO: добавить в proto если нужно
+		IsAdmin:  false, // Поле IsAdmin будет добавлено в proto при необходимости
 	}, nil
 }
 

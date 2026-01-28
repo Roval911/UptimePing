@@ -498,6 +498,25 @@ func extractEnumValueInfo(line string) *EnumValueInfo {
 	return value
 }
 
+// ParseProtoContent parses proto content from string and returns services
+func (p *ProtoParser) ParseProtoContent(content string) ([]*ServiceInfo, error) {
+	// Create temporary file for parsing
+	tempFile := filepath.Join(p.protoDir, "temp.proto")
+	err := os.WriteFile(tempFile, []byte(content), 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to write temp file: %w", err)
+	}
+	defer os.Remove(tempFile)
+
+	// Parse the temporary file
+	err = p.parseProtoFile(tempFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse proto content: %w", err)
+	}
+
+	return p.services, nil
+}
+
 // GetServices returns list of all found services
 func (p *ProtoParser) GetServices() []*ServiceInfo {
 	return p.services

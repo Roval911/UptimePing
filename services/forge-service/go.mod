@@ -4,7 +4,10 @@ go 1.24.0
 
 require (
 	UptimePingPlatform/pkg v0.0.0-00010101000000-000000000000
+	UptimePingPlatform/gen v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.11.1
+	google.golang.org/grpc v1.78.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -35,3 +38,4 @@ require (
 )
 
 replace UptimePingPlatform/pkg => ../../pkg
+replace UptimePingPlatform/gen => ../../gen/go

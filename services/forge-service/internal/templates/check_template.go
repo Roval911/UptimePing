@@ -86,7 +86,7 @@ import (
 	"fmt"
 	"time"
 
-	"UptimePingPlatform/gen/go/proto/api/core/v1"
+	"UptimePingPlatform/gen/proto/api/core/v1"
 	"UptimePingPlatform/pkg/logger"
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"google.golang.org/grpc"

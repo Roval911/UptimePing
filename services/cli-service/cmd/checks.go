@@ -3,14 +3,15 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
-	"google.golang.org/grpc"
 
-	"UptimePingPlatform/pkg/errors"
-	// corev1 "UptimePingPlatform/proto/core/v1"
+	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/services/cli-service/internal/auth"
+	"UptimePingPlatform/services/cli-service/internal/client"
+	config "UptimePingPlatform/services/cli-service/internal/config"
 )
 
 var checksCmd = &cobra.Command{
@@ -20,47 +21,35 @@ var checksCmd = &cobra.Command{
 запуск, проверка статуса, просмотр истории и списка проверок.`,
 }
 
-// checksRunCmd represents the checks run command
 var checksRunCmd = &cobra.Command{
 	Use:   "run [check-id]",
 	Short: "Запустить проверку",
-	Long:  `Запускает проверку с указанным ID или создает новую проверку.`,
-	Args:  cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return handleChecksRun(cmd, args)
-	},
+	Long:  `Запускает проверку с указанным ID.`,
+	Args:  cobra.ExactArgs(1),
+	RunE:  handleChecksRun,
 }
 
-// checksStatusCmd represents the checks status command
 var checksStatusCmd = &cobra.Command{
 	Use:   "status [check-id]",
 	Short: "Проверить статус проверки",
 	Long:  `Проверяет текущий статус указанной проверки.`,
-	Args:  cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return handleChecksStatus(cmd, args)
-	},
+	Args:  cobra.ExactArgs(1),
+	RunE:  handleChecksStatus,
 }
 
-// checksHistoryCmd represents the checks history command
 var checksHistoryCmd = &cobra.Command{
 	Use:   "history [check-id]",
 	Short: "Показать историю проверок",
 	Long:  `Отображает историю выполнения указанной проверки.`,
-	Args:  cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return handleChecksHistory(cmd, args)
-	},
+	Args:  cobra.ExactArgs(1),
+	RunE:  handleChecksHistory,
 }
 
-// checksListCmd represents the checks list command
 var checksListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "Показать список проверок",
-	Long:  `Отображает все доступные проверки.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return handleChecksList(cmd, args)
-	},
+	Long:  `Отображает все доступные проверки с возможностью фильтрации.`,
+	RunE:  handleChecksList,
 }
 
 func init() {
@@ -69,355 +58,395 @@ func init() {
 	checksCmd.AddCommand(checksHistoryCmd)
 	checksCmd.AddCommand(checksListCmd)
 
-	// Checks run flags
-	checksRunCmd.Flags().StringP("url", "u", "", "URL для проверки")
-	checksRunCmd.Flags().StringP("method", "d", "GET", "HTTP метод")
-	checksRunCmd.Flags().StringP("type", "y", "http", "тип проверки (http, tcp, grpc, graphql)")
-	checksRunCmd.Flags().StringP("interval", "i", "1m", "интервал проверки")
-	checksRunCmd.Flags().IntP("timeout", "m", 30, "таймаут в секундах")
-	checksRunCmd.Flags().StringP("name", "n", "", "название проверки")
-	checksRunCmd.Flags().StringP("tenant", "e", "", "ID тенанта")
-
 	// Checks history flags
 	checksHistoryCmd.Flags().IntP("limit", "l", 50, "лимит записей")
-	checksHistoryCmd.Flags().StringP("from", "f", "", "начальная дата (RFC3339)")
-	checksHistoryCmd.Flags().StringP("to", "o", "", "конечная дата (RFC3339)")
+	checksHistoryCmd.Flags().IntP("page", "p", 1, "номер страницы")
+	checksHistoryCmd.Flags().StringP("format", "f", "table", "формат вывода (table, json)")
 
 	// Checks list flags
-	checksListCmd.Flags().StringP("status", "a", "", "фильтр по статусу")
-	checksListCmd.Flags().StringP("type", "y", "", "фильтр по типу")
-	checksListCmd.Flags().StringP("tenant", "n", "", "фильтр по тенанту")
+	checksListCmd.Flags().StringSliceP("tags", "t", []string{}, "фильтр по тегам")
+	checksListCmd.Flags().BoolP("enabled", "e", false, "фильтр по статусу (enabled/disabled)")
+	checksListCmd.Flags().IntP("page", "p", 1, "номер страницы")
+	checksListCmd.Flags().IntP("limit", "l", 20, "лимит записей на странице")
+	checksListCmd.Flags().StringP("format", "f", "table", "формат вывода (table, json)")
 }
 
-// getCoreClient creates a gRPC client for core service
-func getCoreClient() (*MockCoreClient, *grpc.ClientConn, error) {
-	return getMockCoreClient()
+func GetChecksCmd() *cobra.Command {
+	return checksCmd
 }
 
 func handleChecksRun(cmd *cobra.Command, args []string) error {
-	var checkID string
-	if len(args) > 0 {
-		checkID = args[0]
-	}
+	checkID := args[0]
 
-	client, conn, err := getCoreClient()
+	// Load configuration
+	configPath, err := config.GetConfigPath()
 	if err != nil {
-		return handleError(err, cmd)
-	}
-	if conn != nil {
-		defer conn.Close()
+		return fmt.Errorf("ошибка получения пути конфигурации: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(rootCtx, 60*time.Second)
-	defer cancel()
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("ошибка загрузки конфигурации: %w", err)
+	}
 
-	if checkID != "" {
-		// Run existing check
-		req := &struct {
-			CheckId string `json:"check_id"`
-		}{
-			CheckId: checkID,
-		}
+	// Create auth manager and ensure valid token
+	authManager, err := auth.NewAuthManager(cfg)
+	if err != nil {
+		return fmt.Errorf("ошибка создания менеджера аутентификации: %w", err)
+	}
+	defer authManager.Close()
 
-		resp, err := client.ExecuteCheck(ctx, req)
+	ctx := context.Background()
+	if err := authManager.EnsureValidToken(ctx); err != nil {
+		return fmt.Errorf("ошибка аутентификации: %w", err)
+	}
+
+	// Create logger
+	log, err := logger.NewLogger("dev", "info", "cli-service", false)
+	if err != nil {
+		return fmt.Errorf("ошибка создания логгера: %w", err)
+	}
+
+	// Create config client
+	var configClient *client.ConfigClient
+	if cfg.GRPC.UseGRPC {
+		configClient, err = client.NewConfigClientWithGRPC(
+			cfg.API.BaseURL,
+			cfg.GRPC.SchedulerAddress,
+			cfg.GRPC.CoreAddress,
+			log,
+		)
 		if err != nil {
-			return handleError(err, cmd)
+			return fmt.Errorf("ошибка создания gRPC клиента: %w", err)
 		}
-
-		checkResp := resp.(*ExecuteCheckResponse)
-
-		fmt.Printf("✅ Check '%s' executed successfully\n", checkID)
-		fmt.Printf("Status: %s\n", checkResp.Status)
-		fmt.Printf("Response Time: %dms\n", checkResp.ResponseTime)
-		if checkResp.Message != "" {
-			fmt.Printf("Message: %s\n", checkResp.Message)
-		}
+		defer configClient.Close()
 	} else {
-		// Create and run new check
-		url, _ := cmd.Flags().GetString("url")
-		interval, _ := cmd.Flags().GetString("interval")
-		timeout, _ := cmd.Flags().GetInt("timeout")
-		name, _ := cmd.Flags().GetString("name")
-		tenant, _ := cmd.Flags().GetString("tenant")
-
-		// Get the flag value by the actual flag name, not shorthand
-		method, _ := cmd.Flags().GetString("method")
-		checkType, _ := cmd.Flags().GetString("type")
-
-		if url == "" {
-			return errors.New(errors.ErrValidation, "URL is required for new check")
-		}
-
-		// Create check configuration
-		checkConfig := &struct {
-			Name     string `json:"name"`
-			Type     string `json:"type"`
-			Url      string `json:"url"`
-			Method   string `json:"method"`
-			Interval string `json:"interval"`
-			Timeout  int32  `json:"timeout"`
-			TenantId string `json:"tenant_id"`
-		}{
-			Name:     name,
-			Type:     checkType,
-			Url:      url,
-			Method:   method,
-			Interval: interval,
-			Timeout:  int32(timeout),
-			TenantId: tenant,
-		}
-
-		req := &struct {
-			Config interface{} `json:"config"`
-		}{
-			Config: checkConfig,
-		}
-
-		resp, err := client.ExecuteCheck(ctx, req)
-		if err != nil {
-			return handleError(err, cmd)
-		}
-
-		checkResp := resp.(*ExecuteCheckResponse)
-
-		fmt.Printf("✅ Check executed successfully\n")
-		fmt.Printf("Check ID: %s\n", checkResp.CheckId)
-		fmt.Printf("Status: %s\n", checkResp.Status)
-		fmt.Printf("Response Time: %dms\n", checkResp.ResponseTime)
-		if checkResp.Message != "" {
-			fmt.Printf("Message: %s\n", checkResp.Message)
-		}
+		configClient = client.NewConfigClient(cfg.API.BaseURL, log)
 	}
+
+	// Run check
+	response, err := configClient.RunCheck(ctx, checkID)
+	if err != nil {
+		return fmt.Errorf("ошибка запуска проверки: %w", err)
+	}
+
+	fmt.Printf("✅ Проверка запущена!\n")
+	fmt.Printf("🔍 ID проверки: %s\n", checkID)
+	fmt.Printf("🆔 ID выполнения: %s\n", response.ExecutionID)
+	fmt.Printf("📊 Статус: %s\n", response.Status)
+	fmt.Printf("🕐 Время запуска: %s\n", response.StartedAt.Format("2006-01-02 15:04:05"))
+	fmt.Printf("💬 Сообщение: %s\n", response.Message)
 
 	return nil
 }
 
 func handleChecksStatus(cmd *cobra.Command, args []string) error {
-	var checkID string
-	if len(args) > 0 {
-		checkID = args[0]
+	checkID := args[0]
+
+	// Load configuration
+	configPath, err := config.GetConfigPath()
+	if err != nil {
+		return fmt.Errorf("ошибка получения пути конфигурации: %w", err)
+	}
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("ошибка загрузки конфигурации: %w", err)
+	}
+
+	// Create auth manager and ensure valid token
+	authManager, err := auth.NewAuthManager(cfg)
+	if err != nil {
+		return fmt.Errorf("ошибка создания менеджера аутентификации: %w", err)
+	}
+	defer authManager.Close()
+
+	ctx := context.Background()
+	if err := authManager.EnsureValidToken(ctx); err != nil {
+		return fmt.Errorf("ошибка аутентификации: %w", err)
+	}
+
+	// Create logger
+	log, err := logger.NewLogger("dev", "info", "cli-service", false)
+	if err != nil {
+		return fmt.Errorf("ошибка создания логгера: %w", err)
+	}
+
+	// Create config client
+	var configClient *client.ConfigClient
+	if cfg.GRPC.UseGRPC {
+		configClient, err = client.NewConfigClientWithGRPC(
+			cfg.API.BaseURL,
+			cfg.GRPC.SchedulerAddress,
+			cfg.GRPC.CoreAddress,
+			log,
+		)
+		if err != nil {
+			return fmt.Errorf("ошибка создания gRPC клиента: %w", err)
+		}
+		defer configClient.Close()
 	} else {
-		return errors.New(errors.ErrValidation, "check ID is required")
+		configClient = client.NewConfigClient(cfg.API.BaseURL, log)
 	}
 
-	client, conn, err := getCoreClient()
+	// Get check status
+	response, err := configClient.GetCheckStatus(ctx, checkID)
 	if err != nil {
-		return handleError(err, cmd)
-	}
-	if conn != nil {
-		defer conn.Close()
+		return fmt.Errorf("ошибка получения статуса: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
-	defer cancel()
-
-	req := &struct {
-		CheckId string `json:"check_id"`
-	}{
-		CheckId: checkID,
-	}
-
-	resp, err := client.GetCheckStatus(ctx, req)
-	if err != nil {
-		return handleError(err, cmd)
-	}
-
-	statusResp := resp.(*GetCheckStatusResponse)
-
-	fmt.Printf("Check Status: %s\n", statusResp.CheckId)
-	fmt.Printf("Name: %s\n", statusResp.Name)
-	fmt.Printf("Type: %s\n", statusResp.Type)
-	fmt.Printf("Status: %s\n", statusResp.Status)
-	fmt.Printf("Last Check: %s\n", statusResp.LastCheck.Format(time.RFC3339))
-	fmt.Printf("Next Check: %s\n", statusResp.NextCheck.Format(time.RFC3339))
-	fmt.Printf("Success Rate: %.2f%%\n", statusResp.SuccessRate)
-	fmt.Printf("Total Checks: %d\n", statusResp.TotalChecks)
-	fmt.Printf("Failed Checks: %d\n", statusResp.FailedChecks)
-
-	if viper.GetBool("verbose") {
-		fmt.Printf("URL: %s\n", statusResp.Url)
-		fmt.Printf("Interval: %s\n", statusResp.Interval)
-		fmt.Printf("Timeout: %ds\n", statusResp.Timeout)
-		fmt.Printf("Tenant: %s\n", statusResp.TenantId)
-	}
+	fmt.Printf("📊 Статус проверки: %s\n", checkID)
+	fmt.Printf("🔍 ID: %s\n", response.CheckID)
+	fmt.Printf("📈 Текущий статус: %s\n", response.Status)
+	fmt.Printf("🕐 Последний запуск: %s\n", response.LastRun.Format("2006-01-02 15:04:05"))
+	fmt.Printf("⏰ Следующий запуск: %s\n", response.NextRun.Format("2006-01-02 15:04:05"))
+	fmt.Printf("📋 Последний статус: %s\n", response.LastStatus)
+	fmt.Printf("💬 Последнее сообщение: %s\n", response.LastMessage)
+	fmt.Printf("🔄 Выполняется: %t\n", response.IsRunning)
 
 	return nil
 }
 
 func handleChecksHistory(cmd *cobra.Command, args []string) error {
-	var checkID string
-	if len(args) > 0 {
-		checkID = args[0]
-	} else {
-		return errors.New(errors.ErrValidation, "check ID is required")
-	}
+	checkID := args[0]
 
 	limit, _ := cmd.Flags().GetInt("limit")
-	from, _ := cmd.Flags().GetString("from")
-	to, _ := cmd.Flags().GetString("to")
+	page, _ := cmd.Flags().GetInt("page")
+	format, _ := cmd.Flags().GetString("format")
 
-	client, conn, err := getCoreClient()
+	// Load configuration
+	configPath, err := config.GetConfigPath()
 	if err != nil {
-		return handleError(err, cmd)
-	}
-	if conn != nil {
-		defer conn.Close()
+		return fmt.Errorf("ошибка получения пути конфигурации: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
-	defer cancel()
-
-	req := &struct {
-		CheckId string `json:"check_id"`
-		Limit   int32  `json:"limit"`
-		From    *time.Time `json:"from,omitempty"`
-		To      *time.Time `json:"to,omitempty"`
-	}{
-		CheckId: checkID,
-		Limit:   int32(limit),
-	}
-
-	if from != "" {
-		if fromTime, err := time.Parse(time.RFC3339, from); err == nil {
-			req.From = &fromTime
-		} else {
-			return errors.New(errors.ErrValidation, "invalid from date format, use RFC3339")
-		}
-	}
-
-	if to != "" {
-		if toTime, err := time.Parse(time.RFC3339, to); err == nil {
-			req.To = &toTime
-		} else {
-			return errors.New(errors.ErrValidation, "invalid to date format, use RFC3339")
-		}
-	}
-
-	resp, err := client.GetCheckHistory(ctx, req)
+	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		return handleError(err, cmd)
+		return fmt.Errorf("ошибка загрузки конфигурации: %w", err)
 	}
 
-	historyResp := resp.(*GetCheckHistoryResponse)
+	// Create auth manager and ensure valid token
+	authManager, err := auth.NewAuthManager(cfg)
+	if err != nil {
+		return fmt.Errorf("ошибка создания менеджера аутентификации: %w", err)
+	}
+	defer authManager.Close()
 
-	if len(historyResp.Results) == 0 {
-		fmt.Println("No history found for this check")
+	ctx := context.Background()
+	if err := authManager.EnsureValidToken(ctx); err != nil {
+		return fmt.Errorf("ошибка аутентификации: %w", err)
+	}
+
+	// Create logger
+	log, err := logger.NewLogger("dev", "info", "cli-service", false)
+	if err != nil {
+		return fmt.Errorf("ошибка создания логгера: %w", err)
+	}
+
+	// Create config client
+	var configClient *client.ConfigClient
+	if cfg.GRPC.UseGRPC {
+		configClient, err = client.NewConfigClientWithGRPC(
+			cfg.API.BaseURL,
+			cfg.GRPC.SchedulerAddress,
+			cfg.GRPC.CoreAddress,
+			log,
+		)
+		if err != nil {
+			return fmt.Errorf("ошибка создания gRPC клиента: %w", err)
+		}
+		defer configClient.Close()
+	} else {
+		configClient = client.NewConfigClient(cfg.API.BaseURL, log)
+	}
+
+	// Get check history
+	response, err := configClient.GetCheckHistory(ctx, checkID, page, limit)
+	if err != nil {
+		return fmt.Errorf("ошибка получения истории: %w", err)
+	}
+
+	if len(response.Executions) == 0 {
+		fmt.Printf("📭 История проверок для %s пуста\n", checkID)
 		return nil
 	}
 
-	outputFormat := viper.GetString("output")
-	switch outputFormat {
+	switch format {
 	case "json":
 		fmt.Println("[")
-		for i, result := range historyResp.Results {
+		for i, execution := range response.Executions {
 			if i > 0 {
 				fmt.Println(",")
 			}
-			fmt.Printf(`  {"timestamp": "%s", "status": "%s", "response_time": %d, "message": "%s"}`,
-				result.Timestamp.Format(time.RFC3339),
-				result.Status,
-				result.ResponseTime,
-				result.Message)
+			fmt.Printf(`  {"execution_id": "%s", "status": "%s", "message": "%s", "duration": %d, "started_at": "%s", "completed_at": "%s"}`,
+				execution.ExecutionID,
+				execution.Status,
+				execution.Message,
+				execution.Duration,
+				execution.StartedAt.Format(time.RFC3339),
+				execution.CompletedAt.Format(time.RFC3339))
 		}
 		fmt.Println("\n]")
 	default:
-		fmt.Printf("Check History for %s:\n", checkID)
-		fmt.Printf("%-20s %-10s %-15s %s\n", "Timestamp", "Status", "Response Time", "Message")
-		fmt.Println("----------------------------------------------------------------")
-		
-		for _, result := range historyResp.Results {
-			timestamp := result.Timestamp.Format("2006-01-02 15:04:05")
-			status := result.Status
-			responseTime := fmt.Sprintf("%dms", result.ResponseTime)
-			message := result.Message
-			
+		fmt.Printf("📋 История проверок для %s (страница %d):\n", checkID, page)
+		fmt.Printf("%-20s %-10s %-15s %s\n", "🕐 Время", "📊 Статус", "⏱️ Длительность", "💬 Сообщение")
+		fmt.Println(strings.Repeat("-", 80))
+
+		for _, execution := range response.Executions {
+			timestamp := execution.StartedAt.Format("2006-01-02 15:04:05")
+			status := execution.Status
+			duration := fmt.Sprintf("%dms", execution.Duration)
+			message := execution.Message
+
 			if len(message) > 50 {
 				message = message[:47] + "..."
 			}
-			
-			fmt.Printf("%-20s %-10s %-15s %s\n", timestamp, status, responseTime, message)
+
+			// Добавляем эмодзи для статуса
+			switch status {
+			case "success":
+				status = "✅ " + status
+			case "failed":
+				status = "❌ " + status
+			case "timeout":
+				status = "⏰ " + status
+			default:
+				status = "⏳️ " + status
+			}
+
+			fmt.Printf("%-20s %-15s %-15s %s\n", timestamp, status, duration, message)
 		}
 	}
 
-	fmt.Printf("\nTotal: %d results\n", len(historyResp.Results))
+	fmt.Printf("\n📊 Всего записей: %d\n", response.Total)
+	fmt.Printf("📄 Страница: %d из %d\n", page, (response.Total+limit-1)/limit)
+
 	return nil
 }
 
 func handleChecksList(cmd *cobra.Command, args []string) error {
-	status, _ := cmd.Flags().GetString("status")
-	checkType, _ := cmd.Flags().GetString("type")
-	tenant, _ := cmd.Flags().GetString("tenant")
+	tags, _ := cmd.Flags().GetStringSlice("tags")
+	enabled, _ := cmd.Flags().GetBool("enabled")
+	page, _ := cmd.Flags().GetInt("page")
+	limit, _ := cmd.Flags().GetInt("limit")
+	format, _ := cmd.Flags().GetString("format")
 
-	client, conn, err := getCoreClient()
+	var enabledPtr *bool
+	if cmd.Flags().Changed("enabled") {
+		enabledPtr = &enabled
+	}
+
+	// Load configuration
+	configPath, err := config.GetConfigPath()
 	if err != nil {
-		return handleError(err, cmd)
-	}
-	if conn != nil {
-		defer conn.Close()
+		return fmt.Errorf("ошибка получения пути конфигурации: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
-	defer cancel()
-
-	req := &struct {
-		Status  string `json:"status"`
-		Type    string `json:"type"`
-		TenantId string `json:"tenant_id"`
-	}{
-		Status:  status,
-		Type:    checkType,
-		TenantId: tenant,
-	}
-
-	resp, err := client.ListChecks(ctx, req)
+	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		return handleError(err, cmd)
+		return fmt.Errorf("ошибка загрузки конфигурации: %w", err)
 	}
 
-	checksResp := resp.(*ListChecksResponse)
+	// Create auth manager and ensure valid token
+	authManager, err := auth.NewAuthManager(cfg)
+	if err != nil {
+		return fmt.Errorf("ошибка создания менеджера аутентификации: %w", err)
+	}
+	defer authManager.Close()
 
-	if len(checksResp.Checks) == 0 {
-		fmt.Println("No checks found")
+	ctx := context.Background()
+	if err := authManager.EnsureValidToken(ctx); err != nil {
+		return fmt.Errorf("ошибка аутентификации: %w", err)
+	}
+
+	// Create logger
+	log, err := logger.NewLogger("dev", "info", "cli-service", false)
+	if err != nil {
+		return fmt.Errorf("ошибка создания логгера: %w", err)
+	}
+
+	// Create config client
+	var configClient *client.ConfigClient
+	if cfg.GRPC.UseGRPC {
+		configClient, err = client.NewConfigClientWithGRPC(
+			cfg.API.BaseURL,
+			cfg.GRPC.SchedulerAddress,
+			cfg.GRPC.CoreAddress,
+			log,
+		)
+		if err != nil {
+			return fmt.Errorf("ошибка создания gRPC клиента: %w", err)
+		}
+		defer configClient.Close()
+	} else {
+		configClient = client.NewConfigClient(cfg.API.BaseURL, log)
+	}
+
+	// Get checks list
+	response, err := configClient.ListChecks(ctx, tags, enabledPtr, page, limit)
+	if err != nil {
+		return fmt.Errorf("ошибка получения списка проверок: %w", err)
+	}
+
+	if len(response.Checks) == 0 {
+		fmt.Printf("📭 Проверки не найдены\n")
 		return nil
 	}
 
-	outputFormat := viper.GetString("output")
-	switch outputFormat {
+	switch format {
 	case "json":
 		fmt.Println("[")
-		for i, check := range checksResp.Checks {
+		for i, check := range response.Checks {
 			if i > 0 {
 				fmt.Println(",")
 			}
-			fmt.Printf(`  {"id": "%s", "name": "%s", "type": "%s", "status": "%s", "url": "%s"}`,
-				check.CheckId, check.Name, check.Type, check.Status, check.Url)
+			fmt.Printf(`  {"id": "%s", "name": "%s", "type": "%s", "target": "%s", "interval": %d, "timeout": %d, "enabled": %t, "tags": [%s], "created_at": "%s"}`,
+				check.ID,
+				check.Name,
+				check.Type,
+				check.Target,
+				check.Interval,
+				check.Timeout,
+				check.Enabled,
+				strings.Join(check.Tags, ", "),
+				check.CreatedAt.Format(time.RFC3339))
 		}
 		fmt.Println("\n]")
 	default:
-		fmt.Printf("Checks (%d total):\n", len(checksResp.Checks))
-		fmt.Printf("%-20s %-15s %-10s %-15s %s\n", "ID", "Name", "Type", "Status", "URL")
-		fmt.Println("--------------------------------------------------------------------------------")
-		
-		for _, check := range checksResp.Checks {
-			id := check.CheckId
+		fmt.Printf("📋 Список проверок (страница %d):\n", page)
+		fmt.Printf("%-20s %-25s %-10s %-30s %-10s %-10s %s\n", "🔍 ID", "📝 Название", "🔧 Тип", "🎯 Цель", "⏱️ Интервал", "⏰ Таймаут", "🏷️ Теги")
+		fmt.Println(strings.Repeat("-", 120))
+
+		for _, check := range response.Checks {
+			id := check.ID
 			if len(id) > 18 {
 				id = id[:15] + "..."
 			}
-			
+
 			name := check.Name
-			if len(name) > 13 {
-				name = name[:10] + "..."
+			if len(name) > 23 {
+				name = name[:20] + "..."
 			}
-			
-			status := check.Status
-			url := check.Url
-			if len(url) > 30 {
-				url = url[:27] + "..."
+
+			target := check.Target
+			if len(target) > 28 {
+				target = target[:25] + "..."
 			}
-			
-			fmt.Printf("%-20s %-15s %-10s %-15s %s\n", id, name, check.Type, status, url)
+
+			interval := fmt.Sprintf("%ds", check.Interval)
+			timeout := fmt.Sprintf("%ds", check.Timeout)
+
+			tags := strings.Join(check.Tags, ", ")
+			if tags == "" {
+				tags = "-"
+			}
+
+			fmt.Printf("%-20s %-25s %-10s %-30s %-10s %-10s %s\n", id, name, check.Type, target, interval, timeout, tags)
 		}
 	}
+
+	fmt.Printf("\n📊 Всего проверок: %d\n", response.Total)
+	fmt.Printf("📄 Страница: %d из %d\n", page, (response.Total+limit-1)/limit)
 
 	return nil
 }

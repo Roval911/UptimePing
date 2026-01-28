@@ -4,23 +4,30 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
+
 	"UptimePingPlatform/pkg/config"
 	"UptimePingPlatform/pkg/health"
 	pkglogger "UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
 	"UptimePingPlatform/services/metrics-service/internal/collector"
+	grpcHandler "UptimePingPlatform/services/metrics-service/internal/handler/grpc"
 	httpHandler "UptimePingPlatform/services/metrics-service/internal/handler/http"
+
+	metricsv1 "UptimePingPlatform/gen/proto/api/metrics/v1"
 )
 
 func main() {
-	// Загружаем конфигурацию
-	cfg, err := config.LoadConfig("config/config.yaml")
+	// Загружаем конфигурацию - единая схема для всех сервисов
+	cfg, err := config.LoadConfig("")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -41,8 +48,13 @@ func main() {
 	// Создаем health checker
 	healthChecker := health.NewSimpleHealthChecker("1.0.0")
 
-	// Создаем Prometheus метрики для самого сервиса
-	prometheusMetrics := metrics.NewMetrics("metrics-service")
+	// Создаем Prometheus метрики для самого сервиса с конфигурацией
+	var prometheusMetrics *metrics.Metrics
+	if cfg.Metrics.Enabled {
+		prometheusMetrics = metrics.NewMetricsFromConfig("metrics-service", &cfg.Metrics)
+	} else {
+		prometheusMetrics = metrics.NewMetrics("metrics-service")
+	}
 	logger.Info("Prometheus metrics initialized")
 
 	// Создаем коллектор метрик
@@ -53,6 +65,40 @@ func main() {
 	if err := loadServicesFromConfig(metricsCollector, cfg, logger); err != nil {
 		logger.Error("Failed to load services from config", pkglogger.Error(err))
 	}
+
+	// Создаем gRPC сервер
+	grpcPort := cfg.GRPC.Port
+	if grpcPort == 0 {
+		grpcPort = 50053 // По умолчанию для Metrics Service
+	}
+
+	grpcAddr := fmt.Sprintf(":%d", grpcPort)
+	lis, err := net.Listen("tcp", grpcAddr)
+	if err != nil {
+		logger.Error("Failed to listen on gRPC port", 
+			pkglogger.Int("port", grpcPort), 
+			pkglogger.Error(err))
+		os.Exit(1)
+	}
+
+	grpcServer := grpc.NewServer()
+	metricsHandler := grpcHandler.NewMetricsHandler(metricsCollector, logger)
+	metricsv1.RegisterMetricsServiceServer(grpcServer, metricsHandler)
+
+	// Включаем reflection для разработки
+	reflection.Register(grpcServer)
+
+	logger.Info("gRPC server configured",
+		pkglogger.String("address", grpcAddr),
+		pkglogger.Int("port", grpcPort))
+
+	// Запускаем gRPC сервер в горутине
+	go func() {
+		logger.Info("Starting gRPC server", pkglogger.String("address", grpcAddr))
+		if err := grpcServer.Serve(lis); err != nil {
+			logger.Error("gRPC server failed", pkglogger.Error(err))
+		}
+	}()
 
 	// Создаем HTTP обработчики
 	httpH := httpHandler.NewHTTPHandler(logger, metricsCollector)
@@ -69,7 +115,13 @@ func main() {
 	mux.HandleFunc("/live/pkg", health.LiveHandler())
 
 	// Добавляем metrics эндпоинт из pkg/metrics
+	metricsPath := prometheusMetrics.GetMetricsPath(&cfg.Metrics)
 	mux.Handle("/service-metrics", prometheusMetrics.GetHandler())
+	
+	// Добавляем основные метрики если путь отличается от /metrics
+	if metricsPath != "/metrics" {
+		mux.Handle(metricsPath, prometheusMetrics.GetHandler())
+	}
 
 	// Применяем middleware
 	handlerWithMetrics := prometheusMetrics.Middleware(mux)
@@ -110,6 +162,10 @@ func main() {
 	<-quit
 
 	logger.Info("Shutting down Metrics Service...")
+
+	// Останавливаем gRPC сервер
+	logger.Info("Stopping gRPC server")
+	grpcServer.GracefulStop()
 
 	// Останавливаем HTTP сервер с таймаутом
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

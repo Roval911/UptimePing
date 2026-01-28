@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 
 	"UptimePingPlatform/pkg/config"
 	"UptimePingPlatform/pkg/connection"
@@ -22,6 +25,7 @@ import (
 	"UptimePingPlatform/pkg/ratelimit"
 	pkg_redis "UptimePingPlatform/pkg/redis"
 	"UptimePingPlatform/services/core-service/internal/client"
+	grpcHandler "UptimePingPlatform/services/core-service/internal/handler/grpc"
 	consumerRabbitMQ "UptimePingPlatform/services/core-service/internal/consumer/rabbitmq"
 	"UptimePingPlatform/services/core-service/internal/domain"
 	"UptimePingPlatform/services/core-service/internal/logging"
@@ -30,6 +34,8 @@ import (
 	"UptimePingPlatform/services/core-service/internal/service"
 	"UptimePingPlatform/services/core-service/internal/service/checker"
 	"UptimePingPlatform/services/core-service/internal/worker"
+
+	corev1 "UptimePingPlatform/gen/proto/api/core/v1"
 )
 
 const (
@@ -48,47 +54,8 @@ func CmdServer() {
 }
 
 func mainCmd() {
-	// Определяем путь к конфигурации
-	wd, err := os.Getwd()
-	if err != nil {
-		log.Fatalf("Failed to get working directory: %v", err)
-	}
-
-	configPath := ""
-
-	// Ищем config.yaml в services/core-service/config/
-	testPath := filepath.Join(wd, "services", "core-service", "config", "config.yaml")
-	if _, err := os.Stat(testPath); err == nil {
-		configPath = testPath
-	}
-
-	// Если не нашли, пробуем другие варианты
-	if configPath == "" {
-		testPath = filepath.Join(wd, "config", "config.yaml")
-		if _, err := os.Stat(testPath); err == nil {
-			configPath = testPath
-		}
-	}
-
-	// Если все еще не нашли, ищем в родительских директориях
-	if configPath == "" {
-		parentDir := wd
-		for i := 0; i < 5; i++ {
-			testPath = filepath.Join(parentDir, "config", "config.yaml")
-			if _, err := os.Stat(testPath); err == nil {
-				configPath = testPath
-				break
-			}
-			parentDir = filepath.Dir(parentDir)
-		}
-	}
-
-	if configPath == "" {
-		log.Fatalf("Could not find config.yaml file")
-	}
-
-	// Инициализация конфигурации
-	cfg, err := config.LoadConfig(configPath)
+	// Инициализация конфигурации - единая схема для всех сервисов
+	cfg, err := config.LoadConfig("")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -114,8 +81,13 @@ func mainCmd() {
 	// Инициализация retry конфигурации
 	retryConfig := connection.DefaultRetryConfig()
 
-	// Инициализируем метрики
-	metricsInstance := pkg_metrics.NewMetrics(serviceName)
+	// Инициализируем метрики с конфигурацией
+	var metricsInstance *pkg_metrics.Metrics
+	if cfg.Metrics.Enabled {
+		metricsInstance = pkg_metrics.NewMetricsFromConfig(serviceName, &cfg.Metrics)
+	} else {
+		metricsInstance = pkg_metrics.NewMetrics(serviceName)
+	}
 
 	ctx := context.Background()
 
@@ -270,6 +242,40 @@ func mainCmd() {
 
 	appLogger.Info("Core service started successfully")
 
+	// Создаем gRPC сервер
+	grpcPort := cfg.GRPC.Port
+	if grpcPort == 0 {
+		grpcPort = 50052 // По умолчанию для Core Service
+	}
+
+	grpcAddr := fmt.Sprintf(":%d", grpcPort)
+	lis, err := net.Listen("tcp", grpcAddr)
+	if err != nil {
+		appLogger.Error("Failed to listen on gRPC port", 
+			logger.Int("port", grpcPort), 
+			logger.Error(err))
+		os.Exit(1)
+	}
+
+	grpcServer := grpc.NewServer()
+	coreHandler := grpcHandler.NewCoreHandler(checkService, appLogger)
+	corev1.RegisterCoreServiceServer(grpcServer, coreHandler)
+
+	// Включаем reflection для разработки
+	reflection.Register(grpcServer)
+
+	appLogger.Info("gRPC server configured",
+		logger.String("address", grpcAddr),
+		logger.Int("port", grpcPort))
+
+	// Запускаем gRPC сервер в горутине
+	go func() {
+		appLogger.Info("Starting gRPC server", logger.String("address", grpcAddr))
+		if err := grpcServer.Serve(lis); err != nil {
+			appLogger.Error("gRPC server failed", logger.Error(err))
+		}
+	}()
+
 	// Запускаем HTTP сервер для health check и metrics
 	go func() {
 		mux := http.NewServeMux()
@@ -300,7 +306,8 @@ func mainCmd() {
 		mux.HandleFunc("/live", health.LiveHandler())
 
 		// Metrics endpoint
-		mux.Handle("/metrics", metricsInstance.GetHandler())
+		metricsPath := metricsInstance.GetMetricsPath(&cfg.Metrics)
+		mux.Handle(metricsPath, metricsInstance.GetHandler())
 
 		server := &http.Server{
 			Addr:    fmt.Sprintf(":%d", cfg.Server.Port), // Используем порт из конфига
@@ -314,11 +321,11 @@ func mainCmd() {
 	}()
 
 	// Ожидаем сигналы для graceful shutdown
-	awaitGracefulShutdown(ctx, appLogger, workerPool)
+	awaitGracefulShutdown(ctx, appLogger, workerPool, grpcServer)
 }
 
 // awaitGracefulShutdown ожидает сигналы для graceful shutdown
-func awaitGracefulShutdown(ctx context.Context, logger logger.Logger, workerPool *worker.Pool) {
+func awaitGracefulShutdown(ctx context.Context, logger logger.Logger, workerPool *worker.Pool, grpcServer *grpc.Server) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
@@ -327,6 +334,10 @@ func awaitGracefulShutdown(ctx context.Context, logger logger.Logger, workerPool
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	// Останавливаем gRPC сервер
+	logger.Info("Stopping gRPC server")
+	grpcServer.GracefulStop()
 
 	// Остановка worker pool
 	if err := workerPool.Stop(ctx); err != nil {

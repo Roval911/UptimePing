@@ -227,29 +227,29 @@ func handleNotificationChannelsList(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Notification Channels (%d total):\n", len(channelsResp.Channels))
 		fmt.Printf("%-20s %-20s %-12s %-30s %-10s\n", "ID", "Name", "Type", "Address", "Enabled")
 		fmt.Println("--------------------------------------------------------------------------------")
-		
+
 		for _, channel := range channelsResp.Channels {
 			id := channel.ChannelId
 			if len(id) > 18 {
 				id = id[:15] + "..."
 			}
-			
+
 			name := channel.Name
 			if len(name) > 18 {
 				name = name[:15] + "..."
 			}
-			
+
 			address := channel.Address
 			if len(address) > 28 {
 				address = address[:25] + "..."
 			}
-			
+
 			enabled := "No"
 			if channel.Enabled {
 				enabled = "Yes"
 			}
-			
-			fmt.Printf("%-20s %-20s %-12s %-30s %-10s\n", 
+
+			fmt.Printf("%-20s %-20s %-12s %-30s %-10s\n",
 				id, name, channel.Type, address, enabled)
 		}
 	}
@@ -302,7 +302,7 @@ func handleNotificationTest(cmd *cobra.Command, args []string) error {
 	fmt.Printf("✅ Test notification sent successfully\n")
 	fmt.Printf("Notification ID: %s\n", notificationResp.NotificationId)
 	fmt.Printf("Status: %s\n", notificationResp.Status)
-	
+
 	if viper.GetBool("verbose") {
 		fmt.Printf("Sent at: %s\n", notificationResp.SentAt.Format(time.RFC3339))
 		fmt.Printf("Channel: %s\n", channelID)

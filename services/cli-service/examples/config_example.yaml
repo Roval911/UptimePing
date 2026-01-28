@@ -1,0 +1,27 @@
+# Пример конфигурации UptimePing CLI с gRPC
+# Сохранить в ~/.uptimeping/config.yaml
+
+api:
+  base_url: "http://localhost:8080"
+  timeout: 30
+
+# gRPC настройки для взаимодействия с сервисами
+grpc:
+  scheduler_address: "localhost:50051"  # Scheduler Service gRPC порт
+  core_address: "localhost:50052"      # Core Service gRPC порт
+  auth_address: "localhost:50053"      # Auth Service gRPC порт
+  use_grpc: true                       # Включить gRPC режим
+  timeout: 30                          # Таймаут gRPC вызов в секундах
+
+# Настройки аутентификации
+auth:
+  token_expiry: 3600        # Время жизни токена в секундах (1 час)
+  refresh_threshold: 300  # Порог обновления токена в секундах (5 минут)
+
+# Настройки вывода
+output:
+  format: "table"  # Формат вывода: table, json, yaml
+  colors: true     # Использовать цвета в выводе
+
+# Текущий тенант (опционально)
+current_tenant: ""

@@ -26,17 +26,17 @@ func (m *MockAuthClient) Register(ctx context.Context, req interface{}) (interfa
 
 func (m *MockAuthClient) ValidateToken(ctx context.Context, req interface{}) (interface{}, error) {
 	return &ValidateTokenResponse{
-		UserId:   "mock-user-id", 
-		Email:    "user@example.com", 
-		TenantId: "mock-tenant", 
+		UserId:    "mock-user-id",
+		Email:     "user@example.com",
+		TenantId:  "mock-tenant",
 		ExpiresAt: time.Now().Add(24 * time.Hour),
 	}, nil
 }
 
 func (m *MockAuthClient) CreateAPIKey(ctx context.Context, req interface{}) (interface{}, error) {
 	return &CreateAPIKeyResponse{
-		KeyId:     "mock-key-id", 
-		ApiKey:    "mock-api-key", 
+		KeyId:     "mock-key-id",
+		ApiKey:    "mock-api-key",
 		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
 	}, nil
 }
@@ -52,23 +52,23 @@ func (m *MockAuthClient) RevokeAPIKey(ctx context.Context, req interface{}) (int
 // Mock core methods
 func (m *MockCoreClient) ExecuteCheck(ctx context.Context, req interface{}) (interface{}, error) {
 	return &ExecuteCheckResponse{
-		CheckId:      "mock-check-id", 
-		Status:       "success", 
-		ResponseTime: 100, 
+		CheckId:      "mock-check-id",
+		Status:       "success",
+		ResponseTime: 100,
 		Message:      "Check completed successfully",
 	}, nil
 }
 
 func (m *MockCoreClient) GetCheckStatus(ctx context.Context, req interface{}) (interface{}, error) {
 	return &GetCheckStatusResponse{
-		CheckId:      "mock-check-id", 
-		Name:         "Mock Check", 
-		Type:         "http", 
-		Status:       "active", 
-		LastCheck:    time.Now(), 
-		NextCheck:    time.Now().Add(time.Minute), 
-		SuccessRate:  99.5, 
-		TotalChecks:  1000, 
+		CheckId:      "mock-check-id",
+		Name:         "Mock Check",
+		Type:         "http",
+		Status:       "active",
+		LastCheck:    time.Now(),
+		NextCheck:    time.Now().Add(time.Minute),
+		SuccessRate:  99.5,
+		TotalChecks:  1000,
 		FailedChecks: 5,
 	}, nil
 }
@@ -88,24 +88,24 @@ func (m *MockIncidentClient) ListIncidents(ctx context.Context, req interface{})
 
 func (m *MockIncidentClient) GetIncident(ctx context.Context, req interface{}) (interface{}, error) {
 	return &GetIncidentResponse{
-		IncidentId: "mock-incident-id", 
-		Title:      "Mock Incident", 
-		Status:     "open", 
-		Severity:   "medium", 
+		IncidentId: "mock-incident-id",
+		Title:      "Mock Incident",
+		Status:     "open",
+		Severity:   "medium",
 		CreatedAt:  time.Now(),
 	}, nil
 }
 
 func (m *MockIncidentClient) AcknowledgeIncident(ctx context.Context, req interface{}) (interface{}, error) {
 	return &AcknowledgeIncidentResponse{
-		AcknowledgedAt: time.Now(), 
+		AcknowledgedAt: time.Now(),
 		AcknowledgedBy: "mock-user",
 	}, nil
 }
 
 func (m *MockIncidentClient) ResolveIncident(ctx context.Context, req interface{}) (interface{}, error) {
 	return &ResolveIncidentResponse{
-		ResolvedAt: time.Now(), 
+		ResolvedAt: time.Now(),
 		ResolvedBy: "mock-user",
 	}, nil
 }
@@ -125,8 +125,8 @@ func (m *MockNotificationClient) ListChannels(ctx context.Context, req interface
 
 func (m *MockNotificationClient) SendNotification(ctx context.Context, req interface{}) (interface{}, error) {
 	return &SendNotificationResponse{
-		NotificationId: "mock-notification-id", 
-		Status:         "sent", 
+		NotificationId: "mock-notification-id",
+		Status:         "sent",
 		SentAt:         time.Now(),
 	}, nil
 }
@@ -134,20 +134,20 @@ func (m *MockNotificationClient) SendNotification(ctx context.Context, req inter
 // Mock forge methods
 func (m *MockForgeClient) Generate(ctx context.Context, req interface{}) (interface{}, error) {
 	return &GenerateResponse{
-		GeneratedFiles: 5, 
-		OutputPath:     "/tmp/generated", 
-		GenerationTime: time.Now(), 
+		GeneratedFiles: 5,
+		OutputPath:     "/tmp/generated",
+		GenerationTime: time.Now(),
 		Files:          []string{"file1.go", "file2.go"},
 	}, nil
 }
 
 func (m *MockForgeClient) Validate(ctx context.Context, req interface{}) (interface{}, error) {
 	return &ValidateResponse{
-		Valid:          true, 
-		Status:         "success", 
-		FilesChecked:  3, 
-		Errors:         []ValidationError{}, 
-		Warnings:       []ValidationWarning{}, 
+		Valid:          true,
+		Status:         "success",
+		FilesChecked:   3,
+		Errors:         []ValidationError{},
+		Warnings:       []ValidationWarning{},
 		ValidationTime: time.Now(),
 	}, nil
 }

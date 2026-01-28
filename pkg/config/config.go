@@ -221,11 +221,31 @@ func LoadConfig(configFile string) (*Config, error) {
 			OutputDir: "generated",
 		},
 		Metrics: MetricsConfig{
+			// Основные настройки
+			Enabled:        true,
+			Port:           9090,
+			Path:           "/metrics",
+			
+			// Настройки сбора метрик
 			ScrapeInterval: "15s",
 			Timeout:        "10s",
 			RetryAttempts:  3,
-			Enabled:        true,
-			Port:           9090,
+			
+			// Prometheus настройки
+			Namespace:     "uptimeping",
+			Subsystem:     "http",
+			Buckets:       []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+			
+			// OpenTelemetry настройки
+			TracingEnabled: true,
+			TracerName:     "uptimeping-tracer",
+			SamplingRate:   1.0,
+			ServiceName:    "", // Будет установлено в каждом сервисе
+			ServiceVersion: "1.0.0",
+			
+			// Дополнительные метрики
+			EnableCustomMetrics: true,
+			EnableSystemMetrics:  true,
 		},
 		Health: HealthConfig{
 			Enabled:       true,
@@ -462,6 +482,67 @@ func loadConfigFromEnv(config *Config) error {
 		}
 	}
 
+	// Metrics config
+	if metricsEnabled := os.Getenv("METRICS_ENABLED"); metricsEnabled != "" {
+		if enabled, err := strconv.ParseBool(metricsEnabled); err == nil {
+			config.Metrics.Enabled = enabled
+		}
+	}
+	if metricsPort := os.Getenv("METRICS_PORT"); metricsPort != "" {
+		if _, err := fmt.Sscanf(metricsPort, "%d", &config.Metrics.Port); err != nil {
+			return fmt.Errorf("invalid METRICS_PORT: %s", metricsPort)
+		}
+	}
+	if metricsPath := os.Getenv("METRICS_PATH"); metricsPath != "" {
+		config.Metrics.Path = metricsPath
+	}
+	if metricsScrapeInterval := os.Getenv("METRICS_SCRAPE_INTERVAL"); metricsScrapeInterval != "" {
+		config.Metrics.ScrapeInterval = metricsScrapeInterval
+	}
+	if metricsTimeout := os.Getenv("METRICS_TIMEOUT"); metricsTimeout != "" {
+		config.Metrics.Timeout = metricsTimeout
+	}
+	if metricsRetryAttempts := os.Getenv("METRICS_RETRY_ATTEMPTS"); metricsRetryAttempts != "" {
+		if _, err := fmt.Sscanf(metricsRetryAttempts, "%d", &config.Metrics.RetryAttempts); err != nil {
+			return fmt.Errorf("invalid METRICS_RETRY_ATTEMPTS: %s", metricsRetryAttempts)
+		}
+	}
+	if metricsNamespace := os.Getenv("METRICS_NAMESPACE"); metricsNamespace != "" {
+		config.Metrics.Namespace = metricsNamespace
+	}
+	if metricsSubsystem := os.Getenv("METRICS_SUBSYSTEM"); metricsSubsystem != "" {
+		config.Metrics.Subsystem = metricsSubsystem
+	}
+	if metricsTracingEnabled := os.Getenv("METRICS_TRACING_ENABLED"); metricsTracingEnabled != "" {
+		if enabled, err := strconv.ParseBool(metricsTracingEnabled); err == nil {
+			config.Metrics.TracingEnabled = enabled
+		}
+	}
+	if metricsTracerName := os.Getenv("METRICS_TRACER_NAME"); metricsTracerName != "" {
+		config.Metrics.TracerName = metricsTracerName
+	}
+	if metricsSamplingRate := os.Getenv("METRICS_SAMPLING_RATE"); metricsSamplingRate != "" {
+		if rate, err := strconv.ParseFloat(metricsSamplingRate, 64); err == nil {
+			config.Metrics.SamplingRate = rate
+		}
+	}
+	if metricsServiceName := os.Getenv("METRICS_SERVICE_NAME"); metricsServiceName != "" {
+		config.Metrics.ServiceName = metricsServiceName
+	}
+	if metricsServiceVersion := os.Getenv("METRICS_SERVICE_VERSION"); metricsServiceVersion != "" {
+		config.Metrics.ServiceVersion = metricsServiceVersion
+	}
+	if metricsCustomEnabled := os.Getenv("METRICS_ENABLE_CUSTOM"); metricsCustomEnabled != "" {
+		if enabled, err := strconv.ParseBool(metricsCustomEnabled); err == nil {
+			config.Metrics.EnableCustomMetrics = enabled
+		}
+	}
+	if metricsSystemEnabled := os.Getenv("METRICS_ENABLE_SYSTEM"); metricsSystemEnabled != "" {
+		if enabled, err := strconv.ParseBool(metricsSystemEnabled); err == nil {
+			config.Metrics.EnableSystemMetrics = enabled
+		}
+	}
+
 	return nil
 }
 
@@ -563,11 +644,31 @@ type ForgeConfig struct {
 
 // MetricsConfig представляет конфигурацию метрик
 type MetricsConfig struct {
+	// Основные настройки
+	Enabled        bool   `json:"enabled" yaml:"enabled"`
+	Port           int    `json:"port" yaml:"port"`
+	Path           string `json:"path" yaml:"path"`
+	
+	// Настройки сбора метрик
 	ScrapeInterval string `json:"scrape_interval" yaml:"scrape_interval"`
 	Timeout        string `json:"timeout" yaml:"timeout"`
 	RetryAttempts  int    `json:"retry_attempts" yaml:"retry_attempts"`
-	Enabled        bool   `json:"enabled" yaml:"enabled"`
-	Port           int    `json:"port" yaml:"port"`
+	
+	// Prometheus настройки
+	Namespace     string   `json:"namespace" yaml:"namespace"`
+	Subsystem     string   `json:"subsystem" yaml:"subsystem"`
+	Buckets       []float64 `json:"buckets" yaml:"buckets"`
+	
+	// OpenTelemetry настройки
+	TracingEnabled bool     `json:"tracing_enabled" yaml:"tracing_enabled"`
+	TracerName     string   `json:"tracer_name" yaml:"tracer_name"`
+	SamplingRate   float64  `json:"sampling_rate" yaml:"sampling_rate"`
+	ServiceName    string   `json:"service_name" yaml:"service_name"`
+	ServiceVersion string   `json:"service_version" yaml:"service_version"`
+	
+	// Дополнительные метрики
+	EnableCustomMetrics bool `json:"enable_custom_metrics" yaml:"enable_custom_metrics"`
+	EnableSystemMetrics  bool `json:"enable_system_metrics" yaml:"enable_system_metrics"`
 }
 
 // HealthConfig представляет конфигурацию health check

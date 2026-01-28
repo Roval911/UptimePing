@@ -27,7 +27,7 @@ import (
 	redis_repo "UptimePingPlatform/services/auth-service/internal/repository/redis"
 	"UptimePingPlatform/services/auth-service/internal/service"
 
-	grpc_auth "UptimePingPlatform/gen/go/proto/api/auth/v1"
+	grpc_auth "UptimePingPlatform/gen/proto/api/auth/v1"
 	"UptimePingPlatform/services/auth-service/internal/grpc/handlers"
 
 	"google.golang.org/grpc"
@@ -35,8 +35,8 @@ import (
 )
 
 func main() {
-	// Инициализация конфигурации
-	cfg, err := config.LoadConfig("config/config.yaml")
+	// Инициализация конфигурации - единая схема для всех сервисов
+	cfg, err := config.LoadConfig("")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -47,8 +47,13 @@ func main() {
 		log.Fatalf("Failed to initialize logger: %v", err)
 	}
 
-	// Инициализация метрик
-	metricsInstance := metrics.NewMetrics("auth-service")
+	// Инициализация метрик с конфигурацией
+	var metricsInstance *metrics.Metrics
+	if cfg.Metrics.Enabled {
+		metricsInstance = metrics.NewMetricsFromConfig("auth-service", &cfg.Metrics)
+	} else {
+		metricsInstance = metrics.NewMetrics("auth-service")
+	}
 
 	// Инициализация retry конфигурации
 	retryConfig := connection.DefaultRetryConfig()
@@ -183,7 +188,8 @@ func main() {
 		mux.HandleFunc("/live", health.LiveHandler())
 
 		// Metrics эндпоинт
-		mux.Handle("/metrics", metricsInstance.GetHandler())
+		metricsPath := metricsInstance.GetMetricsPath(&cfg.Metrics)
+		mux.Handle(metricsPath, metricsInstance.GetHandler())
 
 		// Применяем middleware
 		handler := metricsInstance.Middleware(rateLimitMiddleware(mux))

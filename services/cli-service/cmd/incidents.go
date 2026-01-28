@@ -109,10 +109,10 @@ func handleIncidentsList(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	req := &struct {
-		Status   string `json:"status"`
-		Severity string `json:"severity"`
-		TenantId string `json:"tenant_id"`
-		Limit    int32  `json:"limit"`
+		Status   string     `json:"status"`
+		Severity string     `json:"severity"`
+		TenantId string     `json:"tenant_id"`
+		Limit    int32      `json:"limit"`
 		From     *time.Time `json:"from,omitempty"`
 		To       *time.Time `json:"to,omitempty"`
 	}{
@@ -167,21 +167,21 @@ func handleIncidentsList(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Incidents (%d total):\n", len(incidentsResp.Incidents))
 		fmt.Printf("%-20s %-30s %-12s %-10s %-20s\n", "ID", "Title", "Status", "Severity", "Created")
 		fmt.Println("----------------------------------------------------------------------------------------")
-		
+
 		for _, incident := range incidentsResp.Incidents {
 			id := incident.IncidentId
 			if len(id) > 18 {
 				id = id[:15] + "..."
 			}
-			
+
 			title := incident.Title
 			if len(title) > 28 {
 				title = title[:25] + "..."
 			}
-			
+
 			created := incident.CreatedAt.Format("2006-01-02 15:04:05")
-			
-			fmt.Printf("%-20s %-30s %-12s %-10s %-20s\n", 
+
+			fmt.Printf("%-20s %-30s %-12s %-10s %-20s\n",
 				id, title, incident.Status, incident.Severity, created)
 		}
 	}
@@ -240,7 +240,7 @@ func handleIncidentsGet(cmd *cobra.Command, args []string) error {
 	if viper.GetBool("verbose") {
 		fmt.Printf("\nEvents:\n")
 		for _, event := range incidentResp.Events {
-			fmt.Printf("  %s: %s - %s\n", 
+			fmt.Printf("  %s: %s - %s\n",
 				event.Timestamp.Format("2006-01-02 15:04:05"),
 				event.Type, event.Message)
 		}

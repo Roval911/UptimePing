@@ -2,9 +2,9 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"errors"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -42,7 +42,7 @@ var rootCmd = &cobra.Command{
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Initialize viper for config file support
 		initConfig()
-		
+
 		// Set up logging
 		setupLogging()
 	},
@@ -126,7 +126,7 @@ func handleError(err error, cmd *cobra.Command) error {
 
 	// Log the error
 	if log != nil {
-		log.Error("Command failed", 
+		log.Error("Command failed",
 			logger.String("command", cmd.Name()),
 			logger.Error(appErr))
 	}

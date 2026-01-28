@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"UptimePingPlatform/gen/go/proto/api/incident/v1"
+	"UptimePingPlatform/gen/proto/api/incident/v1"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/core-service/internal/domain"
 	"google.golang.org/grpc"

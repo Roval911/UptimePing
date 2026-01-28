@@ -8,9 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	"UptimePingPlatform/gen/go/proto/api/core/v1"
-	"UptimePingPlatform/pkg/logger"
 	grpcBase "UptimePingPlatform/pkg/grpc"
+	"UptimePingPlatform/pkg/logger"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -92,10 +91,10 @@ func (c *ForgeServiceChecker) Execute(task *Task) (*CheckResult, error) {
 	if err != nil {
 		duration := time.Since(startTime)
 		result := c.createErrorResult(task, 0, duration.Milliseconds(), fmt.Errorf("failed to connect: %w", err))
-		c.LogOperationError(context.Background(), "grpc_check", err, map[string]interface{}{
-			"target": task.Target,
-			"error":  err.Error(),
-		})
+		c.logger.Error("failed to connect", 
+			logger.Error(err),
+			logger.String("target", task.Target),
+			logger.String("check_id", task.CheckID))
 		return result, nil
 	}
 	defer conn.Close()
@@ -104,7 +103,7 @@ func (c *ForgeServiceChecker) Execute(task *Task) (*CheckResult, error) {
 	client := grpc_health_v1.NewHealthClient(conn)
 
 	// Выполняем health check
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	req := &grpc_health_v1.HealthCheckRequest{
@@ -115,10 +114,10 @@ func (c *ForgeServiceChecker) Execute(task *Task) (*CheckResult, error) {
 	if err != nil {
 		duration := time.Since(startTime)
 		result := c.createErrorResult(task, 0, duration.Milliseconds(), fmt.Errorf("health check failed: %w", err))
-		c.LogOperationError(context.Background(), "grpc_check", err, map[string]interface{}{
-			"service": "ForgeService",
-			"error":   err.Error(),
-		})
+		c.logger.Error("health check failed", 
+			logger.Error(err),
+			logger.String("service", "ForgeService"),
+			logger.String("check_id", task.CheckID))
 		return result, nil
 	}
 
@@ -129,12 +128,10 @@ func (c *ForgeServiceChecker) Execute(task *Task) (*CheckResult, error) {
 		CheckID:      task.CheckID,
 		ExecutionID:   task.ExecutionID,
 		Type:         task.Type,
-		Target:       task.Target,
 		Success:      success,
-		StatusCode:   c.getStatusCode(resp.Status),
-		ResponseTime:  duration.Milliseconds(),
-		CheckedAt:    time.Now().UTC(),
-		Metadata:     make(map[string]string),
+		ResponseTime: duration.Milliseconds(),
+		Timestamp:    time.Now().UTC(),
+		Metadata:     make(map[string]interface{}),
 	}
 
 	// Добавляем метаданные
@@ -144,7 +141,7 @@ func (c *ForgeServiceChecker) Execute(task *Task) (*CheckResult, error) {
 	result.Metadata["grpc_target"] = task.Target
 
 	if !success {
-		result.Error = fmt.Sprintf("Service status: %s", resp.Status.String())
+		result.ErrorMessage = fmt.Sprintf("Service status: %s", resp.Status.String())
 	}
 
 	c.LogOperationSuccess(context.Background(), "grpc_check", map[string]interface{}{
@@ -171,7 +168,7 @@ func (c *ForgeServiceChecker) ValidateConfig(config map[string]interface{}) erro
 		"port":    "gRPC service port",
 	}
 
-	if err := c.BaseHandler.ValidateRequiredFields(config, requiredFields); err != nil {
+	if err := c.BaseHandler.ValidateRequiredFields(context.Background(), "ValidateConfig", requiredFields); err != nil {
 		c.logger.Debug("ForgeService config validation failed", logger.Error(err))
 		return err
 	}
@@ -225,13 +222,11 @@ func (c *ForgeServiceChecker) createErrorResult(task *Task, statusCode int, resp
 		CheckID:      task.CheckID,
 		ExecutionID:   task.ExecutionID,
 		Type:         task.Type,
-		Target:       task.Target,
 		Success:      false,
-		StatusCode:   statusCode,
-		ResponseTime:  responseTime,
-		Error:        err.Error(),
-		CheckedAt:    time.Now().UTC(),
-		Metadata:     make(map[string]string),
+		ResponseTime: responseTime,
+		ErrorMessage: err.Error(),
+		Timestamp:    time.Now().UTC(),
+		Metadata:     make(map[string]interface{}),
 	}
 }
 

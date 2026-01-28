@@ -1,0 +1,20 @@
+api:
+  base_url: "http://localhost:8080"
+  timeout: 30
+
+grpc:
+  scheduler_address: "localhost:50051"
+  core_address: "localhost:50052"
+  auth_address: "localhost:50053"
+  use_grpc: true
+  timeout: 30
+
+auth:
+  token_expiry: 3600
+  refresh_threshold: 300
+
+output:
+  format: "table"
+  colors: true
+
+current_tenant: ""

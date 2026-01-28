@@ -4,24 +4,31 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
+
 	"UptimePingPlatform/pkg/config"
 	"UptimePingPlatform/pkg/health"
 	pkglogger "UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
 	"UptimePingPlatform/services/forge-service/internal/domain"
+	grpcHandler "UptimePingPlatform/services/forge-service/internal/handler/grpc"
 	"UptimePingPlatform/services/forge-service/internal/handler"
 	"UptimePingPlatform/services/forge-service/internal/service"
+
+	forgev1 "UptimePingPlatform/gen/proto/api/forge/v1"
 )
 
 func main() {
-	// Загружаем конфигурацию
-	cfg, err := config.LoadConfig("config/config.yaml")
+	// Загружаем конфигурацию - единая схема для всех сервисов
+	cfg, err := config.LoadConfig("")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -36,11 +43,13 @@ func main() {
 	// Создаем health checker
 	healthChecker := health.NewSimpleHealthChecker("1.0.0")
 
-	// Создаем метрики (если включены)
+	// Создаем метрики (если включены) с конфигурацией
 	var metricsInstance *metrics.Metrics
 	if cfg.Metrics.Enabled {
-		metricsInstance = metrics.NewMetrics("forge-service")
+		metricsInstance = metrics.NewMetricsFromConfig("forge-service", &cfg.Metrics)
 		logger.Info("Metrics enabled", pkglogger.String("port", fmt.Sprintf("%d", cfg.Metrics.Port)))
+	} else {
+		metricsInstance = metrics.NewMetrics("forge-service")
 	}
 
 	// Создаем парсер proto файлов
@@ -138,6 +147,40 @@ func main() {
 	enums := parser.GetEnums()
 	logger.Info("Found enums", pkglogger.Int("count", len(enums)))
 
+	// Создаем сервис Forge
+	forgeService := service.NewForgeService(logger, parser, codeGenerator)
+
+	// Создаем gRPC сервер
+	grpcPort := cfg.GRPC.Port
+	if grpcPort == 0 {
+		grpcPort = 50054 // По умолчанию для Forge Service
+	}
+
+	grpcAddr := fmt.Sprintf(":%d", grpcPort)
+	lis, err := net.Listen("tcp", grpcAddr)
+	if err != nil {
+		log.Fatalf("Failed to listen on gRPC port %d: %v", grpcPort, err)
+	}
+
+	grpcServer := grpc.NewServer()
+	forgeHandler := grpcHandler.NewForgeHandler(forgeService, logger)
+	forgev1.RegisterForgeServiceServer(grpcServer, forgeHandler)
+
+	// Включаем reflection для разработки
+	reflection.Register(grpcServer)
+
+	logger.Info("gRPC server configured",
+		pkglogger.String("address", grpcAddr),
+		pkglogger.Int("port", grpcPort))
+
+	// Запускаем gRPC сервер в горутине
+	go func() {
+		logger.Info("Starting gRPC server", pkglogger.String("address", grpcAddr))
+		if err := grpcServer.Serve(lis); err != nil {
+			logger.Error("gRPC server failed", pkglogger.Error(err))
+		}
+	}()
+
 	// Запускаем HTTP сервер для health checks и метрик
 	server := &http.Server{
 		Addr: fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
@@ -157,7 +200,9 @@ func main() {
 	mux.HandleFunc("/health", health.Handler(healthChecker))
 	mux.HandleFunc("/ready", health.ReadyHandler(healthChecker))
 	mux.HandleFunc("/live", health.LiveHandler())
-	mux.Handle("/metrics", metricsInstance.GetHandler())
+	
+	metricsPath := metricsInstance.GetMetricsPath(&cfg.Metrics)
+	mux.Handle(metricsPath, metricsInstance.GetHandler())
 
 	// Статические файлы для веб-интерфейса
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -206,6 +251,11 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// Останавливаем gRPC сервер
+	logger.Info("Stopping gRPC server")
+	grpcServer.GracefulStop()
+
+	// Останавливаем HTTP сервер
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("Server forced to shutdown", pkglogger.Error(err))
 	}

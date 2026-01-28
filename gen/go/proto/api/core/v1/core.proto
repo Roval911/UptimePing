@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package uptimeping.core.v1;
+
+//import "google/api/annotations.proto";
+
+option go_package = "gitlab.com/rodionov_v_al/UptimePingPlatform/gen/go/proto/api/core/v1";
+
+// CoreService предоставляет методы для выполнения проверок
+service CoreService {
+  // ExecuteCheck выполняет проверку немедленно
+  rpc ExecuteCheck(ExecuteCheckRequest) returns (CheckResult) {}
+  
+  // GetCheckStatus возвращает текущий статус проверки
+  rpc GetCheckStatus(GetCheckStatusRequest) returns (CheckStatusResponse) {}
+  
+  // GetCheckHistory возвращает историю выполнения проверки
+  rpc GetCheckHistory(GetCheckHistoryRequest) returns (GetCheckHistoryResponse) {}
+}
+
+// ExecuteCheckRequest содержит данные для выполнения проверки
+message ExecuteCheckRequest {
+  string check_id = 1;
+}
+
+// CheckResult представляет результат выполнения проверки
+message CheckResult {
+  string check_id = 1;
+  string execution_id = 2;
+  bool success = 3;
+  int32 duration_ms = 4;
+  int32 status_code = 5;
+  string error = 6;
+  string response_body = 7;
+  string checked_at = 8;
+}
+
+// GetCheckStatusRequest содержит ID проверки
+message GetCheckStatusRequest {
+  string check_id = 1;
+}
+
+// CheckStatusResponse содержит текущий статус проверки
+message CheckStatusResponse {
+  string check_id = 1;
+  bool is_healthy = 2;
+  int32 response_time_ms = 3;
+  string last_checked_at = 4;
+}
+
+// GetCheckHistoryRequest содержит параметры для получения истории
+message GetCheckHistoryRequest {
+  string check_id = 1;
+  int32 limit = 2;
+  string start_time = 3;
+  string end_time = 4;
+}
+
+// GetCheckHistoryResponse содержит историю выполнения проверки
+message GetCheckHistoryResponse {
+  repeated CheckResult results = 1;
+}

@@ -1,0 +1,92 @@
+# Incident Manager Environment Configuration
+# Скопируйте в .env.development и настройте для вашего окружения
+
+# =============================================================================
+# ОБЩИЕ НАСТРОЙКИ
+# =============================================================================
+
+# Окружение: dev, staging, prod
+ENVIRONMENT=development
+
+# Настройки сервера
+SERVER_HOST=0.0.0.0
+SERVER_PORT=8086
+
+# Настройки логирования
+LOGGER_LEVEL=debug
+LOGGER_FORMAT=json
+
+# =============================================================================
+# RABBITMQ
+# =============================================================================
+
+RABBITMQ_URL=amqp://guest:guest@localhost:5672/
+RABBITMQ_EXCHANGE=incidents
+RABBITMQ_ROUTING_KEY=incident.events
+RABBITMQ_QUEUE=incidents
+
+# =============================================================================
+# gRPC НАСТРОЙКИ
+# =============================================================================
+
+GRPC_PORT=50055
+
+# =============================================================================
+# INCIDENT MANAGER НАСТРОЙКИ
+# =============================================================================
+
+INCIDENT_MANAGER_ADDRESS=localhost:50055
+
+# =============================================================================
+# МЕТРИКИ И ТРАССИРОВКА
+# =============================================================================
+
+# Включение метрик
+METRICS_ENABLED=true
+METRICS_PORT=9096
+METRICS_PATH=/metrics
+
+# Настройки сбора метрик
+METRICS_SCRAPE_INTERVAL=15s
+METRICS_TIMEOUT=10s
+METRICS_RETRY_ATTEMPTS=3
+
+# Prometheus настройки
+METRICS_NAMESPACE=uptimeping
+METRICS_SUBSYSTEM=incidents
+METRICS_BUCKETS=0.001,0.005,0.01,0.025,0.05,0.1,0.25,0.5,1,2.5,5,10
+
+# OpenTelemetry трассировка
+METRICS_TRACING_ENABLED=true
+METRICS_TRACER_NAME=incident-manager-tracer
+METRICS_SAMPLING_RATE=1.0
+METRICS_SERVICE_NAME=incident-manager
+METRICS_SERVICE_VERSION=1.0.0
+
+# Дополнительные метрики
+METRICS_ENABLE_CUSTOM=true
+METRICS_ENABLE_SYSTEM=true
+
+# =============================================================================
+# HEALTH CHECKS
+# =============================================================================
+
+HEALTH_ENABLED=true
+HEALTH_PORT=8097
+HEALTH_CHECK_INTERVAL=30s
+
+# =============================================================================
+# НАСТРОЙКИ ИНЦИДЕНТОВ
+# =============================================================================
+
+# Уровни серьезности инцидентов
+INCIDENT_SEVERITY_LEVELS=low,medium,high,critical
+
+# Время автоматического закрытия инцидента
+INCIDENT_AUTO_CLOSE_TIMEOUT=24h
+
+# Максимальное количество активных инцидентов
+INCIDENT_MAX_ACTIVE=1000
+
+# Интервал проверки инцидентов
+INCIDENT_CHECK_INTERVAL=5m

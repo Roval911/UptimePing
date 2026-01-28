@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+package uptimeping.scheduler.v1;
+
+//import "google/api/annotations.proto";
+
+option go_package = "gitlab.com/rodionov_v_al/UptimePingPlatform/gen/go/proto/api/scheduler/v1";
+
+// SchedulerService предоставляет методы для управления проверками и их планирования
+service SchedulerService {
+  // Методы управления проверками
+  rpc CreateCheck(CreateCheckRequest) returns (Check) {}
+  rpc UpdateCheck(UpdateCheckRequest) returns (Check) {}
+  rpc DeleteCheck(DeleteCheckRequest) returns (DeleteCheckResponse) {}
+  rpc GetCheck(GetCheckRequest) returns (Check) {}
+  rpc ListChecks(ListChecksRequest) returns (ListChecksResponse) {}
+  
+  // Методы управления расписаниями
+  rpc ScheduleCheck(ScheduleCheckRequest) returns (Schedule) {}
+  rpc UnscheduleCheck(UnscheduleCheckRequest) returns (UnscheduleCheckResponse) {}
+  rpc GetSchedule(GetScheduleRequest) returns (Schedule) {}
+  rpc ListSchedules(ListSchedulesRequest) returns (ListSchedulesResponse) {}
+  
+  // Health check
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {}
+}
+
+// Schedule представляет расписание проверки
+message Schedule {
+  string check_id = 1;
+  string cron_expression = 2;
+  string next_run = 3;
+  string last_run = 4;
+  bool is_active = 5;
+}
+
+// ScheduleCheckRequest содержит данные для планирования проверки
+message ScheduleCheckRequest {
+  string check_id = 1;
+  string cron_expression = 2;
+}
+
+// UnscheduleCheckRequest содержит ID проверки для отмены планирования
+message UnscheduleCheckRequest {
+  string check_id = 1;
+}
+
+// UnscheduleCheckResponse подтверждает отмену планирования
+message UnscheduleCheckResponse {
+  bool success = 1;
+}
+
+// GetScheduleRequest содержит ID проверки
+message GetScheduleRequest {
+  string check_id = 1;
+}
+
+// ListSchedulesRequest содержит параметры фильтрации и пагинации
+message ListSchedulesRequest {
+  int32 page_size = 1;
+  int32 page_token = 2;
+  string filter = 3;
+}
+
+// ListSchedulesResponse содержит список расписаний
+message ListSchedulesResponse {
+  repeated Schedule schedules = 1;
+  int32 next_page_token = 2;
+}
+
+// Check представляет конфигурацию проверки
+message Check {
+  string id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  string type = 4;
+  string target = 5;
+  int32 interval = 6;
+  int32 timeout = 7;
+  string status = 8;
+  int32 priority = 9;
+  repeated string tags = 10;
+  map<string, string> config = 11;
+  string created_at = 12;
+  string updated_at = 13;
+  string last_run_at = 14;
+  string next_run_at = 15;
+}
+
+// CreateCheckRequest содержит данные для создания проверки
+message CreateCheckRequest {
+  string tenant_id = 1;
+  string name = 2;
+  string type = 3;
+  string target = 4;
+  int32 interval = 5;
+  int32 timeout = 6;
+  string status = 7;
+  int32 priority = 8;
+  repeated string tags = 9;
+  map<string, string> config = 10;
+}
+
+// UpdateCheckRequest содержит данные для обновления проверки
+message UpdateCheckRequest {
+  string check_id = 1;
+  string name = 2;
+  string type = 3;
+  string target = 4;
+  int32 interval = 5;
+  int32 timeout = 6;
+  string status = 7;
+  int32 priority = 8;
+  repeated string tags = 9;
+  map<string, string> config = 10;
+}
+
+// DeleteCheckRequest содержит ID проверки для удаления
+message DeleteCheckRequest {
+  string check_id = 1;
+}
+
+// DeleteCheckResponse подтверждает удаление проверки
+message DeleteCheckResponse {
+  bool success = 1;
+}
+
+// GetCheckRequest содержит ID проверки
+message GetCheckRequest {
+  string check_id = 1;
+}
+
+// ListChecksRequest содержит параметры фильтрации и пагинации
+message ListChecksRequest {
+  string tenant_id = 1;
+  int32 page_size = 2;
+  int32 page_token = 3;
+  string filter = 4;
+}
+
+// ListChecksResponse содержит список проверок
+message ListChecksResponse {
+  repeated Check checks = 1;
+  int32 next_page_token = 2;
+}
+
+// HealthCheckRequest для проверки состояния сервиса
+message HealthCheckRequest {}
+
+// HealthCheckResponse содержит состояние сервиса
+message HealthCheckResponse {
+  bool healthy = 1;
+  string status = 2;
+  int64 uptime_seconds = 3;
+}

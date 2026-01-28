@@ -10,7 +10,7 @@ import (
 	"UptimePingPlatform/services/auth-service/internal/domain"
 	jwtPkg "UptimePingPlatform/services/auth-service/internal/pkg/jwt"
 
-	grpc_auth "UptimePingPlatform/gen/go/proto/api/auth/v1"
+	grpc_auth "UptimePingPlatform/gen/proto/api/auth/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/golang-jwt/jwt/v5"

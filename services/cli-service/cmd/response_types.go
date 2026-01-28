@@ -14,9 +14,9 @@ type RegisterResponse struct {
 }
 
 type ValidateTokenResponse struct {
-	UserId   string    `json:"user_id"`
-	Email    string    `json:"email"`
-	TenantId string    `json:"tenant_id"`
+	UserId    string    `json:"user_id"`
+	Email     string    `json:"email"`
+	TenantId  string    `json:"tenant_id"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
@@ -89,20 +89,20 @@ type IncidentInfo struct {
 }
 
 type GetIncidentResponse struct {
-	IncidentId     string    `json:"incident_id"`
-	Title         string    `json:"title"`
-	Description   string    `json:"description"`
-	Status        string    `json:"status"`
-	Severity      string    `json:"severity"`
-	TenantId      string    `json:"tenant_id"`
-	CheckId       string    `json:"check_id"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
-	AcknowledgedBy string    `json:"acknowledged_by,omitempty"`
-	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
-	ResolvedBy     string    `json:"resolved_by,omitempty"`
-	Events        []IncidentEvent `json:"events"`
+	IncidentId     string          `json:"incident_id"`
+	Title          string          `json:"title"`
+	Description    string          `json:"description"`
+	Status         string          `json:"status"`
+	Severity       string          `json:"severity"`
+	TenantId       string          `json:"tenant_id"`
+	CheckId        string          `json:"check_id"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+	AcknowledgedAt *time.Time      `json:"acknowledged_at,omitempty"`
+	AcknowledgedBy string          `json:"acknowledged_by,omitempty"`
+	ResolvedAt     *time.Time      `json:"resolved_at,omitempty"`
+	ResolvedBy     string          `json:"resolved_by,omitempty"`
+	Events         []IncidentEvent `json:"events"`
 }
 
 type IncidentEvent struct {
@@ -144,19 +144,19 @@ type SendNotificationResponse struct {
 }
 
 type GenerateResponse struct {
-	GeneratedFiles int32    `json:"generated_files"`
-	OutputPath     string   `json:"output_path"`
+	GeneratedFiles int32     `json:"generated_files"`
+	OutputPath     string    `json:"output_path"`
 	GenerationTime time.Time `json:"generation_time"`
-	Files          []string `json:"files"`
+	Files          []string  `json:"files"`
 }
 
 type ValidateResponse struct {
-	Valid          bool        `json:"valid"`
-	Status         string      `json:"status"`
-	FilesChecked  int32       `json:"files_checked"`
-	Errors         []ValidationError `json:"errors"`
+	Valid          bool                `json:"valid"`
+	Status         string              `json:"status"`
+	FilesChecked   int32               `json:"files_checked"`
+	Errors         []ValidationError   `json:"errors"`
 	Warnings       []ValidationWarning `json:"warnings"`
-	ValidationTime time.Time   `json:"validation_time"`
+	ValidationTime time.Time           `json:"validation_time"`
 }
 
 type ValidationError struct {

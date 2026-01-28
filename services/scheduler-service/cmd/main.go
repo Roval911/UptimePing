@@ -17,8 +17,8 @@ import (
 )
 
 func main() {
-	// Инициализация конфигурации через pkg/config
-	cfg, err := config.LoadConfig("config/config.yaml")
+	// Инициализация конфигурации - единая схема для всех сервисов
+	cfg, err := config.LoadConfig("")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -54,8 +54,13 @@ func main() {
 		logger.Int("rate_limit_burst_size", cfg.RateLimiting.BurstSize),
 	)
 
-	// Инициализация метрик
-	metricsInstance := metrics.NewMetrics("scheduler-service")
+	// Инициализация метрик с конфигурацией
+	var metricsInstance *metrics.Metrics
+	if cfg.Metrics.Enabled {
+		metricsInstance = metrics.NewMetricsFromConfig("scheduler-service", &cfg.Metrics)
+	} else {
+		metricsInstance = metrics.NewMetrics("scheduler-service")
+	}
 
 	// Инициализация health checker
 	healthChecker := health.NewSimpleHealthChecker("1.0.0")
@@ -69,7 +74,9 @@ func main() {
 	http.HandleFunc("/health", health.Handler(healthChecker))
 	http.HandleFunc("/ready", health.ReadyHandler(healthChecker))
 	http.HandleFunc("/live", health.LiveHandler())
-	http.Handle("/metrics", metricsInstance.GetHandler())
+	
+	metricsPath := metricsInstance.GetMetricsPath(&cfg.Metrics)
+	http.Handle(metricsPath, metricsInstance.GetHandler())
 
 	// API роуты для демонстрации
 	http.HandleFunc("/api/v1/status", func(w http.ResponseWriter, r *http.Request) {

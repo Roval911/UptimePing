@@ -10,7 +10,7 @@ import (
 
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
-	schedulerv1 "UptimePingPlatform/gen/go/proto/api/scheduler/v1"
+	schedulerv1 "UptimePingPlatform/gen/proto/api/scheduler/v1"
 )
 
 // SchedulerClient gRPC клиент для SchedulerService

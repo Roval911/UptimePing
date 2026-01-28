@@ -52,6 +52,87 @@ type TaskMessage struct {
 	Metadata     map[string]interface{} `json:"metadata,omitempty"`
 }
 
+// ExecuteCheck выполняет проверку (публичный метод для gRPC)
+func (cs *CheckService) ExecuteCheck(ctx context.Context, task *domain.Task) (*domain.CheckResult, error) {
+	cs.logger.Info("Executing check via gRPC",
+		logger.String("check_id", task.CheckID),
+		logger.String("type", task.Type),
+	)
+
+	// Получаем checker для типа задачи
+	taskType := domain.TaskType(task.Type)
+	checker, err := cs.checkerFactory.CreateChecker(taskType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create checker for type %s: %w", task.Type, err)
+	}
+
+	// Выполняем проверку
+	result, err := cs.executeCheck(ctx, checker, task, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute check: %w", err)
+	}
+
+	return result, nil
+}
+
+// GetCheckStatus получает статус проверки
+func (cs *CheckService) GetCheckStatus(ctx context.Context, checkID string) (*CheckStatus, error) {
+	cs.logger.Info("Getting check status",
+		logger.String("check_id", checkID),
+	)
+
+	// Сначала пробуем получить из кеша
+	cachedResult, err := cs.GetCachedResult(ctx, checkID)
+	if err == nil && cachedResult != nil {
+		return &CheckStatus{
+			CheckID:        checkID,
+			IsHealthy:      cachedResult.Success,
+			ResponseTimeMs: cachedResult.DurationMs,
+			LastCheckedAt: cachedResult.CheckedAt.Format(time.RFC3339),
+		}, nil
+	}
+
+	// Если в кеше нет, получаем из БД
+	result, err := cs.repository.GetLatestByCheckID(ctx, checkID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get latest result: %w", err)
+	}
+
+	if result == nil {
+		return nil, fmt.Errorf("no results found for check ID: %s", checkID)
+	}
+
+	return &CheckStatus{
+		CheckID:        checkID,
+		IsHealthy:      result.Success,
+		ResponseTimeMs: result.DurationMs,
+		LastCheckedAt: result.CheckedAt.Format(time.RFC3339),
+	}, nil
+}
+
+// GetCheckHistory получает историю проверок
+func (cs *CheckService) GetCheckHistory(ctx context.Context, checkID string, limit int, startTime, endTime *time.Time) ([]*domain.CheckResult, error) {
+	cs.logger.Info("Getting check history",
+		logger.String("check_id", checkID),
+		logger.Int("limit", limit),
+	)
+
+	results, err := cs.repository.GetByCheckID(ctx, checkID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get check history: %w", err)
+	}
+
+	return results, nil
+}
+
+// CheckStatus представляет статус проверки
+type CheckStatus struct {
+	CheckID        string `json:"check_id"`
+	IsHealthy      bool   `json:"is_healthy"`
+	ResponseTimeMs int64  `json:"response_time_ms"`
+	LastCheckedAt string `json:"last_checked_at"`
+}
+
 // ProcessTask обрабатывает задачу проверки
 func (cs *CheckService) ProcessTask(ctx context.Context, message []byte) error {
 	cs.logger.Info("Starting task processing",

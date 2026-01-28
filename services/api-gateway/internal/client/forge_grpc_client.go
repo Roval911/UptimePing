@@ -10,7 +10,7 @@ import (
 
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
-	forgev1 "UptimePingPlatform/gen/go/proto/api/forge/v1"
+	forgev1 "UptimePingPlatform/gen/proto/api/forge/v1"
 )
 
 // GRPCForgeClient gRPC клиент для ForgeService

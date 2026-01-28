@@ -57,7 +57,7 @@ func init() {
 
 func handleCompletion(cmd *cobra.Command, args []string) error {
 	shell := args[0]
-	
+
 	switch shell {
 	case "bash":
 		return rootCmd.GenBashCompletion(os.Stdout)

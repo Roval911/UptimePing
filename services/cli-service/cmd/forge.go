@@ -176,15 +176,15 @@ func handleForgeValidate(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	req := &struct {
-		Input    string `json:"input"`
+		Input     string `json:"input"`
 		ProtoPath string `json:"proto_path"`
-		Lint     bool   `json:"lint"`
-		Breaking bool   `json:"breaking"`
+		Lint      bool   `json:"lint"`
+		Breaking  bool   `json:"breaking"`
 	}{
-		Input:    input,
+		Input:     input,
 		ProtoPath: protoPath,
-		Lint:     lint,
-		Breaking: breaking,
+		Lint:      lint,
+		Breaking:  breaking,
 	}
 
 	resp, err := client.Validate(ctx, req)
@@ -239,18 +239,18 @@ func isDirectory(path string) (bool, error) {
 // Helper function to get all proto files in directory
 func getProtoFiles(dir string) ([]string, error) {
 	var files []string
-	
+
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		
+
 		if !info.IsDir() && filepath.Ext(path) == ".proto" {
 			files = append(files, path)
 		}
-		
+
 		return nil
 	})
-	
+
 	return files, err
 }

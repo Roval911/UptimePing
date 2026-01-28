@@ -24,12 +24,12 @@ import (
 	incidentProducer "UptimePingPlatform/services/incident-manager/internal/producer/rabbitmq"
 	"UptimePingPlatform/services/incident-manager/internal/service"
 
-	pb "UptimePingPlatform/gen/go/proto/api/incident/v1"
+	incidentv1 "UptimePingPlatform/gen/proto/api/incident/v1"
 )
 
 func main() {
-	// Инициализация конфигурации
-	cfg, err := config.LoadConfig("config/config.yaml")
+	// Инициализация конфигурации - единая схема для всех сервисов
+	cfg, err := config.LoadConfig("")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -84,26 +84,46 @@ func main() {
 	incidentHandler := grpcHandler.NewIncidentHandler(incidentService, appLogger)
 
 	// Создание gRPC сервера
+	grpcPort := cfg.GRPC.Port
+	if grpcPort == 0 {
+		grpcPort = 50056 // По умолчанию для Incident Manager
+	}
+
+	grpcAddr := fmt.Sprintf(":%d", grpcPort)
+	lis, err := net.Listen("tcp", grpcAddr)
+	if err != nil {
+		appLogger.Error("Failed to listen on gRPC port", 
+			logger.Int("port", grpcPort), 
+			logger.Error(err))
+		os.Exit(1)
+	}
+
+	appLogger.Info("Starting gRPC server", logger.String("addr", grpcAddr))
+
+	// Создаем gRPC сервер
 	grpcServer := grpc.NewServer()
 
 	// Регистрация сервисов
-	pb.RegisterIncidentServiceServer(grpcServer, incidentHandler)
+	incidentv1.RegisterIncidentServiceServer(grpcServer, incidentHandler)
 
 	// Включаем reflection для разработки
 	reflection.Register(grpcServer)
 
-	// Запуск gRPC сервера
-	listenAddr := fmt.Sprintf(":%d", cfg.Server.Port)
-	lis, err := net.Listen("tcp", listenAddr)
-	if err != nil {
-		appLogger.Error("Failed to listen", logger.Error(err))
-		os.Exit(1)
+	// Запускаем gRPC сервер в горутине
+	go func() {
+		appLogger.Info("Starting gRPC server", logger.String("address", grpcAddr))
+		if err := grpcServer.Serve(lis); err != nil {
+			appLogger.Error("gRPC server failed", logger.Error(err))
+		}
+	}()
+
+	// Создаем метрики с конфигурацией
+	var metricsInstance *metrics.Metrics
+	if cfg.Metrics.Enabled {
+		metricsInstance = metrics.NewMetricsFromConfig("incident-manager", &cfg.Metrics)
+	} else {
+		metricsInstance = metrics.NewMetrics("incident-manager")
 	}
-
-	appLogger.Info("Starting gRPC server", logger.String("addr", listenAddr))
-
-	// Создаем метрики
-	metricsInstance := metrics.NewMetrics("incident-manager")
 	appLogger.Info("Metrics initialized")
 
 	// Создаем health checker
@@ -119,62 +139,34 @@ func main() {
 	mux.HandleFunc("/health", health.Handler(healthChecker))
 	mux.HandleFunc("/ready", health.ReadyHandler(healthChecker))
 	mux.HandleFunc("/live", health.LiveHandler())
-	mux.Handle("/metrics", metricsInstance.GetHandler())
+	
+	metricsPath := metricsInstance.GetMetricsPath(&cfg.Metrics)
+	mux.Handle(metricsPath, metricsInstance.GetHandler())
 
 	httpServer.Handler = metricsInstance.Middleware(mux)
 
-	// Graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Канал для сигналов ОС
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	// Запуск сервера в горутине
-	go func() {
-		if err := grpcServer.Serve(lis); err != nil {
-			appLogger.Error("gRPC server failed", logger.Error(err))
-			cancel()
-		}
-	}()
-
-	// Запуск HTTP сервера для метрик в горутине
-	go func() {
-		appLogger.Info("Starting HTTP server for metrics",
-			logger.String("address", httpServer.Addr))
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			appLogger.Error("HTTP server failed", logger.Error(err))
-			cancel()
-		}
-	}()
-
 	appLogger.Info("Incident Manager started successfully",
-		logger.String("grpc_address", listenAddr),
+		logger.String("grpc_address", grpcAddr),
 		logger.String("http_address", httpServer.Addr),
 		logger.String("metrics", "http://"+httpServer.Addr+"/metrics"),
 		logger.String("health", "http://"+httpServer.Addr+"/health"))
+	appLogger.Info("Waiting for signals...")
 
-	// Ожидание сигнала
-	select {
-	case sig := <-sigChan:
-		appLogger.Info("Received shutdown signal", logger.String("signal", sig.String()))
-	case <-ctx.Done():
-		appLogger.Error("Context cancelled, shutting down")
-		os.Exit(1)
-	}
+	// Ожидание сигнала для graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	<-sigChan
+	appLogger.Info("Shutdown signal received")
 
 	// Graceful shutdown
-	appLogger.Info("Shutting down servers...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	defer shutdownCtx.Done()
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer shutdownCancel()
-
-	done := make(chan struct{})
-	go func() {
-		grpcServer.GracefulStop()
-		close(done)
-	}()
+	// Останавливаем gRPC сервер
+	appLogger.Info("Stopping gRPC server")
+	grpcServer.GracefulStop()
 
 	// Останавливаем HTTP сервер
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
@@ -182,13 +174,5 @@ func main() {
 		httpServer.Close()
 	}
 
-	select {
-	case <-done:
-		appLogger.Info("gRPC server stopped gracefully")
-	case <-shutdownCtx.Done():
-		appLogger.Warn("Shutdown timeout, forcing server stop")
-		grpcServer.Stop()
-	}
-
-	appLogger.Info("Incident Manager service stopped")
+	appLogger.Info("Incident Manager stopped successfully")
 }

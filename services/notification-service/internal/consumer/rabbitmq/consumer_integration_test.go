@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/services/notification-service/config"
 	"UptimePingPlatform/services/notification-service/internal/domain"
 	filter "UptimePingPlatform/services/notification-service/internal/filter"
 	grouper "UptimePingPlatform/services/notification-service/internal/grouper"
@@ -37,7 +38,10 @@ func TestNewNotificationConsumer(t *testing.T) {
 	// Создание mock компонентов
 	mockLogger := &MockLogger{}
 	mockFilter := filter.NewEventFilter(filter.DefaultFilterConfig(), mockLogger)
-	mockGrouper := grouper.NewNotificationGrouper(grouper.DefaultGrouperConfig(), mockLogger)
+	
+	// Создаем пустую конфигурацию получателей для теста
+	recipientsConfig := config.DefaultProvidersConfig()
+	mockGrouper := grouper.NewNotificationGrouper(grouper.DefaultGrouperConfig(), recipientsConfig, mockLogger)
 	
 	// Создание mock менеджера провайдеров
 	mockProviderManager := &MockProviderManager{}
@@ -114,7 +118,10 @@ func TestEventFilter(t *testing.T) {
 func TestNotificationGrouper(t *testing.T) {
 	mockLogger := &MockLogger{}
 	grouperConfig := grouper.DefaultGrouperConfig()
-	notificationGrouper := grouper.NewNotificationGrouper(grouperConfig, mockLogger)
+	
+	// Создаем пустую конфигурацию получателей для теста
+	recipientsConfig := config.DefaultProvidersConfig()
+	notificationGrouper := grouper.NewNotificationGrouper(grouperConfig, recipientsConfig, mockLogger)
 
 	// Тест группировки уведомлений
 	event := &domain.Event{

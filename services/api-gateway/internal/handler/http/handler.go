@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	forgev1 "UptimePingPlatform/gen/go/proto/api/forge/v1"
-	schedulerv1 "UptimePingPlatform/gen/go/proto/api/scheduler/v1"
+	forgev1 "UptimePingPlatform/gen/proto/api/forge/v1"
+	schedulerv1 "UptimePingPlatform/gen/proto/api/scheduler/v1"
 	pkgErrors "UptimePingPlatform/pkg/errors"
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"

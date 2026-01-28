@@ -1,0 +1,100 @@
+# Metrics Service Environment Configuration
+# Скопируйте в .env.development и настройте для вашего окружения
+
+# =============================================================================
+# ОБЩИЕ НАСТРОЙКИ
+# =============================================================================
+
+# Окружение: dev, staging, prod
+ENVIRONMENT=development
+
+# Настройки сервера
+SERVER_HOST=0.0.0.0
+SERVER_PORT=8084
+
+# Настройки логирования
+LOGGER_LEVEL=debug
+LOGGER_FORMAT=json
+
+# =============================================================================
+# gRPC НАСТРОЙКИ
+# =============================================================================
+
+GRPC_PORT=50053
+
+# =============================================================================
+# МЕТРИКИ И ТРАССИРОВКА
+# =============================================================================
+
+# Включение метрик
+METRICS_ENABLED=true
+METRICS_PORT=9094
+METRICS_PATH=/metrics
+
+# Настройки сбора метрик
+METRICS_SCRAPE_INTERVAL=15s
+METRICS_TIMEOUT=10s
+METRICS_RETRY_ATTEMPTS=3
+
+# Prometheus настройки
+METRICS_NAMESPACE=uptimeping
+METRICS_SUBSYSTEM=collector
+METRICS_BUCKETS=0.001,0.005,0.01,0.025,0.05,0.1,0.25,0.5,1,2.5,5,10
+
+# OpenTelemetry трассировка
+METRICS_TRACING_ENABLED=true
+METRICS_TRACER_NAME=metrics-service-tracer
+METRICS_SAMPLING_RATE=1.0
+METRICS_SERVICE_NAME=metrics-service
+METRICS_SERVICE_VERSION=1.0.0
+
+# Дополнительные метрики
+METRICS_ENABLE_CUSTOM=true
+METRICS_ENABLE_SYSTEM=true
+
+# =============================================================================
+# HEALTH CHECKS
+# =============================================================================
+
+HEALTH_ENABLED=true
+HEALTH_PORT=8095
+HEALTH_CHECK_INTERVAL=30s
+
+# =============================================================================
+# КОНФИГУРАЦИЯ СЕРВИСОВ ДЛЯ МОНИТОРИНГА
+# =============================================================================
+
+# Включение/выключение сервисов
+AUTH_SERVICE_ENABLED=true
+AUTH_SERVICE_ADDRESS=localhost:50051
+
+CORE_SERVICE_ENABLED=true
+CORE_SERVICE_ADDRESS=localhost:50052
+
+SCHEDULER_SERVICE_ENABLED=true
+SCHEDULER_SERVICE_ADDRESS=localhost:50053
+
+API_GATEWAY_ENABLED=true
+API_GATEWAY_ADDRESS=localhost:8080
+
+NOTIFICATION_SERVICE_ENABLED=true
+NOTIFICATION_SERVICE_ADDRESS=localhost:50054
+
+INCIDENT_MANAGER_ENABLED=true
+INCIDENT_MANAGER_ADDRESS=localhost:50055
+
+FORGE_SERVICE_ENABLED=true
+FORGE_SERVICE_ADDRESS=localhost:50056
+
+# =============================================================================
+# НАСТРОЙКИ СБОРА МЕТРИК
+# =============================================================================
+
+# Интервал сбора метрик с других сервисов
+METRICS_COLLECTION_INTERVAL=15s
+
+# Таймаут запросов к сервисам
+METRICS_REQUEST_TIMEOUT=5s
+
+# Количество попыток повтора
+METRICS_COLLECTION_RETRIES=3

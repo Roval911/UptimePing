@@ -24,8 +24,8 @@ import (
 )
 
 func main() {
-	// Инициализация конфигурации
-	cfg, err := config.LoadConfig("config/config.yaml")
+	// Инициализация конфигурации - единая схема для всех сервисов
+	cfg, err := config.LoadConfig("")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -77,8 +77,13 @@ func main() {
 	// Инициализация rate limiter
 	rateLimiter := ratelimit.NewRedisRateLimiter(redisClient.Client)
 
-	// Инициализация метрик
-	metricCollector := metrics.NewMetrics("api_gateway")
+	// Инициализация метрик с конфигурацией
+	var metricCollector *metrics.Metrics
+	if cfg.Metrics.Enabled {
+		metricCollector = metrics.NewMetricsFromConfig("api-gateway", &cfg.Metrics)
+	} else {
+		metricCollector = metrics.NewMetrics("api-gateway")
+	}
 
 	// Создаем реальный gRPC клиент для auth-service
 	authServiceAddr := os.Getenv("AUTH_SERVICE_ADDR")
@@ -134,7 +139,8 @@ func main() {
 
 	// Добавляем эндпоинт для метрик
 	metricsMux := http.NewServeMux()
-	metricsMux.Handle("/metrics", metricCollector.GetHandler())
+	metricsPath := metricCollector.GetMetricsPath(&cfg.Metrics)
+	metricsMux.Handle(metricsPath, metricCollector.GetHandler())
 	metricsMux.Handle("/", httpHandler)
 
 	server := &http.Server{
