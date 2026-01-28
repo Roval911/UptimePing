@@ -1,0 +1,48 @@
+server: 8080
+database:
+  host: localhost
+  port: 5432
+  name: uptimeping
+  user: uptimeping
+  password: uptimeping
+logger:
+  level: info
+  format: json
+environment: development
+
+# CLI specific configuration
+cli:
+  default_output: table
+  auto_complete: true
+  history_size: 1000
+
+# Services addresses
+services:
+  auth:
+    address: localhost:50051
+  core:
+    address: localhost:50052
+  scheduler:
+    address: localhost:50053
+  incident:
+    address: localhost:50054
+  notification:
+    address: localhost:50055
+  forge:
+    address: localhost:50056
+
+# Default timeouts (in seconds)
+timeouts:
+  auth: 30
+  core: 60
+  scheduler: 30
+  incident: 30
+  notification: 30
+  forge: 300
+
+# Retry configuration
+retry:
+  max_attempts: 3
+  initial_delay: 1
+  max_delay: 30
+  multiplier: 2.0
