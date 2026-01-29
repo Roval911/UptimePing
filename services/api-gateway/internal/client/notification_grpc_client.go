@@ -10,7 +10,7 @@ import (
 
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
-	notificationv1 "UptimePingPlatform/gen/proto/api/notification/v1"
+	notificationv1 "UptimePingPlatform/proto/api/notification/v1"
 )
 
 // NotificationClient gRPC клиент для NotificationService
@@ -35,7 +35,7 @@ func NewNotificationClient(address string, timeout time.Duration, logger logger.
 	})
 
 	// Устанавливаем соединение с gRPC сервером
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		baseHandler.LogError(ctx, err, "grpc_notification_client_connect_failed", "")
 		return nil, fmt.Errorf("failed to connect to notification service: %w", err)

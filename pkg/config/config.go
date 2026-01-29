@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -163,7 +164,7 @@ func LoadConfig(configFile string) (*Config, error) {
 		},
 		Environment: "dev",
 		Redis: RedisConfig{
-			Addr:          "localhost:6379",
+			Addr:          "redis:6379",
 			Password:      "",
 			DB:            0,
 			PoolSize:      10,
@@ -308,6 +309,11 @@ func LoadConfig(configFile string) (*Config, error) {
 
 	// Load from file if specified and exists
 	if configFile != "" {
+		// If configFile is just "dev", "staging", or "prod", add .yaml extension
+		if !strings.HasSuffix(configFile, ".yaml") && !strings.HasSuffix(configFile, ".json") {
+			configFile = configFile + ".yaml"
+		}
+		
 		if err := loadConfigFromFile(config, configFile); err != nil {
 			// If file doesn't exist, continue with defaults
 			if !os.IsNotExist(err) {
@@ -333,6 +339,11 @@ func LoadConfig(configFile string) (*Config, error) {
 func loadConfigFromFile(config *Config, filename string) error {
 	// Expand environment variables in the file path
 	filename = os.ExpandEnv(filename)
+	
+	// If filename doesn't contain a path, look in config/ directory
+	if !strings.Contains(filename, "/") {
+		filename = "config/" + filename
+	}
 
 	// Check if file exists
 	if _, err := os.Stat(filename); os.IsNotExist(err) {
@@ -729,4 +740,180 @@ type SchedulerConfig struct {
 	TaskTimeout        time.Duration `json:"task_timeout" yaml:"task_timeout"`
 	CleanupInterval    time.Duration `json:"cleanup_interval" yaml:"cleanup_interval"`
 	LockTimeout        time.Duration `json:"lock_timeout" yaml:"lock_timeout"`
+}
+
+// GetServicePath автоматически определяет путь к сервису
+func GetServicePath() string {
+	// Получаем текущую рабочую директорию
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	
+	// Если мы в директории cmd, поднимаемся на уровень
+	if filepath.Base(filepath.Dir(wd)) == "cmd" {
+		servicePath := filepath.Dir(filepath.Dir(wd))
+		// Проверяем что это действительно сервис
+		if filepath.Base(servicePath) != "services" {
+			servicePath = filepath.Join(servicePath, "services")
+		}
+		return servicePath
+	}
+	
+	// Если мы в директории сервиса
+	if filepath.Base(wd) == "services" {
+		return wd
+	}
+	
+	// Если мы в директории конкретного сервиса
+	if filepath.HasPrefix(wd, "services/") {
+		return wd
+	}
+	
+	// Если мы в корне проекта, проверяем подкаталоги
+	if filepath.Base(wd) == "UptimePingPlatform" {
+		// Возвращаем пустую строку, так как нужно искать в services/
+		return ""
+	}
+	
+	// Проверяем стек вызовов как запасной вариант
+	const depth = 10
+	for i := 1; i <= depth; i++ {
+		_, filename, _, ok := runtime.Caller(i)
+		if !ok {
+			continue
+		}
+		
+		// Получаем директорию
+		dir := filepath.Dir(filename)
+		
+		// Если мы в директории cmd, поднимаемся на уровень до сервиса
+		if filepath.Base(dir) == "cmd" {
+			servicePath := filepath.Dir(dir)
+			// Проверяем что это действительно сервис
+			if filepath.HasPrefix(servicePath, "services/") {
+				return servicePath
+			}
+		}
+		
+		// Если мы в директории сервиса
+		if filepath.HasPrefix(dir, "services/") {
+			return dir
+		}
+	}
+	
+	return ""
+}
+
+// LoadConfigWithAutoPath загружает конфигурацию с автоматическим определением пути
+func LoadConfigWithAutoPath(env string) (*Config, error) {
+	// Пробуем несколько стратегий поиска конфигурации
+	
+	// Стратегия 1: Используем рабочую директорию
+	wd, err := os.Getwd()
+	if err == nil {
+		// Если мы в директории cmd, поднимаемся на уровень
+		if filepath.Base(filepath.Dir(wd)) == "cmd" {
+			servicePath := filepath.Dir(filepath.Dir(wd))
+			configPath := filepath.Join(servicePath, "config", env+".yaml")
+			if _, err := os.Stat(configPath); err == nil {
+				fmt.Printf("DEBUG: Using config file (strategy 1): %s\n", configPath)
+				return loadConfigFromPath(configPath)
+			}
+		}
+		
+		// Если мы в директории сервиса
+		if filepath.Base(wd) != "cmd" && filepath.Base(wd) != "pkg" {
+			configPath := filepath.Join(wd, "config", env+".yaml")
+			if _, err := os.Stat(configPath); err == nil {
+				fmt.Printf("DEBUG: Using config file (strategy 2): %s\n", configPath)
+				return loadConfigFromPath(configPath)
+			}
+		}
+	}
+	
+	// Стратегия 2: Ищем в services/
+	serviceName := getServiceNameFromCaller()
+	if serviceName != "" {
+		configPath := filepath.Join("services", serviceName, "config", env+".yaml")
+		if _, err := os.Stat(configPath); err == nil {
+			fmt.Printf("DEBUG: Using config file (strategy 3): %s\n", configPath)
+			return loadConfigFromPath(configPath)
+		}
+	}
+	
+	// Стратегия 3: Пробуем все возможные сервисы
+	services := []string{"auth-service", "scheduler-service", "api-gateway", "core-service", "forge-service", "metrics-service", "notification-service", "incident-manager"}
+	for _, service := range services {
+		configPath := filepath.Join("services", service, "config", env+".yaml")
+		if _, err := os.Stat(configPath); err == nil {
+			fmt.Printf("DEBUG: Using config file (strategy 4): %s\n", configPath)
+			return loadConfigFromPath(configPath)
+		}
+	}
+	
+	return nil, fmt.Errorf("config file not found in any known location")
+}
+
+// getServiceNameFromCaller определяет имя сервиса из стека вызовов
+func getServiceNameFromCaller() string {
+	const depth = 10
+	for i := 1; i <= depth; i++ {
+		_, filename, _, ok := runtime.Caller(i)
+		if !ok {
+			continue
+		}
+		
+		// Ищем services/имя-сервиса/cmd/main.go
+		parts := strings.Split(filename, string(filepath.Separator))
+		for j, part := range parts {
+			if part == "services" && j+2 < len(parts) {
+				serviceName := parts[j+1]
+				if strings.HasSuffix(serviceName, "-service") {
+					return serviceName
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// loadConfigFromPath загружает конфигурацию из указанного пути
+func loadConfigFromPath(configPath string) (*Config, error) {
+	// Инициализируем конфигурацию с значениями по умолчанию
+	config := &Config{
+		Server: ServerConfig{
+			Host: "0.0.0.0",
+			Port: 8080,
+		},
+		Database: DatabaseConfig{
+			Host:     "localhost",
+			Port:     5432,
+			Name:     "uptimeping",
+			User:     "uptimeping",
+			Password: "uptimeping123",
+		},
+		Logger: LoggerConfig{
+			Level:  "info",
+			Format: "json",
+		},
+		Environment: "dev",
+	}
+	
+	// Загружаем из файла
+	if err := loadConfigFromFile(config, configPath); err != nil {
+		return nil, err
+	}
+	
+	// Загружаем из переменных окружения
+	if err := loadConfigFromEnv(config); err != nil {
+		return nil, err
+	}
+	
+	// Валидируем конфигурацию
+	if err := validateConfig(config); err != nil {
+		return nil, err
+	}
+	
+	return config, nil
 }

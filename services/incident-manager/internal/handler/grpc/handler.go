@@ -14,7 +14,7 @@ import (
 	"UptimePingPlatform/services/incident-manager/internal/domain"
 	"UptimePingPlatform/services/incident-manager/internal/service"
 
-	incidentv1 "UptimePingPlatform/gen/proto/api/incident/v1"
+	incidentv1 "UptimePingPlatform/proto/api/incident/v1"
 )
 
 // IncidentHandler реализует gRPC handler для управления инцидентами

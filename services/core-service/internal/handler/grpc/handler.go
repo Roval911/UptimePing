@@ -14,7 +14,7 @@ import (
 	"UptimePingPlatform/services/core-service/internal/domain"
 	"UptimePingPlatform/services/core-service/internal/service"
 
-	corev1 "UptimePingPlatform/gen/proto/api/core/v1"
+	corev1 "UptimePingPlatform/proto/api/core/v1"
 )
 
 // CoreHandler реализует gRPC обработчики для CoreService

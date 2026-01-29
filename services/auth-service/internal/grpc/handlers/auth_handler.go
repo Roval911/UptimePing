@@ -11,7 +11,7 @@ import (
 	"UptimePingPlatform/services/auth-service/internal/service"
 	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
 
-	grpc_auth "UptimePingPlatform/gen/proto/api/auth/v1"
+	grpc_auth "UptimePingPlatform/proto/api/auth/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

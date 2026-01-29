@@ -8,7 +8,7 @@ import (
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/core-service/internal/client"
 	"UptimePingPlatform/services/core-service/internal/domain"
-	incidentv1 "UptimePingPlatform/gen/proto/api/incident/v1"
+	incidentv1 "UptimePingPlatform/proto/api/incident/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

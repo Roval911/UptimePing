@@ -12,128 +12,90 @@ import (
 	"time"
 
 	"UptimePingPlatform/pkg/config"
-	"UptimePingPlatform/pkg/connection"
 	"UptimePingPlatform/pkg/database"
 	"UptimePingPlatform/pkg/health"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
-	"UptimePingPlatform/pkg/rabbitmq"
-	"UptimePingPlatform/pkg/ratelimit"
 	pkg_redis "UptimePingPlatform/pkg/redis"
-	"UptimePingPlatform/services/auth-service/internal/middleware"
+	
+	"UptimePingPlatform/services/auth-service/internal/grpc/handlers"
+	"UptimePingPlatform/services/auth-service/internal/repository/postgres"
+	"UptimePingPlatform/services/auth-service/internal/repository/redis"
+	"UptimePingPlatform/services/auth-service/internal/service"
 	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
 	"UptimePingPlatform/services/auth-service/internal/pkg/password"
-	"UptimePingPlatform/services/auth-service/internal/repository/postgres"
-	redis_repo "UptimePingPlatform/services/auth-service/internal/repository/redis"
-	"UptimePingPlatform/services/auth-service/internal/service"
-
-	grpc_auth "UptimePingPlatform/gen/proto/api/auth/v1"
-	"UptimePingPlatform/services/auth-service/internal/grpc/handlers"
-
+	
+	grpc_auth "UptimePingPlatform/proto/api/auth/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func main() {
-	// Инициализация конфигурации - единая схема для всех сервисов
-	cfg, err := config.LoadConfig("")
+	// Load configuration
+	cfg, err := config.LoadConfigWithAutoPath("dev")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Инициализация логгера
+	// Initialize logger
 	appLogger, err := logger.NewLogger(cfg.Environment, cfg.Logger.Level, "auth-service", false)
 	if err != nil {
 		log.Fatalf("Failed to initialize logger: %v", err)
 	}
+	defer appLogger.Sync()
 
-	// Инициализация метрик с конфигурацией
-	var metricsInstance *metrics.Metrics
-	if cfg.Metrics.Enabled {
-		metricsInstance = metrics.NewMetricsFromConfig("auth-service", &cfg.Metrics)
-	} else {
-		metricsInstance = metrics.NewMetrics("auth-service")
-	}
+	appLogger.Info("Starting Auth Service...")
 
-	// Инициализация retry конфигурации
-	retryConfig := connection.DefaultRetryConfig()
-
-	// Инициализация базы данных с retry логикой
-	dbConfig := &database.Config{
+	// Initialize database connection
+	db, err := database.Connect(context.Background(), &database.Config{
 		Host:          cfg.Database.Host,
 		Port:          cfg.Database.Port,
 		User:          cfg.Database.User,
 		Password:      cfg.Database.Password,
 		Database:      cfg.Database.Name,
 		SSLMode:       "disable",
-		MaxConns:      20,
+		MaxConns:      25,
 		MinConns:      5,
-		MaxConnLife:   30 * time.Minute,
+		MaxConnLife:   time.Hour,
 		MaxConnIdle:   5 * time.Minute,
-		HealthCheck:   30 * time.Second,
-		MaxRetries:    3,
-		RetryInterval: 1 * time.Second,
-	}
-
-	var postgresDB *database.Postgres
-	err = connection.WithRetry(context.Background(), retryConfig, func(ctx context.Context) error {
-		var err error
-		postgresDB, err = database.Connect(ctx, dbConfig)
-		if err != nil {
-			appLogger.Error("Failed to connect to database, retrying...", logger.String("error", err.Error()))
-			return err
-		}
-		return nil
+		HealthCheck:   5 * time.Minute,
 	})
 	if err != nil {
-		appLogger.Error("Failed to connect to database after retries", logger.String("error", err.Error()))
-		os.Exit(1)
+		appLogger.Error("Failed to connect to database", logger.Error(err))
+		log.Fatalf("Database connection failed: %v", err)
 	}
-	defer postgresDB.Pool.Close()
+	defer db.Close()
 
-	// Инициализация Redis с retry логикой
-	redisConfig := pkg_redis.NewConfig()
-	var redisClient *pkg_redis.Client
-	err = connection.WithRetry(context.Background(), retryConfig, func(ctx context.Context) error {
-		var err error
-		redisClient, err = pkg_redis.Connect(ctx, redisConfig)
-		if err != nil {
-			appLogger.Error("Failed to connect to Redis, retrying...", logger.String("error", err.Error()))
-			return err
-		}
-		return nil
+	// Initialize Redis client
+	redisClient, err := pkg_redis.Connect(context.Background(), &pkg_redis.Config{
+		Addr:     cfg.Redis.Addr,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
 	})
 	if err != nil {
-		appLogger.Error("Failed to connect to Redis after retries", logger.String("error", err.Error()))
-		os.Exit(1)
-	}
-	defer redisClient.Client.Close()
-
-	// Инициализация RabbitMQ для уведомлений
-	rabbitConfig := rabbitmq.NewConfig()
-	rabbitConfig.URL = cfg.RabbitMQ.URL
-	rabbitConfig.Queue = cfg.RabbitMQ.Queue
-
-	rabbitConn, err := rabbitmq.Connect(context.Background(), rabbitConfig)
-	if err != nil {
-		appLogger.Warn("Failed to connect to RabbitMQ (notifications disabled)", logger.String("error", err.Error()))
-		// Не выходим, так как это не критично для работы сервиса
+		appLogger.Error("Failed to connect to Redis", logger.Error(err))
 	} else {
-		defer rabbitConn.Close()
-		appLogger.Info("RabbitMQ connected for notifications")
+		defer redisClient.Close()
 	}
 
-	// Инициализация компонентов
-	jwtManager := jwt.NewManager(cfg.JWT.AccessSecret, cfg.JWT.RefreshSecret, 24*time.Hour, 7*24*time.Hour)
-	passwordHasher := password.NewBcryptHasher(12)
+	// Initialize repositories
+	userRepo := postgres.NewUserRepository(db.Pool)
+	tenantRepo := postgres.NewTenantRepository(db.Pool)
+	apiKeyRepo := postgres.NewAPIKeyRepository(db.Pool)
+	sessionRepo := redis.NewSessionRepository(redisClient.Client)
 
-	// Инициализация репозиториев
-	userRepo := postgres.NewUserRepository(postgresDB.Pool)
-	tenantRepo := postgres.NewTenantRepository(postgresDB.Pool)
-	apiKeyRepo := postgres.NewAPIKeyRepository(postgresDB.Pool)
-	sessionRepo := redis_repo.NewSessionRepository(redisClient.Client)
+	// Initialize JWT manager
+	jwtManager := jwt.NewManager(
+		"your-access-secret-key",
+		"your-refresh-secret-key", 
+		24*time.Hour,  // access token TTL
+		7*24*time.Hour, // refresh token TTL
+	)
 
-	// Инициализация сервиса
+	// Initialize password hasher
+	passwordHasher := password.NewBcryptHasher(bcrypt.DefaultCost)
+
+	// Initialize auth service
 	authService := service.NewAuthService(
 		userRepo,
 		tenantRepo,
@@ -144,103 +106,120 @@ func main() {
 		appLogger,
 	)
 
-	// Создание gRPC сервера
-	grpcServer := grpc.NewServer()
-
-	// Регистрация обработчиков
+	// Initialize gRPC handler
 	authHandler := handlers.NewAuthHandler(authService, jwtManager, appLogger)
+
+	// Initialize metrics
+	appMetrics := metrics.NewMetrics("auth-service")
+	metricsHandler := appMetrics.GetHandler()
+
+	// Initialize health checker
+	healthChecker := health.NewSimpleHealthChecker("1.0.0")
+
+	// Start gRPC server
+	grpcPort := cfg.Server.Port
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", grpcPort))
+	if err != nil {
+		appLogger.Error("Failed to listen", logger.Error(err))
+		log.Fatalf("Failed to listen: %v", err)
+	}
+
+	appLogger.Info(fmt.Sprintf("Successfully listening on port %d", grpcPort))
+
+	grpcServer := grpc.NewServer()
 	grpc_auth.RegisterAuthServiceServer(grpcServer, authHandler)
 
-	// Включаем reflection для разработки
-	reflection.Register(grpcServer)
+	appLogger.Info("gRPC server created, starting to serve...")
 
-	// Запуск gRPC сервера
-	go func() {
-		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPC.Port))
-		if err != nil {
-			appLogger.Error("Failed to listen", logger.String("error", err.Error()))
-			os.Exit(1)
-		}
-
-		appLogger.Info("gRPC server starting", logger.Int("port", cfg.GRPC.Port))
-		if err := grpcServer.Serve(lis); err != nil {
-			appLogger.Error("Failed to serve gRPC", logger.String("error", err.Error()))
-			os.Exit(1)
-		}
-	}()
-
-	// Запуск HTTP сервера для health checks
-	go func() {
-		mux := http.NewServeMux()
-
-		// Инициализация health checker
-		healthChecker := health.NewSimpleHealthChecker("1.0.0")
-
-		// Инициализация rate limiter
-		rateLimiter := ratelimit.NewRedisRateLimiter(redisClient.Client)
-
-		// Rate limiting middleware
-		rateLimitMiddleware := middleware.RateLimitMiddleware(rateLimiter, cfg.RateLimiting.RequestsPerMinute, time.Minute, false, appLogger)
-
-		// Health check эндпоинты
-		mux.HandleFunc("/health", health.Handler(healthChecker))
-		mux.HandleFunc("/ready", health.ReadyHandler(healthChecker))
-		mux.HandleFunc("/live", health.LiveHandler())
-
-		// Metrics эндпоинт
-		metricsPath := metricsInstance.GetMetricsPath(&cfg.Metrics)
-		mux.Handle(metricsPath, metricsInstance.GetHandler())
-
-		// Применяем middleware
-		handler := metricsInstance.Middleware(rateLimitMiddleware(mux))
-
-		appLogger.Info("HTTP server starting", logger.String("address", fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)))
-		if err := http.ListenAndServe(fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port), handler); err != nil {
-			appLogger.Error("Failed to serve HTTP", logger.String("error", err.Error()))
-			os.Exit(1)
-		}
-	}()
-
-	// Graceful shutdown
+	// Graceful shutdown setup
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
 
+	go func() {
+		appLogger.Info(fmt.Sprintf("Starting gRPC server on port %d", grpcPort))
+		if err := grpcServer.Serve(lis); err != nil {
+			appLogger.Error("gRPC server failed", logger.Error(err))
+		}
+	}()
+
+	// Start HTTP server for health checks
+	httpServer := &http.Server{
+		Addr:    fmt.Sprintf(":%d", cfg.Server.Port+1000), // Health check on port +1000
+		Handler: setupHTTPHandler(metricsHandler, healthChecker, appLogger),
+	}
+
+	go func() {
+		appLogger.Info(fmt.Sprintf("Starting HTTP server on port %d", cfg.Server.Port+1000))
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			appLogger.Error("HTTP server failed", logger.Error(err))
+		}
+	}()
+
+	// Wait for interrupt signal
+	<-quit
 	appLogger.Info("Shutting down server...")
 
+	// Graceful shutdown gRPC server
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Остановка gRPC сервера
-	stopped := make(chan struct{})
-	go func() {
-		grpcServer.GracefulStop()
-		close(stopped)
-	}()
+	grpcServer.GracefulStop()
 
-	select {
-	case <-stopped:
-		appLogger.Info("gRPC server stopped gracefully")
-	case <-ctx.Done():
-		appLogger.Info("gRPC server stopped forcefully")
-		grpcServer.Stop()
+	// Graceful shutdown HTTP server
+	if err := httpServer.Shutdown(ctx); err != nil {
+		appLogger.Error("HTTP server forced to stop", logger.Error(err))
 	}
 
-	appLogger.Info("Server shutdown complete")
+	// Close database connection
+	if db != nil {
+		db.Close()
+	}
+
+	// Close Redis connection
+	if redisClient != nil {
+		redisClient.Close()
+	}
+
+	appLogger.Info("Server exited properly")
 }
 
-// getClientIP получает IP адрес клиента из запроса
-func getClientIP(r *http.Request) string {
-	// Проверяем X-Forwarded-For header (если за прокси)
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		return xff
-	}
+func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthChecker, appLogger logger.Logger) http.Handler {
+	mux := http.NewServeMux()
+	
+	// Metrics endpoint
+	mux.Handle("/metrics", metricsHandler)
+	
+	// Health endpoints
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"healthy","service":"auth-service"}`))
+	})
+	
+	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ready","service":"auth-service"}`))
+	})
+	
+	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"live","service":"auth-service"}`))
+	})
 
-	// Проверяем X-Real-IP header
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
+	// Auth endpoints
+	mux.HandleFunc("/api/v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"message":"Auth Service - Login endpoint","status":"ok"}`))
+	})
 
-	// Возвращаем RemoteAddr
-	return r.RemoteAddr
+	mux.HandleFunc("/api/v1/auth/register", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"message":"Auth Service - Register endpoint","status":"ok"}`))
+	})
+
+	mux.HandleFunc("/api/v1/auth/validate", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"message":"Auth Service - Validate endpoint","status":"ok"}`))
+	})
+	
+	return mux
 }

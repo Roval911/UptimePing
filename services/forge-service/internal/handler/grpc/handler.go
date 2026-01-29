@@ -9,7 +9,7 @@ import (
 	"UptimePingPlatform/pkg/validation"
 	"UptimePingPlatform/services/forge-service/internal/service"
 
-	forgev1 "UptimePingPlatform/gen/proto/api/forge/v1"
+	forgev1 "UptimePingPlatform/proto/api/forge/v1"
 )
 
 // ForgeHandler реализует gRPC обработчики для ForgeService

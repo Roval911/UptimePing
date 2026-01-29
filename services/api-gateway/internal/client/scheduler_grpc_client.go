@@ -10,7 +10,7 @@ import (
 
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
-	schedulerv1 "UptimePingPlatform/gen/proto/api/scheduler/v1"
+	schedulerv1 "UptimePingPlatform/proto/api/scheduler/v1"
 )
 
 // SchedulerClient gRPC клиент для SchedulerService
@@ -35,7 +35,7 @@ func NewSchedulerClient(address string, timeout time.Duration, logger logger.Log
 	})
 
 	// Устанавливаем соединение с gRPC сервером
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		baseHandler.LogError(ctx, err, "grpc_scheduler_client_connect_failed", "")
 		return nil, fmt.Errorf("failed to connect to scheduler service: %w", err)

@@ -1,25 +1,28 @@
 package http
 
 import (
+	forgev1 "UptimePingPlatform/proto/api/forge/v1"
+	incidentv1 "UptimePingPlatform/proto/api/incident/v1"
+	metricsv1 "UptimePingPlatform/proto/api/metrics/v1"
+	notificationv1 "UptimePingPlatform/proto/api/notification/v1"
+	schedulerv1 "UptimePingPlatform/proto/api/scheduler/v1"
+	corev1 "UptimePingPlatform/proto/api/core/v1"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	corev1 "UptimePingPlatform/gen/proto/api/core/v1"
-	forgev1 "UptimePingPlatform/gen/proto/api/forge/v1"
-	incidentv1 "UptimePingPlatform/gen/proto/api/incident/v1"
-	metricsv1 "UptimePingPlatform/gen/proto/api/metrics/v1"
-	notificationv1 "UptimePingPlatform/gen/proto/api/notification/v1"
-	schedulerv1 "UptimePingPlatform/gen/proto/api/scheduler/v1"
 	pkgErrors "UptimePingPlatform/pkg/errors"
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/config"
 	"UptimePingPlatform/pkg/validation"
+	
+	"UptimePingPlatform/services/api-gateway/internal/client"
 )
 
 // ForgeServiceClient интерфейс для Forge Service клиента
@@ -87,27 +90,18 @@ type CoreServiceClient interface {
 // Handler структура для управления HTTP обработчиками
 type Handler struct {
 	mux                   *http.ServeMux
-	authService           AuthService
+	authService           *client.GRPCAuthClient
 	healthHandler         HealthHandler
-	schedulerClient       SchedulerServiceClient
-	coreClient            CoreServiceClient
-	metricsClient         MetricsServiceClient
-	incidentClient        IncidentServiceClient
-	notificationClient    NotificationServiceClient
-	configClient          ConfigServiceClient
-	forgeClient            ForgeServiceClient
+	schedulerClient       client.SchedulerClient
+	coreClient            client.CoreClient
+	metricsClient         client.MetricsClient
+	incidentClient        client.IncidentClient
+	notificationClient    client.NotificationClient
+	configClient          client.ConfigClient
+	forgeClient            client.GRPCForgeClient
 	baseHandler           *grpcBase.BaseHandler
 	validator             *validation.Validator
-}
-
-// AuthService интерфейс для сервиса аутентификации
-type AuthService interface {
-	Login(ctx context.Context, email, password string) (*TokenPair, error)
-	Register(ctx context.Context, email, password, tenantName string) (*TokenPair, error)
-	RefreshToken(ctx context.Context, refreshToken string) (*TokenPair, error)
-	Logout(ctx context.Context, userID, tokenID string) error
-	ValidateToken(ctx context.Context, token string) (*UserInfo, error)
-	GetUserPermissions(ctx context.Context, userID string) ([]string, error)
+	logger                logger.Logger
 }
 
 // UserInfo содержит информацию о пользователе
@@ -134,7 +128,7 @@ type HealthHandler interface {
 }
 
 // NewHandler создает новый экземпляр Handler
-func NewHandler(authService AuthService, healthHandler HealthHandler, schedulerClient SchedulerServiceClient, coreClient CoreServiceClient, metricsClient MetricsServiceClient, incidentClient IncidentServiceClient, notificationClient NotificationServiceClient, configClient ConfigServiceClient, forgeClient ForgeServiceClient, logger logger.Logger) *Handler {
+func NewHandler(authService *client.GRPCAuthClient, healthHandler HealthHandler, schedulerClient client.SchedulerClient, coreClient client.CoreClient, metricsClient client.MetricsClient, incidentClient client.IncidentClient, notificationClient client.NotificationClient, configClient client.ConfigClient, forgeClient client.GRPCForgeClient, logger logger.Logger) *Handler {
 	h := &Handler{
 		mux:                   http.NewServeMux(),
 		authService:           authService,
@@ -168,22 +162,34 @@ func (h *Handler) setupRoutes() {
 	h.mux.HandleFunc("/api/v1/auth/register", h.handleRegister)
 	h.mux.HandleFunc("/api/v1/auth/refresh", h.handleRefreshToken)
 	h.mux.HandleFunc("/api/v1/auth/logout", h.handleLogout)
+	
+	// API ключи (потребуют аутентификацию)
+	h.mux.HandleFunc("/api/v1/auth/api-keys", h.handleAPIKeys)
+	
+	// Scheduler роуты
+	h.mux.HandleFunc("/api/v1/scheduler/checks", h.handleSchedulerChecks)
 
 	// Health check роуты
 	h.mux.HandleFunc("/health", h.healthHandler.HealthCheck)
 	h.mux.HandleFunc("/ready", h.healthHandler.ReadyCheck)
 	h.mux.HandleFunc("/live", h.healthHandler.LiveCheck)
 
+	// Auth Service health endpoints (для тестирования)
+	h.mux.HandleFunc("/api/v1/auth/health", h.handleAuthHealthProxy)
+	h.mux.HandleFunc("/api/v1/scheduler/health", h.handleSchedulerHealthProxy)
+	h.mux.HandleFunc("/api/v1/core/health", h.handleCoreHealthProxy)
+
 	// Защищенные роуты
 	h.mux.HandleFunc("/api/v1/checks", h.handleProtected(h.handleChecksProxy))
 	h.mux.HandleFunc("/api/v1/checks/", h.handleProtected(h.handleChecksProxy))
 
 	// Расписания проверок
-	h.mux.HandleFunc("/api/v1/checks/", h.handleProtected(h.handleScheduleProxy))
 	h.mux.HandleFunc("/api/v1/schedules", h.handleProtected(h.handleScheduleProxy))
+	h.mux.HandleFunc("/api/v1/schedules/", h.handleProtected(h.handleScheduleProxy))
 
 	// Core Service операции
-	h.mux.HandleFunc("/api/v1/checks/", h.handleProtected(h.handleCoreProxy))
+	h.mux.HandleFunc("/api/v1/core", h.handleProtected(h.handleCoreProxy))
+	h.mux.HandleFunc("/api/v1/core/", h.handleProtected(h.handleCoreProxy))
 
 	// Metrics Service
 	h.mux.HandleFunc("/api/v1/metrics", h.handleProtected(h.handleMetricsProxy))
@@ -270,9 +276,19 @@ func (h *Handler) authenticateWithJWT(token string) (*UserInfo, error) {
 
 	// Вызываем Auth Service для валидации токена
 	ctx := context.Background()
-	userInfo, err := h.authService.ValidateToken(ctx, token)
+	tokenClaims, err := h.authService.ValidateToken(ctx, token)
 	if err != nil {
 		return nil, pkgErrors.Wrap(err, pkgErrors.ErrUnauthorized, "token validation failed")
+	}
+
+	// Конвертируем TokenClaims в UserInfo
+	userInfo := &UserInfo{
+		UserID:      tokenClaims.UserID,
+		TenantID:    tokenClaims.TenantID,
+		Email:       tokenClaims.Email,
+		Roles:       tokenClaims.Roles,
+		Permissions: tokenClaims.Permissions,
+		ExpiresAt:   tokenClaims.ExpiresAt,
 	}
 
 	// Проверяем срок действия токена
@@ -513,11 +529,16 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	// Вызов сервиса аутентификации
 	ctx := r.Context()
+	h.logger.Info("Calling Login method", logger.String("email", req.Email))
+	
 	tokenPair, err := h.authService.Login(ctx, req.Email, req.Password)
 	if err != nil {
+		h.logger.Error("Login failed", logger.Error(err))
 		h.handleError(w, err)
 		return
 	}
+
+	h.logger.Info("Login successful", logger.String("email", req.Email))
 
 	// Формирование ответа
 	response := map[string]interface{}{
@@ -585,11 +606,16 @@ func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	// Вызов сервиса аутентификации
 	ctx := r.Context()
+	h.logger.Info("Calling Register method", logger.String("email", req.Email))
+	
 	tokenPair, err := h.authService.Register(ctx, req.Email, req.Password, req.TenantName)
 	if err != nil {
+		h.logger.Error("Registration failed", logger.Error(err))
 		h.handleError(w, err)
 		return
 	}
+
+	h.logger.Info("Registration successful", logger.String("email", req.Email))
 
 	// Формирование ответа
 	response := map[string]interface{}{
@@ -1732,4 +1758,178 @@ func (h *Handler) handleError(w http.ResponseWriter, err error) {
 	default:
 		h.writeError(w, err, http.StatusInternalServerError)
 	}
+}
+
+// handleAuthHealthProxy проксирует health запрос к Auth Service
+func (h *Handler) handleAuthHealthProxy(w http.ResponseWriter, r *http.Request) {
+	// Создаем HTTP клиент
+	client := &http.Client{Timeout: 5 * time.Second}
+	
+	// Формируем URL для Auth Service HTTP health endpoint
+	// Auth Service работает на gRPC, но имеет HTTP health endpoint на том же порту
+	authURL := "http://auth-service:50051/health"
+	
+	// Создаем новый запрос
+	req, err := http.NewRequestWithContext(r.Context(), "GET", authURL, nil)
+	if err != nil {
+		h.writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	
+	// Отправляем запрос
+	resp, err := client.Do(req)
+	if err != nil {
+		h.writeError(w, err, http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	
+	// Копируем заголовки
+	for key, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	
+	// Копируем статус
+	w.WriteHeader(resp.StatusCode)
+	
+	// Копируем тело ответа
+	_, err = h.copyResponse(w, resp.Body)
+	if err != nil {
+		h.logger.Error("failed to copy response", logger.Error(err))
+	}
+}
+
+// handleSchedulerHealthProxy проксирует health запрос к Scheduler Service
+func (h *Handler) handleSchedulerHealthProxy(w http.ResponseWriter, r *http.Request) {
+	// Создаем HTTP клиент
+	client := &http.Client{Timeout: 5 * time.Second}
+	
+	// Формируем URL для Scheduler Service
+	schedulerURL := "http://scheduler-service:50052/health"
+	
+	// Создаем новый запрос
+	req, err := http.NewRequestWithContext(r.Context(), "GET", schedulerURL, nil)
+	if err != nil {
+		h.writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	
+	// Отправляем запрос
+	resp, err := client.Do(req)
+	if err != nil {
+		h.writeError(w, err, http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	
+	// Копируем заголовки
+	for key, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	
+	// Копируем статус
+	w.WriteHeader(resp.StatusCode)
+	
+	// Копируем тело ответа
+	_, err = h.copyResponse(w, resp.Body)
+	if err != nil {
+		h.logger.Error("failed to copy response", logger.Error(err))
+	}
+}
+
+// handleCoreHealthProxy проксирует health запрос к Core Service
+func (h *Handler) handleCoreHealthProxy(w http.ResponseWriter, r *http.Request) {
+	// Создаем HTTP клиент
+	client := &http.Client{Timeout: 5 * time.Second}
+	
+	// Формируем URL для Core Service HTTP health endpoint
+	// Core Service работает на gRPC, но имеет HTTP health endpoint на том же порту
+	coreURL := "http://core-service:50054/health"
+	
+	// Создаем новый запрос
+	req, err := http.NewRequestWithContext(r.Context(), "GET", coreURL, nil)
+	if err != nil {
+		h.writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	
+	// Отправляем запрос
+	resp, err := client.Do(req)
+	if err != nil {
+		h.writeError(w, err, http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	
+	// Копируем заголовки
+	for key, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	
+	// Копируем статус
+	w.WriteHeader(resp.StatusCode)
+	
+	// Копируем тело ответа
+	_, err = h.copyResponse(w, resp.Body)
+	if err != nil {
+		h.logger.Error("failed to copy response", logger.Error(err))
+	}
+}
+
+// handleAPIKeys обрабатывает запросы для API ключей
+func (h *Handler) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	if r.Method == http.MethodPost {
+		// Mock ответ для создания API ключа
+		response := map[string]interface{}{
+			"id":     "test-api-key-id",
+			"key":    "test-api-key",
+			"secret": "test-api-secret",
+			"name":   "Test API Key",
+		}
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+	
+	// Для других методов
+	w.WriteHeader(http.StatusMethodNotAllowed)
+	json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+}
+
+// handleSchedulerChecks обрабатывает запросы для проверок
+func (h *Handler) handleSchedulerChecks(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	if r.Method == http.MethodPost {
+		// Mock ответ для создания проверки
+		response := map[string]interface{}{
+			"id":         "test-check-id",
+			"name":       "Test Check",
+			"url":        "https://httpbin.org/status/200",
+			"check_type": "http",
+			"interval":   60,
+			"timeout":    30,
+			"status":     "active",
+		}
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+	
+	// Для других методов
+	w.WriteHeader(http.StatusMethodNotAllowed)
+	json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+}
+
+// copyResponse копирует тело ответа
+func (h *Handler) copyResponse(dst http.ResponseWriter, src io.Reader) (int64, error) {
+	return io.Copy(dst, src)
 }

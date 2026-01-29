@@ -8,7 +8,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	schedulerv1 "UptimePingPlatform/gen/proto/api/scheduler/v1"
+	schedulerv1 "UptimePingPlatform/proto/api/scheduler/v1"
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/validation"

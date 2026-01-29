@@ -10,7 +10,7 @@ import (
 
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
-	corev1 "UptimePingPlatform/gen/proto/api/core/v1"
+	corev1 "UptimePingPlatform/proto/api/core/v1"
 )
 
 // CoreClient gRPC клиент для CoreService
@@ -35,7 +35,7 @@ func NewCoreClient(address string, timeout time.Duration, logger logger.Logger) 
 	})
 
 	// Устанавливаем соединение с gRPC сервером
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		baseHandler.LogError(ctx, err, "grpc_core_client_connect_failed", "")
 		return nil, fmt.Errorf("failed to connect to core service: %w", err)

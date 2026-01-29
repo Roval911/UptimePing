@@ -1,0 +1,25 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+database:
+  host: "localhost"
+  port: 5432
+  name: "uptimeping"
+  user: "uptimeping"
+  password: "uptimeping123"
+  ssl_mode: "disable"
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+
+rabbitmq:
+  url: "amqp://guest:guest@localhost:5672/"
+
+logger:
+  level: "info"
+  format: "json"
+
+environment: "dev"

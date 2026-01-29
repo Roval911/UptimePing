@@ -17,7 +17,7 @@ import (
 	"UptimePingPlatform/services/forge-service/internal/service"
 	
 	// gRPC клиенты
-	authv1 "UptimePingPlatform/gen/proto/api/auth/v1"
+	authv1 "UptimePingPlatform/proto/api/auth/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )

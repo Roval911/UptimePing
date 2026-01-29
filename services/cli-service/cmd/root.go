@@ -16,7 +16,7 @@ import (
 
 var (
 	cfg     *config.Config
-	log     logger.Logger
+	appLogger  logger.Logger
 	rootCtx context.Context
 )
 
@@ -24,7 +24,7 @@ var (
 func Execute(ctx context.Context, config *config.Config, logger logger.Logger) error {
 	rootCtx = ctx
 	cfg = config
-	log = logger
+	appLogger = logger
 
 	return rootCmd.Execute()
 }
@@ -106,8 +106,8 @@ func initConfig() {
 func setupLogging() {
 	if viper.GetBool("debug") {
 		// Enable debug logging
-		if log != nil {
-			log.Debug("Debug mode enabled")
+		if appLogger != nil {
+			appLogger.Debug("Debug mode enabled")
 		}
 	}
 }
@@ -125,8 +125,8 @@ func handleError(err error, cmd *cobra.Command) error {
 	}
 
 	// Log the error
-	if log != nil {
-		log.Error("Command failed",
+	if appLogger != nil {
+		appLogger.Error("Command failed",
 			logger.String("command", cmd.Name()),
 			logger.Error(appErr))
 	}

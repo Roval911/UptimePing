@@ -10,7 +10,7 @@ import (
 
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
-	forgev1 "UptimePingPlatform/gen/proto/api/forge/v1"
+	forgev1 "UptimePingPlatform/proto/api/forge/v1"
 )
 
 // GRPCForgeClient gRPC клиент для ForgeService
@@ -35,7 +35,7 @@ func NewGRPCForgeClient(address string, timeout time.Duration, logger logger.Log
 	})
 
 	// Устанавливаем соединение с gRPC сервером
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		baseHandler.LogError(ctx, err, "grpc_forge_client_connect_failed", "")
 		return nil, fmt.Errorf("failed to connect to forge service: %w", err)

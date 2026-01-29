@@ -12,7 +12,7 @@ import (
 	"UptimePingPlatform/pkg/validation"
 	"UptimePingPlatform/services/notification-service/internal/service"
 
-	notificationv1 "UptimePingPlatform/gen/proto/api/notification/v1"
+	notificationv1 "UptimePingPlatform/proto/api/notification/v1"
 )
 
 // NotificationHandler реализует gRPC обработчики для NotificationService

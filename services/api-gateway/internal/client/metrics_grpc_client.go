@@ -10,7 +10,7 @@ import (
 
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
-	metricsv1 "UptimePingPlatform/gen/proto/api/metrics/v1"
+	metricsv1 "UptimePingPlatform/proto/api/metrics/v1"
 )
 
 // MetricsClient gRPC клиент для MetricsService
@@ -35,7 +35,7 @@ func NewMetricsClient(address string, timeout time.Duration, logger logger.Logge
 	})
 
 	// Устанавливаем соединение с gRPC сервером
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		baseHandler.LogError(ctx, err, "grpc_metrics_client_connect_failed", "")
 		return nil, fmt.Errorf("failed to connect to metrics service: %w", err)

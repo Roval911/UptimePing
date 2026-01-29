@@ -10,7 +10,7 @@ import (
 
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
-	authv1 "UptimePingPlatform/gen/proto/api/auth/v1"
+	authv1 "UptimePingPlatform/proto/api/auth/v1"
 )
 
 // GRPCAuthClient gRPC клиент для AuthService
@@ -35,7 +35,7 @@ func NewGRPCAuthClient(address string, timeout time.Duration, logger logger.Logg
 	})
 
 	// Устанавливаем соединение с gRPC сервером
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		baseHandler.LogError(ctx, err, "grpc_auth_client_connect_failed", "")
 		return nil, fmt.Errorf("failed to connect to auth service: %w", err)

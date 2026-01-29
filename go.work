@@ -1,18 +1,16 @@
-go 1.25.6
+go 1.24.0
 
 use .
 
 use (
 	./pkg
+	./proto
+	./services/api-gateway
+	./services/auth-service
 	./services/cli-service
 	./services/forge-service
 	./services/incident-manager
+	./services/metrics-service
 	./services/notification-service
 	./services/scheduler-service
-	services/api-gateway
-	services/auth-service
-	services/metrics-service
-	services/cli-service/tests
 )
-
-replace UptimePingPlatform/gen => /Users/slavarodionov/Documents/собесы/pet/UptimePingPlatform/gen/go

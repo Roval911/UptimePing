@@ -1,0 +1,473 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:18-alpine
+    container_name: uptimeping-postgres
+    environment:
+      POSTGRES_DB: uptimeping
+      POSTGRES_USER: uptimeping
+      POSTGRES_PASSWORD: uptimeping123
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    networks:
+      - uptimeping-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U uptimeping -d uptimeping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis Cache
+  redis:
+    image: redis:8.4-alpine
+    container_name: uptimeping-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./deployments/redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - uptimeping-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # RabbitMQ Message Broker
+  rabbitmq:
+    image: rabbitmq:4.2.2-management-alpine
+    container_name: uptimeping-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: uptimeping
+      RABBITMQ_DEFAULT_PASS: uptimeping123
+      RABBITMQ_DEFAULT_VHOST: /
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./deployments/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+      - ./deployments/definitions.json:/etc/rabbitmq/definitions.json
+    networks:
+      - uptimeping-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "5672"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
+
+  # Prometheus Monitoring
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: uptimeping-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deployments/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - uptimeping-network
+    restart: unless-stopped
+
+  # Grafana Visualization
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: uptimeping-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_USERS_ALLOW_SIGN_UP: false
+      GF_INSTALL_PLUGINS: grafana-clock-panel,grafana-simple-json-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deployments/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+      - ./deployments/grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml
+    networks:
+      - uptimeping-network
+    restart: unless-stopped
+
+  # Loki Log Aggregation
+  loki:
+    image: grafana/loki:3.2.0
+    container_name: uptimeping-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./deployments/loki.yml:/etc/loki/local-config.yaml
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - uptimeping-network
+    restart: unless-stopped
+
+  # Promtail Log Collector
+  promtail:
+    image: grafana/promtail:2.9.1
+    container_name: uptimeping-promtail
+    volumes:
+      - ./deployments/promtail.yml:/etc/promtail/config.yml
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - uptimeping-network
+    restart: unless-stopped
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: uptimeping-api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - ENVIRONMENT=dev
+      - LOG_LEVEL=info
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8080
+      - AUTH_SERVICE_ADDR=auth-service:50051
+      - SCHEDULER_SERVICE_ADDR=scheduler-service:50052
+      - FORGE_SERVICE_ADDR=forge-service:50053
+      - CORE_SERVICE_ADDR=core-service:50054
+      - METRICS_SERVICE_ADDR=metrics-service:50055
+      - INCIDENT_SERVICE_ADDR=incident-manager:50056
+      - NOTIFICATION_SERVICE_ADDR=notification-service:50057
+      - REDIS_ADDR=redis:6379
+      - RATE_LIMIT_REDIS=redis:6379
+    volumes:
+      - ./services/api-gateway/config:/app/config
+      - ./logs/api-gateway:/app/logs
+    networks:
+      - uptimeping-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Auth Service
+  auth-service:
+    build:
+      context: .
+      dockerfile: services/auth-service/Dockerfile
+    container_name: uptimeping-auth-service
+    ports:
+      - "50051:50051"
+    environment:
+      - ENVIRONMENT=dev
+      - LOG_LEVEL=info
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=50051
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=uptimeping
+      - DATABASE_USER=uptimeping
+      - DATABASE_PASSWORD=uptimeping123
+      - REDIS_ADDR=redis:6379
+      - JWT_SECRET=your-super-secret-jwt-key-change-in-production
+      - JWT_EXPIRE_IN=24h
+      - REFRESH_TOKEN_EXPIRE_IN=168h
+    volumes:
+      - ./services/auth-service/config:/app/config
+      - ./logs/auth-service:/app/logs
+    networks:
+      - uptimeping-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:50051/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  # Scheduler Service
+  scheduler-service:
+    build:
+      context: .
+      dockerfile: services/scheduler-service/Dockerfile
+    container_name: uptimeping-scheduler-service
+    ports:
+      - "50052:50052"
+    environment:
+      - ENVIRONMENT=dev
+      - LOG_LEVEL=info
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=50052
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=uptimeping
+      - DATABASE_USER=uptimeping
+      - DATABASE_PASSWORD=uptimeping123
+      - REDIS_ADDR=redis:6379
+      - RABBITMQ_URL=amqp://uptimeping:uptimeping123@rabbitmq:5672/
+    volumes:
+      - ./services/scheduler-service/config:/app/config
+      - ./logs/scheduler-service:/app/logs
+    networks:
+      - uptimeping-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:50052/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  # Core Service
+  core-service:
+    build:
+      context: .
+      dockerfile: services/core-service/Dockerfile
+    container_name: uptimeping-core-service
+    ports:
+      - "50054:50054"
+    environment:
+      - ENVIRONMENT=dev
+      - LOG_LEVEL=info
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=50054
+      - RABBITMQ_URL=amqp://uptimeping:uptimeping123@rabbitmq:5672/
+      - REDIS_ADDR=redis:6379
+      - WORKER_POOL_SIZE=10
+      - MAX_RETRY_ATTEMPTS=3
+    volumes:
+      - ./services/core-service/config:/app/config
+      - ./logs/core-service:/app/logs
+    networks:
+      - uptimeping-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:50054/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  # Metrics Service
+  metrics-service:
+    build:
+      context: .
+      dockerfile: services/metrics-service/Dockerfile
+    container_name: uptimeping-metrics-service
+    ports:
+      - "50055:50055"
+    environment:
+      - ENVIRONMENT=dev
+      - LOG_LEVEL=info
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=50055
+      - REDIS_ADDR=redis:6379
+      - PROMETHEUS_GATEWAY_URL=http://prometheus:9090
+    volumes:
+      - ./services/metrics-service/config:/app/config
+      - ./logs/metrics-service:/app/logs
+    networks:
+      - uptimeping-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      prometheus:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:50055/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Incident Manager
+  incident-manager:
+    build:
+      context: .
+      dockerfile: services/incident-manager/Dockerfile
+    container_name: uptimeping-incident-manager
+    ports:
+      - "50056:50056"
+    environment:
+      - ENVIRONMENT=dev
+      - LOG_LEVEL=info
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=50056
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=uptimeping
+      - DATABASE_USER=uptimeping
+      - DATABASE_PASSWORD=uptimeping123
+      - RABBITMQ_URL=amqp://uptimeping:uptimeping123@rabbitmq:5672/
+      - NOTIFICATION_SERVICE_URL=http://notification-service:50057
+    volumes:
+      - ./services/incident-manager/config:/app/config
+      - ./logs/incident-manager:/app/logs
+    networks:
+      - uptimeping-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:50056/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Notification Service
+  notification-service:
+    build:
+      context: .
+      dockerfile: services/notification-service/Dockerfile
+    container_name: uptimeping-notification-service
+    ports:
+      - "50057:50057"
+    environment:
+      - ENVIRONMENT=dev
+      - LOG_LEVEL=info
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=50057
+      - REDIS_ADDR=redis:6379
+      - RABBITMQ_URL=amqp://uptimeping:uptimeping123@rabbitmq:5672/
+      - SMTP_HOST=smtp.gmail.com
+      - SMTP_PORT=587
+      - SMTP_USER=your-email@gmail.com
+      - SMTP_PASSWORD=your-app-password
+      - SMTP_FROM=noreply@uptimeping.local
+    volumes:
+      - ./services/notification-service/config:/app/config
+      - ./logs/notification-service:/app/logs
+    networks:
+      - uptimeping-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:50057/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Forge Service
+  forge-service:
+    build:
+      context: .
+      dockerfile: services/forge-service/Dockerfile
+    container_name: uptimeping-forge-service
+    ports:
+      - "50053:50053"
+    environment:
+      - ENVIRONMENT=dev
+      - LOG_LEVEL=info
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=50053
+      - REDIS_ADDR=redis:6379
+    volumes:
+      - ./services/forge-service/config:/app/config
+      - ./logs/forge-service:/app/logs
+    networks:
+      - uptimeping-network
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:50053/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # CLI Service (optional, for manual commands)
+  cli-service:
+    build:
+      context: .
+      dockerfile: services/cli-service/Dockerfile
+    container_name: uptimeping-cli-service
+    environment:
+      - ENVIRONMENT=dev
+      - LOG_LEVEL=info
+      - AUTH_SERVICE_ADDR=auth-service:50051
+      - SCHEDULER_SERVICE_ADDR=scheduler-service:50052
+      - CORE_SERVICE_ADDR=core-service:50054
+      - METRICS_SERVICE_ADDR=metrics-service:50055
+      - INCIDENT_SERVICE_ADDR=incident-manager:50056
+      - NOTIFICATION_SERVICE_ADDR=notification-service:50057
+      - FORGE_SERVICE_ADDR=forge-service:50053
+    networks:
+      - uptimeping-network
+    depends_on:
+      - auth-service
+      - scheduler-service
+      - core-service
+      - metrics-service
+      - incident-manager
+      - notification-service
+      - forge-service
+    profiles:
+      - cli
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  loki_data:
+    driver: local
+
+networks:
+  uptimeping-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"UptimePingPlatform/services/core-service/internal/domain"
-	incidentv1 "UptimePingPlatform/gen/proto/api/incident/v1"
+	incidentv1 "UptimePingPlatform/proto/api/incident/v1"
 )
 
 // IncidentManager определяет интерфейс для работы с инцидентами

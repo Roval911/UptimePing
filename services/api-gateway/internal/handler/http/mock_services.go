@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	schedulerv1 "UptimePingPlatform/gen/proto/api/scheduler/v1"
+	schedulerv1 "UptimePingPlatform/proto/api/scheduler/v1"
 	"UptimePingPlatform/pkg/logger"
 )
 

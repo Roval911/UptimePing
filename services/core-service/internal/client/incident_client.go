@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"UptimePingPlatform/gen/proto/api/incident/v1"
+	"UptimePingPlatform/proto/api/incident/v1"
 	"UptimePingPlatform/pkg/connection"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/core-service/internal/domain"

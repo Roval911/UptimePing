@@ -10,7 +10,7 @@ import (
 
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
-	incidentv1 "UptimePingPlatform/gen/proto/api/incident/v1"
+	incidentv1 "UptimePingPlatform/proto/api/incident/v1"
 )
 
 // IncidentClient gRPC клиент для IncidentService
@@ -35,7 +35,7 @@ func NewIncidentClient(address string, timeout time.Duration, logger logger.Logg
 	})
 
 	// Устанавливаем соединение с gRPC сервером
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		baseHandler.LogError(ctx, err, "grpc_incident_client_connect_failed", "")
 		return nil, fmt.Errorf("failed to connect to incident service: %w", err)

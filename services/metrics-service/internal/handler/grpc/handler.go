@@ -12,7 +12,7 @@ import (
 	"UptimePingPlatform/pkg/validation"
 	"UptimePingPlatform/services/metrics-service/internal/collector"
 
-	metricsv1 "UptimePingPlatform/gen/proto/api/metrics/v1"
+	metricsv1 "UptimePingPlatform/proto/api/metrics/v1"
 )
 
 // MetricsHandler реализует gRPC обработчики для MetricsService
