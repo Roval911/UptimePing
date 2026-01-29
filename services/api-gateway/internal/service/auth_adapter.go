@@ -62,3 +62,25 @@ func (a *AuthAdapter) RefreshToken(ctx context.Context, refreshToken string) (*h
 func (a *AuthAdapter) Logout(ctx context.Context, userID, tokenID string) error {
 	return a.authClient.Logout(ctx, userID, tokenID)
 }
+
+// ValidateToken валидирует токен через gRPC клиент
+func (a *AuthAdapter) ValidateToken(ctx context.Context, token string) (*httphandler.UserInfo, error) {
+	userInfo, err := a.authClient.ValidateToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+
+	return &httphandler.UserInfo{
+		UserID:      userInfo.UserID,
+		TenantID:    userInfo.TenantID,
+		Email:       userInfo.Email,
+		Roles:       userInfo.Roles,
+		Permissions:  userInfo.Permissions,
+		ExpiresAt:    userInfo.ExpiresAt,
+	}, nil
+}
+
+// GetUserPermissions получает права пользователя через gRPC клиент
+func (a *AuthAdapter) GetUserPermissions(ctx context.Context, userID string) ([]string, error) {
+	return a.authClient.GetUserPermissions(ctx, userID)
+}

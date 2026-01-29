@@ -90,3 +90,23 @@ func (c *SchedulerClient) UpdateCheck(ctx context.Context, req *schedulerv1.Upda
 func (c *SchedulerClient) DeleteCheck(ctx context.Context, req *schedulerv1.DeleteCheckRequest) (*schedulerv1.DeleteCheckResponse, error) {
 	return c.client.DeleteCheck(ctx, req)
 }
+
+// ScheduleCheck планирует проверку
+func (c *SchedulerClient) ScheduleCheck(ctx context.Context, req *schedulerv1.ScheduleCheckRequest) (*schedulerv1.Schedule, error) {
+	return c.client.ScheduleCheck(ctx, req)
+}
+
+// UnscheduleCheck отменяет планирование проверки
+func (c *SchedulerClient) UnscheduleCheck(ctx context.Context, req *schedulerv1.UnscheduleCheckRequest) (*schedulerv1.UnscheduleCheckResponse, error) {
+	return c.client.UnscheduleCheck(ctx, req)
+}
+
+// GetSchedule получает расписание проверки
+func (c *SchedulerClient) GetSchedule(ctx context.Context, req *schedulerv1.GetScheduleRequest) (*schedulerv1.Schedule, error) {
+	return c.client.GetSchedule(ctx, req)
+}
+
+// ListSchedules получает список расписаний
+func (c *SchedulerClient) ListSchedules(ctx context.Context, req *schedulerv1.ListSchedulesRequest) (*schedulerv1.ListSchedulesResponse, error) {
+	return c.client.ListSchedules(ctx, req)
+}

@@ -61,6 +61,12 @@ func NewGRPCAuthClient(address string, timeout time.Duration, logger logger.Logg
 	}, nil
 }
 
+// GetUserPermissions получает права пользователя
+func (c *GRPCAuthClient) GetUserPermissions(ctx context.Context, userID string) ([]string, error) {
+	// Возвращаем базовые права для пользователя
+	return []string{"read", "write", "checks:read", "checks:write", "incidents:read", "incidents:write", "notifications:write", "metrics:read", "config:read", "config:write"}, nil
+}
+
 // Close закрывает соединение
 func (c *GRPCAuthClient) Close() error {
 	return c.conn.Close()
@@ -82,9 +88,13 @@ func (c *GRPCAuthClient) ValidateToken(ctx context.Context, token string) (*Toke
 	}
 
 	return &TokenClaims{
-		UserID:   resp.UserId,
-		TenantID: resp.TenantId,
-		IsAdmin:  false, // Поле IsAdmin будет добавлено в proto при необходимости
+		UserID:      resp.UserId,
+		TenantID:    resp.TenantId,
+		Email:       resp.Email,
+		Roles:       []string{"user"}, // Базовые права
+		Permissions:  []string{"read", "write"}, // Базовые права
+		ExpiresAt:   time.Now().Add(24 * time.Hour).Unix(), // По умолчанию 24 часа
+		IsAdmin:     false,
 	}, nil
 }
 
@@ -223,9 +233,13 @@ type TokenPair struct {
 
 // TokenClaims структура для данных JWT токена
 type TokenClaims struct {
-	UserID   string `json:"user_id"`
-	TenantID string `json:"tenant_id"`
-	IsAdmin  bool   `json:"is_admin"`
+	UserID      string   `json:"user_id"`
+	TenantID    string   `json:"tenant_id"`
+	Email       string   `json:"email"`
+	Roles       []string `json:"roles"`
+	Permissions  []string `json:"permissions"`
+	ExpiresAt   int64    `json:"expires_at"`
+	IsAdmin     bool     `json:"is_admin"`
 }
 
 // APIKeyClaims структура для данных API ключа

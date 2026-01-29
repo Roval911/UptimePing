@@ -121,13 +121,68 @@ func main() {
 	}
 	defer forgeClient.Close()
 
+	// Создаем gRPC клиент для core-service
+	coreServiceAddr := os.Getenv("CORE_SERVICE_ADDR")
+	if coreServiceAddr == "" {
+		coreServiceAddr = "localhost:50054"
+	}
+	coreClient, err := client.NewCoreClient(coreServiceAddr, 5*time.Second, appLogger)
+	if err != nil {
+		appLogger.Error("Failed to connect to core service", logger.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer coreClient.Close()
+
+	// Создаем gRPC клиент для metrics-service
+	metricsServiceAddr := os.Getenv("METRICS_SERVICE_ADDR")
+	if metricsServiceAddr == "" {
+		metricsServiceAddr = "localhost:50055"
+	}
+	metricsClient, err := client.NewMetricsClient(metricsServiceAddr, 5*time.Second, appLogger)
+	if err != nil {
+		appLogger.Error("Failed to connect to metrics service", logger.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer metricsClient.Close()
+
+	// Создаем gRPC клиент для notification-service
+	notificationServiceAddr := os.Getenv("NOTIFICATION_SERVICE_ADDR")
+	if notificationServiceAddr == "" {
+		notificationServiceAddr = "localhost:50057"
+	}
+	notificationClient, err := client.NewNotificationClient(notificationServiceAddr, 5*time.Second, appLogger)
+	if err != nil {
+		appLogger.Error("Failed to connect to notification service", logger.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer notificationClient.Close()
+
+	// Создаем gRPC клиент для incident-manager
+	incidentServiceAddr := os.Getenv("INCIDENT_SERVICE_ADDR")
+	if incidentServiceAddr == "" {
+		incidentServiceAddr = "localhost:50056"
+	}
+	incidentClient, err := client.NewIncidentClient(incidentServiceAddr, 5*time.Second, appLogger)
+	if err != nil {
+		appLogger.Error("Failed to connect to incident service", logger.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer incidentClient.Close()
+
+	// Создаем клиент для конфигурации (использует pkg/config)
+	configClient, err := client.NewConfigClient(5*time.Second, appLogger)
+	if err != nil {
+		appLogger.Error("Failed to initialize config client", logger.String("error", err.Error()))
+		os.Exit(1)
+	}
+
 	// Настройка HTTP сервера
 	// Создаем реальные сервисы
 	authAdapter := service.NewAuthAdapter(authClient)
 	healthChecker := health.NewSimpleHealthChecker("1.0.0")
 	healthHandler := httphandler.NewHealthHandler(healthChecker, appLogger)
 
-	baseHandler := httphandler.NewHandler(authAdapter, healthHandler, schedulerClient, forgeClient, appLogger)
+	baseHandler := httphandler.NewHandler(authAdapter, healthHandler, schedulerClient, coreClient, metricsClient, incidentClient, notificationClient, configClient, forgeClient, appLogger)
 
 	// Обертываем хендлер в middleware
 	var httpHandler http.Handler = baseHandler

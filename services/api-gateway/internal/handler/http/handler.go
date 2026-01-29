@@ -5,13 +5,20 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
+	corev1 "UptimePingPlatform/gen/proto/api/core/v1"
 	forgev1 "UptimePingPlatform/gen/proto/api/forge/v1"
+	incidentv1 "UptimePingPlatform/gen/proto/api/incident/v1"
+	metricsv1 "UptimePingPlatform/gen/proto/api/metrics/v1"
+	notificationv1 "UptimePingPlatform/gen/proto/api/notification/v1"
 	schedulerv1 "UptimePingPlatform/gen/proto/api/scheduler/v1"
 	pkgErrors "UptimePingPlatform/pkg/errors"
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/pkg/config"
 	"UptimePingPlatform/pkg/validation"
 )
 
@@ -28,18 +35,69 @@ type ForgeServiceClient interface {
 type SchedulerServiceClient interface {
 	ListChecks(ctx context.Context, req *schedulerv1.ListChecksRequest) (*schedulerv1.ListChecksResponse, error)
 	CreateCheck(ctx context.Context, req *schedulerv1.CreateCheckRequest) (*schedulerv1.Check, error)
+	GetCheck(ctx context.Context, req *schedulerv1.GetCheckRequest) (*schedulerv1.Check, error)
+	UpdateCheck(ctx context.Context, req *schedulerv1.UpdateCheckRequest) (*schedulerv1.Check, error)
+	DeleteCheck(ctx context.Context, req *schedulerv1.DeleteCheckRequest) (*schedulerv1.DeleteCheckResponse, error)
+	ScheduleCheck(ctx context.Context, req *schedulerv1.ScheduleCheckRequest) (*schedulerv1.Schedule, error)
+	UnscheduleCheck(ctx context.Context, req *schedulerv1.UnscheduleCheckRequest) (*schedulerv1.UnscheduleCheckResponse, error)
+	GetSchedule(ctx context.Context, req *schedulerv1.GetScheduleRequest) (*schedulerv1.Schedule, error)
+	ListSchedules(ctx context.Context, req *schedulerv1.ListSchedulesRequest) (*schedulerv1.ListSchedulesResponse, error)
+	Close() error
+}
+
+// MetricsServiceClient интерфейс для Metrics Service клиента
+type MetricsServiceClient interface {
+	CollectMetrics(ctx context.Context, req *metricsv1.CollectMetricsRequest) (*metricsv1.CollectMetricsResponse, error)
+	GetMetrics(ctx context.Context, req *metricsv1.GetMetricsRequest) (*metricsv1.GetMetricsResponse, error)
+	Close() error
+}
+
+// IncidentServiceClient интерфейс для Incident Service клиента
+type IncidentServiceClient interface {
+	CreateIncident(ctx context.Context, req *incidentv1.CreateIncidentRequest) (*incidentv1.Incident, error)
+	GetIncident(ctx context.Context, req *incidentv1.GetIncidentRequest) (*incidentv1.Incident, error)
+	ListIncidents(ctx context.Context, req *incidentv1.ListIncidentsRequest) (*incidentv1.ListIncidentsResponse, error)
+	ResolveIncident(ctx context.Context, req *incidentv1.ResolveIncidentRequest) (*incidentv1.ResolveIncidentResponse, error)
+	Close() error
+}
+
+// NotificationServiceClient интерфейс для Notification Service клиента
+type NotificationServiceClient interface {
+	SendNotification(ctx context.Context, req *notificationv1.SendNotificationRequest) (*notificationv1.SendNotificationResponse, error)
+	GetNotificationChannels(ctx context.Context, req *notificationv1.ListChannelsRequest) (*notificationv1.ListChannelsResponse, error)
+	RegisterChannel(ctx context.Context, req *notificationv1.RegisterChannelRequest) (*notificationv1.Channel, error)
+	Close() error
+}
+
+// ConfigServiceClient интерфейс для Config Service клиента
+type ConfigServiceClient interface {
+	GetConfig(ctx context.Context) *config.Config
+	UpdateConfig(ctx context.Context, newConfig *config.Config) error
+	Close() error
+}
+
+// CoreServiceClient интерфейс для Core Service клиента
+type CoreServiceClient interface {
+	ExecuteCheck(ctx context.Context, req *corev1.ExecuteCheckRequest) (*corev1.CheckResult, error)
+	GetCheckStatus(ctx context.Context, req *corev1.GetCheckStatusRequest) (*corev1.CheckStatusResponse, error)
+	GetCheckHistory(ctx context.Context, req *corev1.GetCheckHistoryRequest) (*corev1.GetCheckHistoryResponse, error)
 	Close() error
 }
 
 // Handler структура для управления HTTP обработчиками
 type Handler struct {
-	mux             *http.ServeMux
-	authService     AuthService
-	healthHandler   HealthHandler
-	schedulerClient SchedulerServiceClient
-	forgeClient     ForgeServiceClient
-	baseHandler     *grpcBase.BaseHandler
-	validator       *validation.Validator
+	mux                   *http.ServeMux
+	authService           AuthService
+	healthHandler         HealthHandler
+	schedulerClient       SchedulerServiceClient
+	coreClient            CoreServiceClient
+	metricsClient         MetricsServiceClient
+	incidentClient        IncidentServiceClient
+	notificationClient    NotificationServiceClient
+	configClient          ConfigServiceClient
+	forgeClient            ForgeServiceClient
+	baseHandler           *grpcBase.BaseHandler
+	validator             *validation.Validator
 }
 
 // AuthService интерфейс для сервиса аутентификации
@@ -48,6 +106,18 @@ type AuthService interface {
 	Register(ctx context.Context, email, password, tenantName string) (*TokenPair, error)
 	RefreshToken(ctx context.Context, refreshToken string) (*TokenPair, error)
 	Logout(ctx context.Context, userID, tokenID string) error
+	ValidateToken(ctx context.Context, token string) (*UserInfo, error)
+	GetUserPermissions(ctx context.Context, userID string) ([]string, error)
+}
+
+// UserInfo содержит информацию о пользователе
+type UserInfo struct {
+	UserID       string   `json:"user_id"`
+	TenantID     string   `json:"tenant_id"`
+	Email        string   `json:"email"`
+	Roles        []string `json:"roles"`
+	Permissions  []string `json:"permissions"`
+	ExpiresAt    int64    `json:"expires_at"`
 }
 
 // TokenPair структура для хранения пары токенов
@@ -64,15 +134,20 @@ type HealthHandler interface {
 }
 
 // NewHandler создает новый экземпляр Handler
-func NewHandler(authService AuthService, healthHandler HealthHandler, schedulerClient SchedulerServiceClient, forgeClient ForgeServiceClient, logger logger.Logger) *Handler {
+func NewHandler(authService AuthService, healthHandler HealthHandler, schedulerClient SchedulerServiceClient, coreClient CoreServiceClient, metricsClient MetricsServiceClient, incidentClient IncidentServiceClient, notificationClient NotificationServiceClient, configClient ConfigServiceClient, forgeClient ForgeServiceClient, logger logger.Logger) *Handler {
 	h := &Handler{
-		mux:             http.NewServeMux(),
-		authService:     authService,
-		healthHandler:   healthHandler,
-		schedulerClient: schedulerClient,
-		forgeClient:     forgeClient,
-		baseHandler:     grpcBase.NewBaseHandler(logger),
-		validator:       validation.NewValidator(),
+		mux:                   http.NewServeMux(),
+		authService:           authService,
+		healthHandler:         healthHandler,
+		schedulerClient:       schedulerClient,
+		coreClient:            coreClient,
+		metricsClient:         metricsClient,
+		incidentClient:        incidentClient,
+		notificationClient:    notificationClient,
+		configClient:          configClient,
+		forgeClient:            forgeClient,
+		baseHandler:           grpcBase.NewBaseHandler(logger),
+		validator:             validation.NewValidator(),
 	}
 
 	// Настройка роутинга
@@ -101,24 +176,208 @@ func (h *Handler) setupRoutes() {
 
 	// Защищенные роуты
 	h.mux.HandleFunc("/api/v1/checks", h.handleProtected(h.handleChecksProxy))
+	h.mux.HandleFunc("/api/v1/checks/", h.handleProtected(h.handleChecksProxy))
+
+	// Расписания проверок
+	h.mux.HandleFunc("/api/v1/checks/", h.handleProtected(h.handleScheduleProxy))
+	h.mux.HandleFunc("/api/v1/schedules", h.handleProtected(h.handleScheduleProxy))
+
+	// Core Service операции
+	h.mux.HandleFunc("/api/v1/checks/", h.handleProtected(h.handleCoreProxy))
+
+	// Metrics Service
+	h.mux.HandleFunc("/api/v1/metrics", h.handleProtected(h.handleMetricsProxy))
+	h.mux.HandleFunc("/api/v1/metrics/collect", h.handleProtected(h.handleMetricsProxy))
+
+	// Incident Service
+	h.mux.HandleFunc("/api/v1/incidents", h.handleProtected(h.handleIncidentProxy))
+	h.mux.HandleFunc("/api/v1/incidents/", h.handleProtected(h.handleIncidentProxy))
+
+	// Notification Service
+	h.mux.HandleFunc("/api/v1/notifications", h.handleProtected(h.handleNotificationProxy))
+	h.mux.HandleFunc("/api/v1/notifications/channels", h.handleProtected(h.handleNotificationProxy))
 
 	// Добавляем роуты Forge Service
 	h.mux.HandleFunc("/api/v1/forge/generate", h.handleProtected(h.handleForgeProxy))
+	h.mux.HandleFunc("/api/v1/forge/parse", h.handleProtected(h.handleForgeProxy))
+	h.mux.HandleFunc("/api/v1/forge/code", h.handleProtected(h.handleForgeProxy))
+	h.mux.HandleFunc("/api/v1/forge/validate", h.handleProtected(h.handleForgeProxy))
 }
 
 // handleProtected оборачивает обработчик, требующий аутентификации
 func (h *Handler) handleProtected(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Проверка аутентификации
-		if !h.isAuthenticated(r) {
-			h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "unauthorized"), http.StatusUnauthorized)
+		userInfo, err := h.authenticateRequest(r)
+		if err != nil {
+			h.writeError(w, err, http.StatusUnauthorized)
 			return
 		}
-		next(w, r)
+
+		// Добавляем информацию о пользователе в контекст
+		ctx := context.WithValue(r.Context(), "user_info", userInfo)
+		ctx = context.WithValue(ctx, "tenant_id", userInfo.TenantID)
+		ctx = context.WithValue(ctx, "user_id", userInfo.UserID)
+		ctx = context.WithValue(ctx, "user_roles", userInfo.Roles)
+		ctx = context.WithValue(ctx, "user_permissions", userInfo.Permissions)
+
+		// Проверяем права доступа к ресурсу
+		if !h.checkResourceAccess(r, userInfo) {
+			h.writeError(w, pkgErrors.New(pkgErrors.ErrForbidden, "insufficient permissions"), http.StatusForbidden)
+			return
+		}
+
+		next(w, r.WithContext(ctx))
 	}
 }
 
-// isAuthenticated проверяет аутентификацию запроса
+// authenticateRequest выполняет полную аутентификацию запроса
+func (h *Handler) authenticateRequest(r *http.Request) (*UserInfo, error) {
+	// Сначала проверяем X-API-Key header (имеет приоритет)
+	apiKeyHeader := r.Header.Get("X-API-Key")
+	if apiKeyHeader != "" {
+		return h.authenticateWithAPIKey(apiKeyHeader)
+	}
+
+	// Проверяем Authorization header
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		return nil, pkgErrors.New(pkgErrors.ErrUnauthorized, "missing auth header")
+	}
+
+	// Проверяем формат JWT Bearer токена
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		return h.authenticateWithJWT(token)
+	}
+
+	// Проверяем API ключ в формате "Api-Key <key>"
+	if strings.HasPrefix(authHeader, "Api-Key ") {
+		apiKey := strings.TrimPrefix(authHeader, "Api-Key ")
+		return h.authenticateWithAPIKey(apiKey)
+	}
+
+	return nil, pkgErrors.New(pkgErrors.ErrUnauthorized, "unsupported auth format")
+}
+
+// authenticateWithJWT аутентифицирует пользователя через JWT токен
+func (h *Handler) authenticateWithJWT(token string) (*UserInfo, error) {
+	// Валидация формата токена
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, pkgErrors.New(pkgErrors.ErrUnauthorized, "invalid jwt format")
+	}
+
+	// Вызываем Auth Service для валидации токена
+	ctx := context.Background()
+	userInfo, err := h.authService.ValidateToken(ctx, token)
+	if err != nil {
+		return nil, pkgErrors.Wrap(err, pkgErrors.ErrUnauthorized, "token validation failed")
+	}
+
+	// Проверяем срок действия токена
+	if time.Now().Unix() > userInfo.ExpiresAt {
+		return nil, pkgErrors.New(pkgErrors.ErrUnauthorized, "token expired")
+	}
+
+	return userInfo, nil
+}
+
+// authenticateWithAPIKey аутентифицирует через API ключ
+func (h *Handler) authenticateWithAPIKey(apiKey string) (*UserInfo, error) {
+	// Базовая валидация API ключа
+	if len(apiKey) < 16 {
+		return nil, pkgErrors.New(pkgErrors.ErrUnauthorized, "invalid api key length")
+	}
+
+	// TODO: Реализовать валидацию API ключа через Auth Service
+	// Сейчас возвращаем базового пользователя для API ключа
+	return &UserInfo{
+		UserID:      "api-key-user",
+		TenantID:    "default-tenant",
+		Email:       "api-key@system",
+		Roles:       []string{"api"},
+		Permissions: []string{"read", "write"},
+		ExpiresAt:   time.Now().Add(24 * time.Hour).Unix(),
+	}, nil
+}
+
+// checkResourceAccess проверяет права доступа к ресурсу
+func (h *Handler) checkResourceAccess(r *http.Request, userInfo *UserInfo) bool {
+	// Получаем требуемые права для ресурса
+	requiredPermissions := h.getRequiredPermissions(r)
+	if len(requiredPermissions) == 0 {
+		// Если права не определены, разрешаем доступ
+		return true
+	}
+
+	// Проверяем наличие требуемых прав
+	for _, required := range requiredPermissions {
+		hasPermission := false
+		for _, permission := range userInfo.Permissions {
+			if permission == required || permission == "*" {
+				hasPermission = true
+				break
+			}
+		}
+		if !hasPermission {
+			return false
+		}
+	}
+
+	return true
+}
+
+// getRequiredPermissions возвращает требуемые права для ресурса
+func (h *Handler) getRequiredPermissions(r *http.Request) []string {
+	path := r.URL.Path
+	method := r.Method
+
+	// Определяем права на основе пути и метода
+	switch {
+	case strings.HasPrefix(path, "/api/v1/checks"):
+		switch method {
+		case http.MethodGet:
+			return []string{"checks:read"}
+		case http.MethodPost:
+			return []string{"checks:write"}
+		case http.MethodPut:
+			return []string{"checks:write"}
+		case http.MethodDelete:
+			return []string{"checks:delete"}
+		default:
+			return []string{"checks:read"}
+		}
+	case strings.HasPrefix(path, "/api/v1/incidents"):
+		switch method {
+		case http.MethodGet:
+			return []string{"incidents:read"}
+		case http.MethodPost:
+			return []string{"incidents:write"}
+		case http.MethodPut:
+			return []string{"incidents:write"}
+		default:
+			return []string{"incidents:read"}
+		}
+	case strings.HasPrefix(path, "/api/v1/notifications"):
+		return []string{"notifications:write"}
+	case strings.HasPrefix(path, "/api/v1/metrics"):
+		return []string{"metrics:read"}
+	case strings.HasPrefix(path, "/api/v1/config"):
+		switch method {
+		case http.MethodGet:
+			return []string{"config:read"}
+		default:
+			return []string{"config:write"}
+		}
+	case strings.HasPrefix(path, "/api/v1/forge"):
+		return []string{"forge:write"}
+	default:
+		return []string{}
+	}
+}
+
+// isAuthenticated проверяет аутентификацию запроса (устаревший метод для обратной совместимости)
 // Поддерживает JWT токены в Authorization header или API ключи
 func (h *Handler) isAuthenticated(r *http.Request) bool {
 	ctx := r.Context()
@@ -460,62 +719,458 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 // handleChecksProxy проксирует запросы к Scheduler Service
 func (h *Handler) handleChecksProxy(w http.ResponseWriter, r *http.Request) {
-	// Проверка метода
-	if r.Method != http.MethodGet && r.Method != http.MethodPost {
-		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Получаем tenant_id из контекста (установлен в AuthMiddleware)
-	tenantID, ok := r.Context().Value("tenant_id").(string)
+	// Получаем информацию о пользователе из контекста
+	userInfo, ok := r.Context().Value("user_info").(*UserInfo)
 	if !ok {
-		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant not found"), http.StatusUnauthorized)
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
 		return
 	}
 
-	if r.Method == http.MethodGet {
-		// GET /api/v1/checks - получение списка проверок
-		req := &schedulerv1.ListChecksRequest{
-			TenantId: tenantID,
+	// Извлекаем ID проверки из URL пути для операций с конкретной проверкой
+	checkID := extractCheckIDFromPath(r.URL.Path)
+
+	switch r.Method {
+	case http.MethodGet:
+		if checkID != "" {
+			h.handleGetCheck(w, r, userInfo.TenantID, checkID)
+		} else {
+			h.handleListChecks(w, r, userInfo.TenantID)
 		}
-
-		resp, err := h.schedulerClient.ListChecks(r.Context(), req)
-		if err != nil {
-			h.handleError(w, err)
-			return
+	case http.MethodPost:
+		h.handleCreateCheck(w, r, userInfo.TenantID)
+	case http.MethodPut:
+		if checkID != "" {
+			h.handleUpdateCheck(w, r, userInfo.TenantID, checkID)
+		} else {
+			h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "check ID required"), http.StatusBadRequest)
 		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"checks": resp.Checks,
-			"total":  len(resp.Checks),
-		})
-	} else {
-		// POST /api/v1/checks - создание новой проверки
-		var createReq schedulerv1.CreateCheckRequest
-		if err := json.NewDecoder(r.Body).Decode(&createReq); err != nil {
-			h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
-			return
+	case http.MethodDelete:
+		if checkID != "" {
+			h.handleDeleteCheck(w, r, userInfo.TenantID, checkID)
+		} else {
+			h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "check ID required"), http.StatusBadRequest)
 		}
-
-		// Устанавливаем tenant_id из контекста
-		createReq.TenantId = tenantID
-
-		check, err := h.schedulerClient.CreateCheck(r.Context(), &createReq)
-		if err != nil {
-			h.handleError(w, err)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"message": "Check created",
-			"check":   check,
-		})
+	default:
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
 	}
+}
+
+// extractCheckIDFromPath извлекает ID проверки из URL пути
+func extractCheckIDFromPath(path string) string {
+	// Пример: /api/v1/checks/12345 -> 12345
+	parts := strings.Split(path, "/")
+	for i, part := range parts {
+		if part == "checks" && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
+// handleListHandles обрабатывает получение списка проверок
+func (h *Handler) handleListChecks(w http.ResponseWriter, r *http.Request, tenantID string) {
+	req := &schedulerv1.ListChecksRequest{
+		TenantId: tenantID,
+	}
+
+	resp, err := h.schedulerClient.ListChecks(r.Context(), req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"checks": resp.Checks,
+		"total":  len(resp.Checks),
+	})
+}
+
+// handleCreateCheck обрабатывает создание новой проверки
+func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request, tenantID string) {
+	var createReq schedulerv1.CreateCheckRequest
+	if err := json.NewDecoder(r.Body).Decode(&createReq); err != nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
+		return
+	}
+
+	// Устанавливаем tenant_id из контекста
+	createReq.TenantId = tenantID
+
+	check, err := h.schedulerClient.CreateCheck(r.Context(), &createReq)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Check created",
+		"check":   check,
+	})
+}
+
+// handleGetCheck обрабатывает получение конкретной проверки
+func (h *Handler) handleGetCheck(w http.ResponseWriter, r *http.Request, tenantID, checkID string) {
+	// Валидация UUID
+	if err := h.validator.ValidateUUID(checkID, "check_id"); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid check ID format"), http.StatusBadRequest)
+		return
+	}
+
+	req := &schedulerv1.GetCheckRequest{
+		CheckId: checkID,
+	}
+
+	check, err := h.schedulerClient.GetCheck(r.Context(), req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	// Проверяем, что проверка принадлежит тенанту
+	if check.TenantId != tenantID {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrForbidden, "access denied"), http.StatusForbidden)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"check":   check,
+	})
+}
+
+// handleUpdateCheck обрабатывает обновление проверки
+func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request, tenantID, checkID string) {
+	// Валидация UUID
+	if err := h.validator.ValidateUUID(checkID, "check_id"); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid check ID format"), http.StatusBadRequest)
+		return
+	}
+
+	var updateReq schedulerv1.UpdateCheckRequest
+	if err := json.NewDecoder(r.Body).Decode(&updateReq); err != nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
+		return
+	}
+
+	updateReq.CheckId = checkID
+
+	check, err := h.schedulerClient.UpdateCheck(r.Context(), &updateReq)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	// Проверяем, что проверка принадлежит тенанту
+	if check.TenantId != tenantID {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrForbidden, "access denied"), http.StatusForbidden)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Check updated",
+		"check":   check,
+	})
+}
+
+// handleDeleteCheck обрабатывает удаление проверки
+func (h *Handler) handleDeleteCheck(w http.ResponseWriter, r *http.Request, tenantID, checkID string) {
+	// Валидация UUID
+	if err := h.validator.ValidateUUID(checkID, "check_id"); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid check ID format"), http.StatusBadRequest)
+		return
+	}
+
+	req := &schedulerv1.DeleteCheckRequest{
+		CheckId: checkID,
+	}
+
+	_, err := h.schedulerClient.DeleteCheck(r.Context(), req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Check deleted",
+	})
+}
+
+// handleScheduleProxy обрабатывает запросы к расписаниям проверок
+func (h *Handler) handleScheduleProxy(w http.ResponseWriter, r *http.Request) {
+	// Получаем информацию о пользователе из контекста
+	userInfo, ok := r.Context().Value("user_info").(*UserInfo)
+	if !ok {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
+		return
+	}
+
+	// Извлекаем ID проверки из URL пути
+	checkID := extractCheckIDFromPath(r.URL.Path)
+
+	switch r.Method {
+	case http.MethodPost:
+		if checkID != "" {
+			h.handleScheduleCheck(w, r, userInfo.TenantID, checkID)
+		} else {
+			h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "check ID required"), http.StatusBadRequest)
+		}
+	case http.MethodDelete:
+		if checkID != "" {
+			h.handleUnscheduleCheck(w, r, userInfo.TenantID, checkID)
+		} else {
+			h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "check ID required"), http.StatusBadRequest)
+		}
+	case http.MethodGet:
+		if checkID != "" {
+			h.handleGetSchedule(w, r, userInfo.TenantID, checkID)
+		} else {
+			h.handleListSchedules(w, r, userInfo.TenantID)
+		}
+	default:
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
+	}
+}
+
+// handleScheduleCheck обрабатывает планирование проверки
+func (h *Handler) handleScheduleCheck(w http.ResponseWriter, r *http.Request, tenantID, checkID string) {
+	// Валидация UUID
+	if err := h.validator.ValidateUUID(checkID, "check_id"); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid check ID format"), http.StatusBadRequest)
+		return
+	}
+
+	var req schedulerv1.ScheduleCheckRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
+		return
+	}
+
+	req.CheckId = checkID
+
+	// Валидация cron выражения
+	if err := h.validator.ValidateCronExpression(req.CronExpression); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid cron expression"), http.StatusBadRequest)
+		return
+	}
+
+	schedule, err := h.schedulerClient.ScheduleCheck(r.Context(), &req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Check scheduled",
+		"schedule": schedule,
+	})
+}
+
+// handleUnscheduleCheck обрабатывает отмену планирования проверки
+func (h *Handler) handleUnscheduleCheck(w http.ResponseWriter, r *http.Request, tenantID, checkID string) {
+	// Валидация UUID
+	if err := h.validator.ValidateUUID(checkID, "check_id"); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid check ID format"), http.StatusBadRequest)
+		return
+	}
+
+	req := &schedulerv1.UnscheduleCheckRequest{
+		CheckId: checkID,
+	}
+
+	resp, err := h.schedulerClient.UnscheduleCheck(r.Context(), req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": resp.Success,
+		"message": "Check unscheduled",
+	})
+}
+
+// handleGetSchedule обрабатывает получение расписания проверки
+func (h *Handler) handleGetSchedule(w http.ResponseWriter, r *http.Request, tenantID, checkID string) {
+	// Валидация UUID
+	if err := h.validator.ValidateUUID(checkID, "check_id"); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid check ID format"), http.StatusBadRequest)
+		return
+	}
+
+	req := &schedulerv1.GetScheduleRequest{
+		CheckId: checkID,
+	}
+
+	schedule, err := h.schedulerClient.GetSchedule(r.Context(), req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"schedule": schedule,
+	})
+}
+
+// handleListSchedules обрабатывает получение списка расписаний
+func (h *Handler) handleListSchedules(w http.ResponseWriter, r *http.Request, tenantID string) {
+	req := &schedulerv1.ListSchedulesRequest{
+		// TODO: Добавить фильтрацию по tenant_id когда будет поддерживаться в proto
+	}
+
+	resp, err := h.schedulerClient.ListSchedules(r.Context(), req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"schedules": resp.Schedules,
+		"total":     len(resp.Schedules),
+	})
+}
+// handleCoreProxy обрабатывает запросы к Core Service
+func (h *Handler) handleCoreProxy(w http.ResponseWriter, r *http.Request) {
+	// Получаем информацию о пользователе из контекста
+	userInfo, ok := r.Context().Value("user_info").(*UserInfo)
+	if !ok {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
+		return
+	}
+
+	// Извлекаем ID проверки из URL пути
+	checkID := extractCheckIDFromPath(r.URL.Path)
+	if checkID == "" {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "check ID required"), http.StatusBadRequest)
+		return
+	}
+
+	// Валидация UUID
+	if err := h.validator.ValidateUUID(checkID, "check_id"); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid check ID format"), http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		h.handleExecuteCheck(w, r, userInfo.TenantID, checkID)
+	case http.MethodGet:
+		if strings.HasSuffix(r.URL.Path, "/status") {
+			h.handleGetCheckStatus(w, r, userInfo.TenantID, checkID)
+		} else if strings.HasSuffix(r.URL.Path, "/history") {
+			h.handleGetCheckHistory(w, r, userInfo.TenantID, checkID)
+		} else {
+			h.handleGetCheckStatus(w, r, userInfo.TenantID, checkID)
+		}
+	default:
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
+	}
+}
+
+// handleExecuteCheck обрабатывает немедленное выполнение проверки
+func (h *Handler) handleExecuteCheck(w http.ResponseWriter, r *http.Request, tenantID, checkID string) {
+	req := &corev1.ExecuteCheckRequest{
+		CheckId: checkID,
+	}
+
+	result, err := h.coreClient.ExecuteCheck(r.Context(), req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":     result.Success,
+		"execution_id": result.ExecutionId,
+		"duration_ms": result.DurationMs,
+		"status_code": result.StatusCode,
+		"error":       result.Error,
+		"checked_at":  result.CheckedAt,
+	})
+}
+
+// handleGetCheckStatus обрабатывает получение статуса проверки
+func (h *Handler) handleGetCheckStatus(w http.ResponseWriter, r *http.Request, tenantID, checkID string) {
+	req := &corev1.GetCheckStatusRequest{
+		CheckId: checkID,
+	}
+
+	status, err := h.coreClient.GetCheckStatus(r.Context(), req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"check_id":           status.CheckId,
+		"is_healthy":         status.IsHealthy,
+		"response_time_ms":   status.ResponseTimeMs,
+		"last_checked_at":   status.LastCheckedAt,
+	})
+}
+
+// handleGetCheckHistory обрабатывает получение истории выполнения проверки
+func (h *Handler) handleGetCheckHistory(w http.ResponseWriter, r *http.Request, tenantID, checkID string) {
+	// Парсинг query параметров для пагинации
+	page := 1
+	pageSize := 50
+	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+	if pageSizeStr := r.URL.Query().Get("page_size"); pageSizeStr != "" {
+		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 && ps <= 100 {
+			pageSize = ps
+		}
+	}
+
+	req := &corev1.GetCheckHistoryRequest{
+		CheckId: checkID,
+		Limit:   int32(pageSize),
+	}
+
+	history, err := h.coreClient.GetCheckHistory(r.Context(), req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"executions": history.Results,
+		"page":       page,
+		"page_size":  pageSize,
+		"total":      len(history.Results),
+	})
 }
 
 // handleForgeProxy проксирует запросы к Forge Service
@@ -733,21 +1388,334 @@ func (h *Handler) handleValidateProto(ctx context.Context, w http.ResponseWriter
 	json.NewEncoder(w).Encode(response)
 }
 
-// writeError записывает ошибку в ответ
-func (h *Handler) writeError(w http.ResponseWriter, err error, status int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	errorResponse := map[string]interface{}{
-		"error":   err.Error(),
-		"status":  status,
-		"success": false,
+// handleMetricsProxy обрабатывает запросы к Metrics Service
+func (h *Handler) handleMetricsProxy(w http.ResponseWriter, r *http.Request) {
+	// Получаем информацию о пользователе из контекста
+	userInfo, ok := r.Context().Value("user_info").(*UserInfo)
+	if !ok {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
+		return
 	}
 
-	json.NewEncoder(w).Encode(errorResponse)
+	switch r.Method {
+	case http.MethodGet:
+		h.handleGetMetrics(w, r, userInfo.TenantID)
+	case http.MethodPost:
+		if strings.HasSuffix(r.URL.Path, "/collect") {
+			h.handleCollectMetrics(w, r, userInfo.TenantID)
+		} else {
+			h.handleGetMetrics(w, r, userInfo.TenantID)
+		}
+	default:
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
+	}
 }
 
-// handleError обрабатывает ошибки сервиса
+// handleCollectMetrics обрабатывает сбор метрик
+func (h *Handler) handleCollectMetrics(w http.ResponseWriter, r *http.Request, tenantID string) {
+	var req metricsv1.CollectMetricsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
+		return
+	}
+
+	req.TenantId = tenantID
+
+	resp, err := h.metricsClient.CollectMetrics(r.Context(), &req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":       resp.Success,
+		"metrics_count": resp.MetricsCount,
+		"collected_at":  resp.CollectedAt,
+	})
+}
+
+// handleGetMetrics обрабатывает получение метрик
+func (h *Handler) handleGetMetrics(w http.ResponseWriter, r *http.Request, tenantID string) {
+	req := &metricsv1.GetMetricsRequest{
+		TenantId: tenantID,
+		ServiceName: r.URL.Query().Get("service_name"),
+	}
+
+	resp, err := h.metricsClient.GetMetrics(r.Context(), req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"metrics": resp.Metrics,
+		"total":   len(resp.Metrics),
+	})
+}
+
+// handleIncidentProxy обрабатывает запросы к Incident Service
+func (h *Handler) handleIncidentProxy(w http.ResponseWriter, r *http.Request) {
+	// Получаем информацию о пользователе из контекста
+	userInfo, ok := r.Context().Value("user_info").(*UserInfo)
+	if !ok {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
+		return
+	}
+
+	// Извлекаем ID инцидента из URL пути
+	incidentID := extractIDFromPath(r.URL.Path, "incidents")
+
+	switch r.Method {
+	case http.MethodGet:
+		if incidentID != "" {
+			h.handleGetIncident(w, r, userInfo.TenantID, incidentID)
+		} else {
+			h.handleListIncidents(w, r, userInfo.TenantID)
+		}
+	case http.MethodPost:
+		h.handleCreateIncident(w, r, userInfo.TenantID)
+	case http.MethodPut:
+		if incidentID != "" {
+			h.handleResolveIncident(w, r, userInfo.TenantID, incidentID)
+		} else {
+			h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "incident ID required"), http.StatusBadRequest)
+		}
+	default:
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
+	}
+}
+
+// handleCreateIncident обрабатывает создание инцидента
+func (h *Handler) handleCreateIncident(w http.ResponseWriter, r *http.Request, tenantID string) {
+	var req incidentv1.CreateIncidentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
+		return
+	}
+
+	req.TenantId = tenantID
+
+	incident, err := h.incidentClient.CreateIncident(r.Context(), &req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"message":  "Incident created",
+		"incident": incident,
+	})
+}
+
+// handleGetIncident обрабатывает получение инцидента
+func (h *Handler) handleGetIncident(w http.ResponseWriter, r *http.Request, tenantID, incidentID string) {
+	// Валидация UUID
+	if err := h.validator.ValidateUUID(incidentID, "incident_id"); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid incident ID format"), http.StatusBadRequest)
+		return
+	}
+
+	req := &incidentv1.GetIncidentRequest{
+		IncidentId: incidentID,
+	}
+
+	incident, err := h.incidentClient.GetIncident(r.Context(), req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	// Проверяем, что инцидент принадлежит тенанту
+	if incident.TenantId != tenantID {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrForbidden, "access denied"), http.StatusForbidden)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"incident": incident,
+	})
+}
+
+// handleListIncidents обрабатывает получение списка инцидентов
+func (h *Handler) handleListIncidents(w http.ResponseWriter, r *http.Request, tenantID string) {
+	req := &incidentv1.ListIncidentsRequest{
+		TenantId: tenantID,
+	}
+
+	resp, err := h.incidentClient.ListIncidents(r.Context(), req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"incidents": resp.Incidents,
+		"total":     len(resp.Incidents),
+	})
+}
+
+// handleResolveIncident обрабатывает разрешение инцидента
+func (h *Handler) handleResolveIncident(w http.ResponseWriter, r *http.Request, tenantID, incidentID string) {
+	// Валидация UUID
+	if err := h.validator.ValidateUUID(incidentID, "incident_id"); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid incident ID format"), http.StatusBadRequest)
+		return
+	}
+
+	var req incidentv1.ResolveIncidentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
+		return
+	}
+
+	req.IncidentId = incidentID
+
+	resp, err := h.incidentClient.ResolveIncident(r.Context(), &req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": resp.Success,
+		"message": "Incident resolved",
+	})
+}
+
+// handleNotificationProxy обрабатывает запросы к Notification Service
+func (h *Handler) handleNotificationProxy(w http.ResponseWriter, r *http.Request) {
+	// Получаем информацию о пользователе из контекста
+	userInfo, ok := r.Context().Value("user_info").(*UserInfo)
+	if !ok {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		if strings.HasSuffix(r.URL.Path, "/channels") {
+			h.handleGetNotificationChannels(w, r, userInfo.TenantID)
+		} else {
+			h.handleSendNotification(w, r, userInfo.TenantID)
+		}
+	case http.MethodPost:
+		if strings.HasSuffix(r.URL.Path, "/channels") {
+			h.handleCreateNotificationChannel(w, r, userInfo.TenantID)
+		} else {
+			h.handleSendNotification(w, r, userInfo.TenantID)
+		}
+	default:
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
+	}
+}
+
+// handleSendNotification обрабатывает отправку уведомления
+func (h *Handler) handleSendNotification(w http.ResponseWriter, r *http.Request, tenantID string) {
+	var req notificationv1.SendNotificationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
+		return
+	}
+
+	req.TenantId = tenantID
+
+	resp, err := h.notificationClient.SendNotification(r.Context(), &req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": resp.Success,
+		"results": resp.Results,
+	})
+}
+
+// handleGetNotificationChannels обрабатывает получение каналов уведомлений
+func (h *Handler) handleGetNotificationChannels(w http.ResponseWriter, r *http.Request, tenantID string) {
+	req := &notificationv1.ListChannelsRequest{
+		TenantId: tenantID,
+	}
+
+	resp, err := h.notificationClient.GetNotificationChannels(r.Context(), req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"channels": resp.Channels,
+		"total":    len(resp.Channels),
+	})
+}
+
+// handleCreateNotificationChannel обрабатывает создание канала уведомлений
+func (h *Handler) handleCreateNotificationChannel(w http.ResponseWriter, r *http.Request, tenantID string) {
+	var req notificationv1.RegisterChannelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
+		return
+	}
+
+	req.TenantId = tenantID
+
+	channel, err := h.notificationClient.RegisterChannel(r.Context(), &req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Notification channel created",
+		"channel": channel,
+	})
+}
+
+// extractIDFromPath извлекает ID из URL пути
+func extractIDFromPath(path, resource string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	for i, part := range parts {
+		if part == resource && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
+// writeError пишет ошибку в ответ
+func (h *Handler) writeError(w http.ResponseWriter, err error, statusCode int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"error":   true,
+		"message": err.Error(),
+		"code":    statusCode,
+	})
+}
+
+// handleError обрабатывает ошибки и конвертирует их в HTTP статусы
 func (h *Handler) handleError(w http.ResponseWriter, err error) {
 	// Используем глобальные экземпляры ошибок для сравнения
 	switch {
