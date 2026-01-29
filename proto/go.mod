@@ -1,4 +1,4 @@
-module UptimePingPlatform/proto
+module github.com/Roval911/UptimePing/proto
 
 go 1.24.0
 

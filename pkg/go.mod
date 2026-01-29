@@ -1,4 +1,4 @@
-module UptimePingPlatform/pkg
+module github.com/Roval911/UptimePing/pkg
 
 go 1.24.0
 
