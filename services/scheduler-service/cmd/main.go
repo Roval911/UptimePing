@@ -1,8 +1,8 @@
 package main
 
 import (
-	pkg_redis "UptimePingPlatform/pkg/redis"
 	pkg_database "UptimePingPlatform/pkg/database"
+	pkg_redis "UptimePingPlatform/pkg/redis"
 	"context"
 	"fmt"
 	"log"
@@ -20,8 +20,9 @@ import (
 
 	schedulerv1 "UptimePingPlatform/proto/api/scheduler/v1"
 	grpcHandler "UptimePingPlatform/services/scheduler-service/internal/handler/grpc"
-	"UptimePingPlatform/services/scheduler-service/internal/usecase"
+	"UptimePingPlatform/services/scheduler-service/internal/repository"
 	postgresRepo "UptimePingPlatform/services/scheduler-service/internal/repository/postgres"
+	"UptimePingPlatform/services/scheduler-service/internal/usecase"
 	"google.golang.org/grpc"
 )
 
@@ -94,7 +95,16 @@ func main() {
 
 	// Initialize repositories
 	checkRepo := postgresRepo.NewCheckRepository(db.Pool)
-	schedulerRepo := postgresRepo.NewSchedulerRepository(db.Pool, redisClient.Client)
+
+	// Initialize scheduler repository with Redis client if available
+	var schedulerRepo repository.SchedulerRepository
+	if redisClient != nil && redisClient.Client != nil {
+		schedulerRepo = postgresRepo.NewSchedulerRepository(db.Pool, redisClient.Client)
+		appLogger.Info("Scheduler repository initialized with Redis")
+	} else {
+		schedulerRepo = postgresRepo.NewSchedulerRepository(db.Pool, nil)
+		appLogger.Warn("Scheduler repository initialized without Redis")
+	}
 
 	// Initialize use case
 	checkUseCase := usecase.NewCheckUseCase(checkRepo, schedulerRepo, appLogger)
@@ -108,11 +118,11 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer()
-	
+
 	appLogger.Info("Creating gRPC handler...")
 	schedulerHandler := grpcHandler.NewHandlerFixed(checkUseCase, appLogger)
 	appLogger.Info("gRPC handler created successfully")
-	
+
 	appLogger.Info("Registering gRPC service...")
 	schedulerv1.RegisterSchedulerServiceServer(grpcServer, schedulerHandler)
 	appLogger.Info("gRPC service registered successfully")

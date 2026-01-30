@@ -3,7 +3,7 @@ server:
   port: 50052
 
 database:
-  host: "localhost"
+  host: "postgres"
   port: 5432
   name: "uptimeping"
   user: "uptimeping"
@@ -18,12 +18,12 @@ database:
   retry_interval: "1s"
 
 redis:
-  addr: "localhost:6379"
+  addr: "redis:6379"
   password: ""
   db: 0
 
 rabbitmq:
-  url: "amqp://guest:guest@localhost:5672/"
+  url: "amqp://uptimeping:uptimeping123@rabbitmq:5672/"
 
 logger:
   level: "info"

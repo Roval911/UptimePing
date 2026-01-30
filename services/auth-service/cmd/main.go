@@ -17,17 +17,18 @@ import (
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
 	pkg_redis "UptimePingPlatform/pkg/redis"
-	
+
 	"UptimePingPlatform/services/auth-service/internal/grpc/handlers"
-	"UptimePingPlatform/services/auth-service/internal/repository/postgres"
-	"UptimePingPlatform/services/auth-service/internal/repository/redis"
-	"UptimePingPlatform/services/auth-service/internal/service"
 	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
 	"UptimePingPlatform/services/auth-service/internal/pkg/password"
-	
+	"UptimePingPlatform/services/auth-service/internal/repository"
+	"UptimePingPlatform/services/auth-service/internal/repository/postgres"
+	redisRepo "UptimePingPlatform/services/auth-service/internal/repository/redis"
+	"UptimePingPlatform/services/auth-service/internal/service"
+
 	grpc_auth "UptimePingPlatform/proto/api/auth/v1"
-	"google.golang.org/grpc"
 	"golang.org/x/crypto/bcrypt"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -48,17 +49,17 @@ func main() {
 
 	// Initialize database connection
 	db, err := database.Connect(context.Background(), &database.Config{
-		Host:          cfg.Database.Host,
-		Port:          cfg.Database.Port,
-		User:          cfg.Database.User,
-		Password:      cfg.Database.Password,
-		Database:      cfg.Database.Name,
-		SSLMode:       "disable",
-		MaxConns:      25,
-		MinConns:      5,
-		MaxConnLife:   time.Hour,
-		MaxConnIdle:   5 * time.Minute,
-		HealthCheck:   5 * time.Minute,
+		Host:        cfg.Database.Host,
+		Port:        cfg.Database.Port,
+		User:        cfg.Database.User,
+		Password:    cfg.Database.Password,
+		Database:    cfg.Database.Name,
+		SSLMode:     "disable",
+		MaxConns:    25,
+		MinConns:    5,
+		MaxConnLife: time.Hour,
+		MaxConnIdle: 5 * time.Minute,
+		HealthCheck: 5 * time.Minute,
 	})
 	if err != nil {
 		appLogger.Error("Failed to connect to database", logger.Error(err))
@@ -82,13 +83,21 @@ func main() {
 	userRepo := postgres.NewUserRepository(db.Pool)
 	tenantRepo := postgres.NewTenantRepository(db.Pool)
 	apiKeyRepo := postgres.NewAPIKeyRepository(db.Pool)
-	sessionRepo := redis.NewSessionRepository(redisClient.Client)
+
+	// Initialize session repository
+	var sessionRepo repository.SessionRepository
+	if redisClient != nil && redisClient.Client != nil {
+		sessionRepo = redisRepo.NewSessionRepository(redisClient.Client)
+		appLogger.Info("Session repository initialized successfully")
+	} else {
+		appLogger.Warn("Redis not available, session repository disabled")
+	}
 
 	// Initialize JWT manager
 	jwtManager := jwt.NewManager(
 		"your-access-secret-key",
-		"your-refresh-secret-key", 
-		24*time.Hour,  // access token TTL
+		"your-refresh-secret-key",
+		24*time.Hour,   // access token TTL
 		7*24*time.Hour, // refresh token TTL
 	)
 
@@ -185,21 +194,21 @@ func main() {
 
 func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthChecker, appLogger logger.Logger) http.Handler {
 	mux := http.NewServeMux()
-	
+
 	// Metrics endpoint
 	mux.Handle("/metrics", metricsHandler)
-	
+
 	// Health endpoints
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"healthy","service":"auth-service"}`))
 	})
-	
+
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ready","service":"auth-service"}`))
 	})
-	
+
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"live","service":"auth-service"}`))
@@ -220,6 +229,6 @@ func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthCh
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"message":"Auth Service - Validate endpoint","status":"ok"}`))
 	})
-	
+
 	return mux
 }
