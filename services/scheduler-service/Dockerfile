@@ -4,26 +4,35 @@ FROM golang:1.24-alpine AS builder
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
 
-# Set working directory and module
+# Set working directory
 WORKDIR /app
 ENV GO111MODULE=on
 
-# Copy go mod files
+# Create temporary go.work file with only needed modules and correct Go version
+RUN echo "go 1.24.0" > go.work && \
+    echo "" >> go.work && \
+    echo "use (" >> go.work && \
+    echo "  ./pkg" >> go.work && \
+    echo "  ./proto" >> go.work && \
+    echo "  ./services/scheduler-service" >> go.work && \
+    echo ")" >> go.work
+
+# Copy go mod files for required modules
+COPY go.mod go.sum ./
+COPY pkg/go.mod pkg/go.sum ./pkg/
+COPY proto/go.mod proto/go.sum ./proto/
 COPY services/scheduler-service/go.mod services/scheduler-service/go.sum ./services/scheduler-service/
-COPY pkg/go.mod ./pkg/
-COPY proto/go.mod ./proto/
+
+# Sync workspace
+RUN go work sync
 
 # Download dependencies
-WORKDIR /app/services/scheduler-service
 RUN go mod download
 
 # Copy source code
 COPY services/scheduler-service ./services/scheduler-service
 COPY pkg ./pkg
 COPY proto ./proto
-
-# Run go mod tidy to fix dependencies
-RUN go mod tidy
 
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build \
@@ -46,7 +55,7 @@ RUN addgroup -g 1001 -S appgroup && \
 WORKDIR /app
 
 # Copy binary from builder stage
-COPY --from=builder /app/services/scheduler-service/scheduler-service .
+COPY --from=builder /app/scheduler-service .
 
 # Copy config files
 COPY services/scheduler-service/config ./config

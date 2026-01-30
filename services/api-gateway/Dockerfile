@@ -4,13 +4,27 @@ FROM golang:1.24-alpine AS builder
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
 
-# Set working directory and module
+# Set working directory
 WORKDIR /app
 ENV GO111MODULE=on
 
-# Copy go mod files
+# Create temporary go.work file with only needed modules and correct Go version
+RUN echo "go 1.24.0" > go.work && \
+    echo "" >> go.work && \
+    echo "use (" >> go.work && \
+    echo "  ./pkg" >> go.work && \
+    echo "  ./proto" >> go.work && \
+    echo "  ./services/api-gateway" >> go.work && \
+    echo ")" >> go.work
+
+# Copy go mod files for required modules
 COPY go.mod go.sum ./
-COPY pkg/go.mod ./pkg/go.mod
+COPY pkg/go.mod pkg/go.sum ./pkg/
+COPY proto/go.mod proto/go.sum ./proto/
+COPY services/api-gateway/go.mod services/api-gateway/go.sum ./services/api-gateway/
+
+# Sync workspace
+RUN go work sync
 
 # Download dependencies
 RUN go mod download
@@ -19,11 +33,6 @@ RUN go mod download
 COPY services/api-gateway ./services/api-gateway
 COPY pkg ./pkg
 COPY proto ./proto
-# Run go mod tidy to fix dependencies
-RUN go mod tidy
-
-# Run go mod tidy to fix dependencies
-RUN go mod tidy
 
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build \

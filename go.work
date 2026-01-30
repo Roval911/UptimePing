@@ -13,4 +13,5 @@ use (
 	./services/metrics-service
 	./services/notification-service
 	./services/scheduler-service
+	./services/core-service
 )

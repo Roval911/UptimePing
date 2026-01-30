@@ -4,14 +4,27 @@ FROM golang:1.24-alpine AS builder
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
 
-# Set working directory and module
+# Set working directory
 WORKDIR /app
 ENV GO111MODULE=on
 
-# Copy go mod files
+# Create temporary go.work file with only needed modules and correct Go version
+RUN echo "go 1.24.0" > go.work && \
+    echo "" >> go.work && \
+    echo "use (" >> go.work && \
+    echo "  ./pkg" >> go.work && \
+    echo "  ./proto" >> go.work && \
+    echo "  ./services/cli-service" >> go.work && \
+    echo ")" >> go.work
+
+# Copy go mod files for required modules
 COPY go.mod go.sum ./
-COPY pkg/go.mod ./pkg/go.mod
-COPY go.mod go.sum ./
+COPY pkg/go.mod pkg/go.sum ./pkg/
+COPY proto/go.mod proto/go.sum ./proto/
+COPY services/cli-service/go.mod services/cli-service/go.sum ./services/cli-service/
+
+# Sync workspace
+RUN go work sync
 
 # Download dependencies
 RUN go mod download
@@ -20,15 +33,13 @@ RUN go mod download
 COPY services/cli-service ./services/cli-service
 COPY pkg ./pkg
 COPY proto ./proto
-# Run go mod tidy to fix dependencies
-RUN go mod tidy
 
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags='-w -s -extldflags "-static"' \
     -a -installsuffix cgo \
     -o cli-service \
-    ./services/cli-service/cmd/main.go
+    ./services/cli-service/main.go
 
 # Final stage
 FROM alpine:latest
@@ -56,7 +67,7 @@ RUN mkdir -p logs data && \
 # Switch to non-root user
 USER appuser
 
-# Health check
+# Health check - проверяет, что бинарник запускается
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD ./cli-service --version || exit 1
 
