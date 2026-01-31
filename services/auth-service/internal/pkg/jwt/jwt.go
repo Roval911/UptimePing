@@ -9,20 +9,24 @@ import (
 
 // TokenClaims структура для хранения пользовательских данных в JWT токене
 type TokenClaims struct {
-	UserID    string `json:"user_id"`
-	TenantID  string `json:"tenant_id"`
-	IsAdmin   bool   `json:"is_admin"`
-	TokenType string `json:"token_type"` // Добавляем поле для различения типов токенов
+	UserID      string   `json:"user_id"`
+	TenantID    string   `json:"tenant_id"`
+	IsAdmin     bool     `json:"is_admin"`
+	TokenType   string   `json:"token_type"`  // Добавляем поле для различения типов токенов
+	Permissions []string `json:"permissions"` // Добавляем поле для прав доступа
 	jwt.RegisteredClaims
 }
 
 // JWTManager интерфейс для работы с JWT токенами
 type JWTManager interface {
 	GenerateToken(userID, tenantID string, isAdmin bool) (string, string, error)
+	GenerateTokenWithPermissions(userID, tenantID string, isAdmin bool, permissions []string) (string, string, error)
 	ValidateAccessToken(token string) (*TokenClaims, error)
 	ValidateRefreshToken(token string) (*TokenClaims, error)
 	GenerateAccessToken(userID, tenantID string, isAdmin bool) (string, error)
+	GenerateAccessTokenWithPermissions(userID, tenantID string, isAdmin bool, permissions []string) (string, error)
 	GenerateRefreshToken(userID, tenantID string, isAdmin bool) (string, error)
+	GenerateRefreshTokenWithPermissions(userID, tenantID string, isAdmin bool, permissions []string) (string, error)
 }
 
 // Manager реализация JWTManager
@@ -43,14 +47,27 @@ func NewManager(accessSecretKey, refreshSecretKey string, accessTokenTTL, refres
 	}
 }
 
-// GenerateToken генерирует пару access и refresh токенов
+// GenerateToken генерирует пару access и refresh токенов с правами по умолчанию
 func (m *Manager) GenerateToken(userID, tenantID string, isAdmin bool) (string, string, error) {
-	accessToken, err := m.GenerateAccessToken(userID, tenantID, isAdmin)
+	// Права по умолчанию для всех пользователей
+	defaultPermissions := []string{
+		"checks:read", "checks:write", "checks:delete",
+		"incidents:read", "incidents:write", "incidents:resolve",
+		"config:read", "config:write",
+		"metrics:read",
+	}
+
+	return m.GenerateTokenWithPermissions(userID, tenantID, isAdmin, defaultPermissions)
+}
+
+// GenerateTokenWithPermissions генерирует пару access и refresh токенов с указанными правами
+func (m *Manager) GenerateTokenWithPermissions(userID, tenantID string, isAdmin bool, permissions []string) (string, string, error) {
+	accessToken, err := m.GenerateAccessTokenWithPermissions(userID, tenantID, isAdmin, permissions)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to generate access token: %w", err)
 	}
 
-	refreshToken, err := m.GenerateRefreshToken(userID, tenantID, isAdmin)
+	refreshToken, err := m.GenerateRefreshTokenWithPermissions(userID, tenantID, isAdmin, permissions)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to generate refresh token: %w", err)
 	}
@@ -58,13 +75,27 @@ func (m *Manager) GenerateToken(userID, tenantID string, isAdmin bool) (string, 
 	return accessToken, refreshToken, nil
 }
 
-// GenerateAccessToken генерирует access токен
+// GenerateAccessToken генерирует access токен с правами по умолчанию
 func (m *Manager) GenerateAccessToken(userID, tenantID string, isAdmin bool) (string, error) {
+	// Права по умолчанию для всех пользователей
+	defaultPermissions := []string{
+		"checks:read", "checks:write", "checks:delete",
+		"incidents:read", "incidents:write", "incidents:resolve",
+		"config:read", "config:write",
+		"metrics:read",
+	}
+
+	return m.GenerateAccessTokenWithPermissions(userID, tenantID, isAdmin, defaultPermissions)
+}
+
+// GenerateAccessTokenWithPermissions генерирует access токен с указанными правами
+func (m *Manager) GenerateAccessTokenWithPermissions(userID, tenantID string, isAdmin bool, permissions []string) (string, error) {
 	claims := &TokenClaims{
-		UserID:    userID,
-		TenantID:  tenantID,
-		IsAdmin:   isAdmin,
-		TokenType: "access",
+		UserID:      userID,
+		TenantID:    tenantID,
+		IsAdmin:     isAdmin,
+		TokenType:   "access",
+		Permissions: permissions,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().UTC().Add(m.accessTokenTTL)),
 			IssuedAt:  jwt.NewNumericDate(time.Now().UTC()),
@@ -77,13 +108,27 @@ func (m *Manager) GenerateAccessToken(userID, tenantID string, isAdmin bool) (st
 	return token.SignedString([]byte(m.accessSecretKey))
 }
 
-// GenerateRefreshToken генерирует refresh токен
+// GenerateRefreshToken генерирует refresh токен с правами по умолчанию
 func (m *Manager) GenerateRefreshToken(userID, tenantID string, isAdmin bool) (string, error) {
+	// Права по умолчанию для всех пользователей
+	defaultPermissions := []string{
+		"checks:read", "checks:write", "checks:delete",
+		"incidents:read", "incidents:write", "incidents:resolve",
+		"config:read", "config:write",
+		"metrics:read",
+	}
+
+	return m.GenerateRefreshTokenWithPermissions(userID, tenantID, isAdmin, defaultPermissions)
+}
+
+// GenerateRefreshTokenWithPermissions генерирует refresh токен с указанными правами
+func (m *Manager) GenerateRefreshTokenWithPermissions(userID, tenantID string, isAdmin bool, permissions []string) (string, error) {
 	claims := &TokenClaims{
-		UserID:    userID,
-		TenantID:  tenantID,
-		IsAdmin:   isAdmin,
-		TokenType: "refresh",
+		UserID:      userID,
+		TenantID:    tenantID,
+		IsAdmin:     isAdmin,
+		TokenType:   "refresh",
+		Permissions: permissions,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().UTC().Add(m.refreshTokenTTL)),
 			IssuedAt:  jwt.NewNumericDate(time.Now().UTC()),

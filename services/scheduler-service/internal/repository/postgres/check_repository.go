@@ -29,25 +29,24 @@ func NewCheckRepository(pool *pgxpool.Pool) repository.CheckRepository {
 // Create создает новую проверку
 func (r *CheckRepository) Create(ctx context.Context, check *domain.Check) error {
 	query := `
-		INSERT INTO checks (id, tenant_id, name, target, type, interval, timeout, 
-			status, priority, config, created_at, updated_at, next_run)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		INSERT INTO checks (id, tenant_id, name, description, type, target, 
+			interval_seconds, timeout_seconds, enabled, config, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`
 
 	_, err := r.pool.Exec(ctx, query,
 		check.ID,
 		check.TenantID,
 		check.Name,
-		check.Target,
+		check.Description,
 		check.Type,
+		check.Target,
 		check.Interval,
 		check.Timeout,
-		check.Status,
-		check.Priority,
+		check.Enabled,
 		check.Config,
 		check.CreatedAt,
 		check.UpdatedAt,
-		check.NextRunAt,
 	)
 
 	if err != nil {
@@ -62,29 +61,27 @@ func (r *CheckRepository) Create(ctx context.Context, check *domain.Check) error
 // GetByID возвращает проверку по ID
 func (r *CheckRepository) GetByID(ctx context.Context, id string) (*domain.Check, error) {
 	query := `
-		SELECT id, tenant_id, name, target, type, interval, timeout, 
-			status, priority, config, created_at, updated_at, next_run
+		SELECT id, tenant_id, name, description, type, target, 
+			interval_seconds, timeout_seconds, enabled, config, created_at, updated_at
 		FROM checks
 		WHERE id = $1
 	`
 
 	var check domain.Check
-	var nextRun sql.NullTime
 
 	err := r.pool.QueryRow(ctx, query, id).Scan(
 		&check.ID,
 		&check.TenantID,
 		&check.Name,
-		&check.Target,
+		&check.Description,
 		&check.Type,
+		&check.Target,
 		&check.Interval,
 		&check.Timeout,
-		&check.Status,
-		&check.Priority,
+		&check.Enabled,
 		&check.Config,
 		&check.CreatedAt,
 		&check.UpdatedAt,
-		&nextRun,
 	)
 
 	if err != nil {
@@ -98,18 +95,14 @@ func (r *CheckRepository) GetByID(ctx context.Context, id string) (*domain.Check
 			WithContext(ctx)
 	}
 
-	if nextRun.Valid {
-		check.NextRunAt = &nextRun.Time
-	}
-
 	return &check, nil
 }
 
 // GetByTenantID возвращает список проверок для tenant
 func (r *CheckRepository) GetByTenantID(ctx context.Context, tenantID string) ([]*domain.Check, error) {
 	query := `
-		SELECT id, tenant_id, name, target, type, interval, timeout, 
-			status, priority, config, created_at, updated_at, next_run
+		SELECT id, tenant_id, name, description, type, target, 
+			interval_seconds, timeout_seconds, enabled, config, created_at, updated_at
 		FROM checks
 		WHERE tenant_id = $1
 		ORDER BY created_at DESC
@@ -126,32 +119,26 @@ func (r *CheckRepository) GetByTenantID(ctx context.Context, tenantID string) ([
 	var checks []*domain.Check
 	for rows.Next() {
 		var check domain.Check
-		var nextRun sql.NullTime
 
 		err := rows.Scan(
 			&check.ID,
 			&check.TenantID,
 			&check.Name,
-			&check.Target,
+			&check.Description,
 			&check.Type,
+			&check.Target,
 			&check.Interval,
 			&check.Timeout,
-			&check.Status,
-			&check.Priority,
+			&check.Enabled,
 			&check.Config,
 			&check.CreatedAt,
 			&check.UpdatedAt,
-			&nextRun,
 		)
 
 		if err != nil {
 			return nil, errors.Wrap(err, errors.ErrInternal, "failed to scan check").
 				WithDetails(fmt.Sprintf("tenant_id: %s", tenantID)).
 				WithContext(ctx)
-		}
-
-		if nextRun.Valid {
-			check.NextRunAt = &nextRun.Time
 		}
 
 		checks = append(checks, &check)
@@ -170,23 +157,23 @@ func (r *CheckRepository) GetByTenantID(ctx context.Context, tenantID string) ([
 func (r *CheckRepository) Update(ctx context.Context, check *domain.Check) error {
 	query := `
 		UPDATE checks
-		SET name = $2, target = $3, type = $4, interval = $5, timeout = $6,
-			status = $7, priority = $8, config = $9, updated_at = $10, next_run = $11
+		SET name = $2, description = $3, type = $4, target = $5, 
+			interval_seconds = $6, timeout_seconds = $7, enabled = $8, 
+			config = $9, updated_at = $10
 		WHERE id = $1
 	`
 
 	_, err := r.pool.Exec(ctx, query,
 		check.ID,
 		check.Name,
-		check.Target,
+		check.Description,
 		check.Type,
+		check.Target,
 		check.Interval,
 		check.Timeout,
-		check.Status,
-		check.Priority,
+		check.Enabled,
 		check.Config,
 		check.UpdatedAt,
-		check.NextRunAt,
 	)
 
 	if err != nil {
@@ -218,14 +205,77 @@ func (r *CheckRepository) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// List возвращает список проверок с пагинацией
+func (r *CheckRepository) List(ctx context.Context, tenantID string, pageSize int, pageToken string) ([]*domain.Check, error) {
+	query := `
+		SELECT id, tenant_id, name, description, type, target, 
+			interval_seconds, timeout_seconds, enabled, config, created_at, updated_at
+		FROM checks
+		WHERE tenant_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2
+	`
+
+	rows, err := r.pool.Query(ctx, query, tenantID, pageSize)
+	if err != nil {
+		return nil, errors.Wrap(err, errors.ErrInternal, "failed to list checks").
+			WithDetails(fmt.Sprintf("tenant_id: %s, page_size: %d", tenantID, pageSize)).
+			WithContext(ctx)
+	}
+	defer rows.Close()
+
+	var checks []*domain.Check
+	for rows.Next() {
+		var check domain.Check
+
+		err := rows.Scan(
+			&check.ID,
+			&check.TenantID,
+			&check.Name,
+			&check.Description,
+			&check.Type,
+			&check.Target,
+			&check.Interval,
+			&check.Timeout,
+			&check.Enabled,
+			&check.Config,
+			&check.CreatedAt,
+			&check.UpdatedAt,
+		)
+		if err != nil {
+			return nil, errors.Wrap(err, errors.ErrInternal, "failed to scan check").
+				WithContext(ctx)
+		}
+
+		checks = append(checks, &check)
+	}
+
+	return checks, nil
+}
+
+// Count возвращает общее количество проверок для tenant
+func (r *CheckRepository) Count(ctx context.Context, tenantID string) (int, error) {
+	query := `SELECT COUNT(*) FROM checks WHERE tenant_id = $1`
+
+	var count int
+	err := r.pool.QueryRow(ctx, query, tenantID).Scan(&count)
+	if err != nil {
+		return 0, errors.Wrap(err, errors.ErrInternal, "failed to count checks").
+			WithDetails(fmt.Sprintf("tenant_id: %s", tenantID)).
+			WithContext(ctx)
+	}
+
+	return count, nil
+}
+
 // GetActiveChecks возвращает список активных проверок
 func (r *CheckRepository) GetActiveChecks(ctx context.Context) ([]*domain.Check, error) {
 	query := `
-		SELECT id, tenant_id, name, target, type, interval, timeout, 
-			status, priority, config, created_at, updated_at, next_run
+		SELECT id, tenant_id, name, description, type, target, 
+			interval_seconds, timeout_seconds, enabled, config, created_at, updated_at
 		FROM checks
-		WHERE status = 'active'
-		ORDER BY next_run ASC
+		WHERE enabled = true
+		ORDER BY created_at ASC
 	`
 
 	rows, err := r.pool.Query(ctx, query)
@@ -238,31 +288,25 @@ func (r *CheckRepository) GetActiveChecks(ctx context.Context) ([]*domain.Check,
 	var checks []*domain.Check
 	for rows.Next() {
 		var check domain.Check
-		var nextRun sql.NullTime
 
 		err := rows.Scan(
 			&check.ID,
 			&check.TenantID,
 			&check.Name,
-			&check.Target,
+			&check.Description,
 			&check.Type,
+			&check.Target,
 			&check.Interval,
 			&check.Timeout,
-			&check.Status,
-			&check.Priority,
+			&check.Enabled,
 			&check.Config,
 			&check.CreatedAt,
 			&check.UpdatedAt,
-			&nextRun,
 		)
 
 		if err != nil {
 			return nil, errors.Wrap(err, errors.ErrInternal, "failed to scan active check").
 				WithContext(ctx)
-		}
-
-		if nextRun.Valid {
-			check.NextRunAt = &nextRun.Time
 		}
 
 		checks = append(checks, &check)
@@ -279,11 +323,11 @@ func (r *CheckRepository) GetActiveChecks(ctx context.Context) ([]*domain.Check,
 // GetActiveChecksByTenant возвращает список активных проверок для tenant
 func (r *CheckRepository) GetActiveChecksByTenant(ctx context.Context, tenantID string) ([]*domain.Check, error) {
 	query := `
-		SELECT id, tenant_id, name, target, type, interval, timeout, 
-			status, priority, config, created_at, updated_at, next_run
+		SELECT id, tenant_id, name, description, type, target, 
+			interval_seconds, timeout_seconds, enabled, config, created_at, updated_at
 		FROM checks
-		WHERE tenant_id = $1 AND status = 'active'
-		ORDER BY next_run ASC
+		WHERE tenant_id = $1 AND enabled = true
+		ORDER BY created_at ASC
 	`
 
 	rows, err := r.pool.Query(ctx, query, tenantID)
@@ -297,32 +341,26 @@ func (r *CheckRepository) GetActiveChecksByTenant(ctx context.Context, tenantID 
 	var checks []*domain.Check
 	for rows.Next() {
 		var check domain.Check
-		var nextRun sql.NullTime
 
 		err := rows.Scan(
 			&check.ID,
 			&check.TenantID,
 			&check.Name,
-			&check.Target,
+			&check.Description,
 			&check.Type,
+			&check.Target,
 			&check.Interval,
 			&check.Timeout,
-			&check.Status,
-			&check.Priority,
+			&check.Enabled,
 			&check.Config,
 			&check.CreatedAt,
 			&check.UpdatedAt,
-			&nextRun,
 		)
 
 		if err != nil {
 			return nil, errors.Wrap(err, errors.ErrInternal, "failed to scan active check").
 				WithDetails(fmt.Sprintf("tenant_id: %s", tenantID)).
 				WithContext(ctx)
-		}
-
-		if nextRun.Valid {
-			check.NextRunAt = &nextRun.Time
 		}
 
 		checks = append(checks, &check)
@@ -338,10 +376,6 @@ func (r *CheckRepository) GetActiveChecksByTenant(ctx context.Context, tenantID 
 }
 
 // Ping проверяет подключение к базе данных
-func (r *CheckRepository) Ping(ctx context.Context) (interface{}, error) {
-	err := r.pool.Ping(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to ping database: %w", err)
-	}
-	return "pong", nil
+func (r *CheckRepository) Ping(ctx context.Context) error {
+	return r.pool.Ping(ctx)
 }

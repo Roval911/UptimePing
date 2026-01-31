@@ -13,7 +13,7 @@ import (
 	"UptimePingPlatform/pkg/config"
 	"UptimePingPlatform/pkg/health"
 	"UptimePingPlatform/pkg/logger"
-	"UptimePingPlatform/pkg/metrics"
+	// "UptimePingPlatform/pkg/metrics" // CLI не использует метрики
 	pkg_redis "UptimePingPlatform/pkg/redis"
 )
 
@@ -33,9 +33,10 @@ func StartCLIService() {
 
 	appLogger.Info("Starting CLI Service...")
 
-	// Initialize metrics
-	appMetrics := metrics.NewMetrics("cli-service")
-	metricsHandler := appMetrics.GetHandler()
+	// CLI не использует метрики для предотвращения зависаний на macOS
+	// appMetrics := metrics.NewMetrics("cli-service")
+	// metricsHandler := appMetrics.GetHandler()
+	var metricsHandler http.Handler
 
 	// Initialize health checker
 	healthChecker := health.NewSimpleHealthChecker("1.0.0")
@@ -122,4 +123,8 @@ func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthCh
 	})
 
 	return mux
+}
+
+func main() {
+	StartCLIService()
 }

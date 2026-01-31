@@ -14,6 +14,7 @@ import (
 	"UptimePingPlatform/services/cli-service/internal/auth"
 	"UptimePingPlatform/services/cli-service/internal/client"
 	cliConfig "UptimePingPlatform/services/cli-service/internal/config"
+	"UptimePingPlatform/services/cli-service/internal/store"
 )
 
 func handleConfigCreate(cmd *cobra.Command, args []string) error {
@@ -77,7 +78,12 @@ func handleConfigCreate(cmd *cobra.Command, args []string) error {
 		}
 		defer configClient.Close()
 	} else {
-		configClient = client.NewConfigClient(cfg.API.BaseURL, log)
+		// Create token store for auth
+		tokenStore, err := store.NewTokenStore()
+		if err != nil {
+			return fmt.Errorf("ошибка создания хранилища токенов: %w", err)
+		}
+		configClient = client.NewConfigClient(cfg.API.BaseURL, log, tokenStore)
 	}
 
 	// Create check request
@@ -159,7 +165,12 @@ func handleConfigGet(cmd *cobra.Command, args []string) error {
 		}
 		defer configClient.Close()
 	} else {
-		configClient = client.NewConfigClient(cfg.API.BaseURL, log)
+		// Create token store for auth
+		tokenStore, err := store.NewTokenStore()
+		if err != nil {
+			return fmt.Errorf("ошибка создания хранилища токенов: %w", err)
+		}
+		configClient = client.NewConfigClient(cfg.API.BaseURL, log, tokenStore)
 	}
 
 	// Get check
@@ -261,7 +272,12 @@ func handleConfigUpdate(cmd *cobra.Command, args []string) error {
 		}
 		defer configClient.Close()
 	} else {
-		configClient = client.NewConfigClient(cfg.API.BaseURL, log)
+		// Create token store for auth
+		tokenStore, err := store.NewTokenStore()
+		if err != nil {
+			return fmt.Errorf("ошибка создания хранилища токенов: %w", err)
+		}
+		configClient = client.NewConfigClient(cfg.API.BaseURL, log, tokenStore)
 	}
 
 	// Create update request
@@ -366,7 +382,12 @@ func handleConfigList(cmd *cobra.Command, args []string) error {
 		}
 		defer configClient.Close()
 	} else {
-		configClient = client.NewConfigClient(cfg.API.BaseURL, log)
+		// Create token store for auth
+		tokenStore, err := store.NewTokenStore()
+		if err != nil {
+			return fmt.Errorf("ошибка создания хранилища токенов: %w", err)
+		}
+		configClient = client.NewConfigClient(cfg.API.BaseURL, log, tokenStore)
 	}
 
 	// Get checks list

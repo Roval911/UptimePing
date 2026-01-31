@@ -40,7 +40,7 @@ func (r *SchedulerRepository) AddCheck(ctx context.Context, check *domain.Check)
 		Type:      check.Type,
 		Interval:  check.Interval,
 		Timeout:   check.Timeout,
-		Priority:  check.Priority,
+		Priority:  domain.PriorityNormal, // По умолчанию
 		Config:    check.Config,
 		NextRunAt: check.NextRunAt,
 	}
@@ -153,8 +153,7 @@ func (r *SchedulerRepository) GetScheduledChecks(ctx context.Context) ([]*domain
 			Type:      scheduledCheck.Type,
 			Interval:  scheduledCheck.Interval,
 			Timeout:   scheduledCheck.Timeout,
-			Status:    domain.CheckStatusActive, // В планировщике только активные
-			Priority:  scheduledCheck.Priority,
+			Enabled:   true, // В планировщике только активные
 			Config:    scheduledCheck.Config,
 			NextRunAt: scheduledCheck.NextRunAt,
 		}
@@ -297,10 +296,6 @@ func (r *SchedulerRepository) Count(ctx context.Context, filter string) (int, er
 }
 
 // Ping проверяет подключение к базе данных
-func (r *SchedulerRepository) Ping(ctx context.Context) (interface{}, error) {
-	err := r.pool.Ping(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to ping database: %w", err)
-	}
-	return "pong", nil
+func (r *SchedulerRepository) Ping(ctx context.Context) error {
+	return r.pool.Ping(ctx)
 }

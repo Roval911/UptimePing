@@ -34,12 +34,12 @@ COPY services/cli-service ./services/cli-service
 COPY pkg ./pkg
 COPY proto ./proto
 
-# Build the application
+# Build the application - собираем CLI утилиту
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags='-w -s -extldflags "-static"' \
     -a -installsuffix cgo \
     -o cli-service \
-    ./services/cli-service/main.go
+    ./services/cli-service/cli_new.go
 
 # Final stage
 FROM alpine:latest
@@ -62,14 +62,15 @@ COPY services/cli-service/config ./config
 
 # Create necessary directories
 RUN mkdir -p logs data && \
-    chown -R appuser:appgroup /app
+    chown -R appuser:appgroup /app && \
+    chmod +x /app/cli-service
 
 # Switch to non-root user
 USER appuser
 
-# Health check - проверяет, что бинарник запускается
+# Health check - проверяем CLI утилиту
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ./cli-service --version || exit 1
+    CMD ./cli-service --help || exit 1
 
-# Run the application
-CMD ["./cli-service"]
+# Run the application - CLI утилита с бесконечным циклом для поддержания контейнера
+CMD ["sh", "-c", "while true; do sleep 3600; done"]

@@ -4,9 +4,15 @@ import (
 	"context"
 	"net/http"
 
-	schedulerv1 "UptimePingPlatform/proto/api/scheduler/v1"
 	"UptimePingPlatform/pkg/logger"
+	schedulerv1 "UptimePingPlatform/proto/api/scheduler/v1"
 )
+
+// TokenPair структура для хранения пары токенов
+type TokenPair struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+}
 
 // MockAuthService мок для сервиса аутентификации
 type MockAuthService struct {

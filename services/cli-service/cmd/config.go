@@ -72,7 +72,7 @@ func init() {
 
 	// Config view flags
 	configViewCmd.Flags().StringP("format", "f", "yaml", "формат вывода (yaml, json)")
-	configViewCmd.Flags().BoolP("show-secrets", "s", false, "показать секретные данные")
+	configViewCmd.Flags().BoolP("show-secrets", "x", false, "показать секретные данные")
 
 	// Config create flags
 	configCreateCmd.Flags().StringP("name", "n", "", "название проверки")

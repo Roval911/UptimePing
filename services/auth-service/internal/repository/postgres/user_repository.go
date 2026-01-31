@@ -22,14 +22,16 @@ func NewUserRepository(pool *pgxpool.Pool) repository.UserRepository {
 
 // Create сохраняет нового пользователя в базе данных
 func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
-	query := `INSERT INTO users (id, email, password_hash, tenant_id, is_active, is_admin, created_at, updated_at) 
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+	query := `INSERT INTO users (id, email, password_hash, tenant_id, first_name, last_name, is_active, is_admin, created_at, updated_at) 
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 
 	_, err := r.pool.Exec(ctx, query,
 		user.ID,
 		user.Email,
 		user.PasswordHash,
 		user.TenantID,
+		"", // first_name
+		"", // last_name
 		user.IsActive,
 		user.IsAdmin,
 		user.CreatedAt,
@@ -44,7 +46,7 @@ func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
 
 // FindByID возвращает пользователя по его ID
 func (r *UserRepository) FindByID(ctx context.Context, id string) (*domain.User, error) {
-	query := `SELECT id, email, password_hash, tenant_id, is_active, is_admin, created_at, updated_at 
+	query := `SELECT id, email, password_hash, tenant_id, first_name, last_name, is_active, is_admin, created_at, updated_at 
 		FROM users WHERE id = $1`
 
 	var user domain.User
@@ -53,6 +55,8 @@ func (r *UserRepository) FindByID(ctx context.Context, id string) (*domain.User,
 		&user.Email,
 		&user.PasswordHash,
 		&user.TenantID,
+		&user.FirstName, // first_name
+		&user.LastName,  // last_name
 		&user.IsActive,
 		&user.IsAdmin,
 		&user.CreatedAt,
@@ -71,8 +75,11 @@ func (r *UserRepository) FindByID(ctx context.Context, id string) (*domain.User,
 
 // FindByEmail возвращает пользователя по его email
 func (r *UserRepository) FindByEmail(ctx context.Context, email string) (*domain.User, error) {
-	query := `SELECT id, email, password_hash, tenant_id, is_active, is_admin, created_at, updated_at 
+	query := `SELECT id, email, password_hash, tenant_id, first_name, last_name, is_active, is_admin, created_at, updated_at 
 		FROM users WHERE email = $1`
+
+	// Debug log
+	fmt.Printf("DEBUG: Looking for user with email: %s\n", email)
 
 	var user domain.User
 	err := r.pool.QueryRow(ctx, query, email).Scan(
@@ -80,6 +87,8 @@ func (r *UserRepository) FindByEmail(ctx context.Context, email string) (*domain
 		&user.Email,
 		&user.PasswordHash,
 		&user.TenantID,
+		&user.FirstName, // first_name
+		&user.LastName,  // last_name
 		&user.IsActive,
 		&user.IsAdmin,
 		&user.CreatedAt,
@@ -112,6 +121,8 @@ func (r *UserRepository) Update(ctx context.Context, user *domain.User) error {
 		user.Email,
 		user.PasswordHash,
 		user.TenantID,
+		"", // first_name
+		"", // last_name
 		user.IsActive,
 		user.IsAdmin,
 		user.UpdatedAt,

@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 
+	pkgErrors "UptimePingPlatform/pkg/errors"
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
-	pkgErrors "UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/validation"
-	"UptimePingPlatform/services/auth-service/internal/service"
 	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
+	"UptimePingPlatform/services/auth-service/internal/service"
 
 	grpc_auth "UptimePingPlatform/proto/api/auth/v1"
 	"google.golang.org/grpc/codes"
@@ -38,7 +38,7 @@ func NewAuthHandler(authService service.AuthService, jwtManager jwt.JWTManager, 
 // Register создает нового пользователя и возвращает пару токенов
 func (h *AuthHandler) Register(ctx context.Context, req *grpc_auth.RegisterRequest) (*grpc_auth.TokenPair, error) {
 	h.LogOperationStart(ctx, "Register", map[string]interface{}{
-		"email":      req.Email,
+		"email":       req.Email,
 		"tenant_name": req.TenantName,
 	})
 
@@ -48,7 +48,7 @@ func (h *AuthHandler) Register(ctx context.Context, req *grpc_auth.RegisterReque
 		"password":    req.Password,
 		"tenant_name": req.TenantName,
 	}
-	
+
 	if err := h.validator.ValidateRequiredFields(requiredFields, map[string]string{
 		"email":       "Email address",
 		"password":    "Password",
@@ -77,12 +77,14 @@ func (h *AuthHandler) Register(ctx context.Context, req *grpc_auth.RegisterReque
 
 	h.LogOperationSuccess(ctx, "Register", map[string]interface{}{
 		"access_token": tokenPair.AccessToken,
+		"tenant_id":    tokenPair.TenantID,
 	})
 
 	return &grpc_auth.TokenPair{
 		AccessToken:  tokenPair.AccessToken,
 		RefreshToken: tokenPair.RefreshToken,
-		ExpiresIn:   86400, // 24 часа в секундах
+		ExpiresIn:    86400,              // 24 часа в секундах
+		TenantId:     tokenPair.TenantID, // Добавлено
 	}, nil
 }
 
@@ -99,12 +101,14 @@ func (h *AuthHandler) Login(ctx context.Context, req *grpc_auth.LoginRequest) (*
 
 	h.LogOperationSuccess(ctx, "Login", map[string]interface{}{
 		"access_token": tokenPair.AccessToken,
+		"tenant_id":    tokenPair.TenantID,
 	})
 
 	return &grpc_auth.TokenPair{
 		AccessToken:  tokenPair.AccessToken,
 		RefreshToken: tokenPair.RefreshToken,
-		ExpiresIn:   86400, // 24 часа в секундах
+		ExpiresIn:    86400,              // 24 часа в секундах
+		TenantId:     tokenPair.TenantID, // Добавлено
 	}, nil
 }
 
@@ -135,7 +139,7 @@ func (h *AuthHandler) ValidateToken(ctx context.Context, req *grpc_auth.Validate
 			"is_valid": false,
 			"error":    err.Error(),
 		})
-		
+
 		return nil, status.Error(codes.Unauthenticated, fmt.Sprintf("invalid token: %v", err))
 	}
 
@@ -146,7 +150,7 @@ func (h *AuthHandler) ValidateToken(ctx context.Context, req *grpc_auth.Validate
 			"is_valid": false,
 			"error":    err.Error(),
 		})
-		
+
 		return nil, status.Error(codes.Unauthenticated, fmt.Sprintf("user not found: %v", err))
 	}
 
@@ -159,10 +163,14 @@ func (h *AuthHandler) ValidateToken(ctx context.Context, req *grpc_auth.Validate
 	})
 
 	return &grpc_auth.ValidateTokenResponse{
-		UserId:   claims.UserID,
-		Email:    user.Email,
-		TenantId: claims.TenantID,
-		IsValid:  true,
+		UserId:      claims.UserID,
+		Email:       user.Email,
+		TenantId:    claims.TenantID,
+		Roles:       []string{"user"}, // TODO: Добавить реальные роли из БД
+		Permissions: claims.Permissions,
+		ExpiresAt:   claims.ExpiresAt.Unix(),
+		IsAdmin:     claims.IsAdmin,
+		IsValid:     true,
 	}, nil
 }
 
@@ -179,19 +187,21 @@ func (h *AuthHandler) RefreshToken(ctx context.Context, req *grpc_auth.RefreshTo
 
 	h.LogOperationSuccess(ctx, "RefreshToken", map[string]interface{}{
 		"access_token": tokenPair.AccessToken,
+		"tenant_id":    tokenPair.TenantID,
 	})
 
 	return &grpc_auth.TokenPair{
 		AccessToken:  tokenPair.AccessToken,
 		RefreshToken: tokenPair.RefreshToken,
-		ExpiresIn:   86400, // 24 часа в секундах
+		ExpiresIn:    86400,              // 24 часа в секундах
+		TenantId:     tokenPair.TenantID, // Добавлено
 	}, nil
 }
 
 // Logout отзывает refresh токен
 func (h *AuthHandler) Logout(ctx context.Context, req *grpc_auth.LogoutRequest) (*grpc_auth.LogoutResponse, error) {
 	h.LogOperationStart(ctx, "Logout", map[string]interface{}{
-		"user_id": req.UserId,
+		"user_id":       req.UserId,
 		"refresh_token": req.RefreshToken,
 	})
 
@@ -213,7 +223,7 @@ func (h *AuthHandler) Logout(ctx context.Context, req *grpc_auth.LogoutRequest) 
 func (h *AuthHandler) CreateAPIKey(ctx context.Context, req *grpc_auth.CreateAPIKeyRequest) (*grpc_auth.APIKeyPair, error) {
 	h.LogOperationStart(ctx, "CreateAPIKey", map[string]interface{}{
 		"tenant_id": req.TenantId,
-		"name": req.Name,
+		"name":      req.Name,
 	})
 
 	apiKeyPair, err := h.authService.CreateAPIKey(ctx, req.TenantId, req.Name)
@@ -223,14 +233,14 @@ func (h *AuthHandler) CreateAPIKey(ctx context.Context, req *grpc_auth.CreateAPI
 
 	h.LogOperationSuccess(ctx, "CreateAPIKey", map[string]interface{}{
 		"tenant_id": req.TenantId,
-		"key": apiKeyPair.Key,
+		"key":       apiKeyPair.Key,
 	})
 
 	return &grpc_auth.APIKeyPair{
-		Key:      apiKeyPair.Key,
-		Secret:   apiKeyPair.Secret,
-		Name:     req.Name,
-		TenantId: req.TenantId,
+		Key:       apiKeyPair.Key,
+		Secret:    apiKeyPair.Secret,
+		Name:      req.Name,
+		TenantId:  req.TenantId,
 		ExpiresAt: 0, // API ключи не имеют срока действия в текущей реализации
 	}, nil
 }
@@ -248,7 +258,7 @@ func (h *AuthHandler) ValidateAPIKey(ctx context.Context, req *grpc_auth.Validat
 
 	h.LogOperationSuccess(ctx, "ValidateAPIKey", map[string]interface{}{
 		"tenant_id": claims.TenantID,
-		"key_id": claims.KeyID,
+		"key_id":    claims.KeyID,
 	})
 
 	return &grpc_auth.ValidateAPIKeyResponse{

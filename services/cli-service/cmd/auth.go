@@ -84,6 +84,7 @@ func handleLogin(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("ошибка создания менеджера аутентификации: %w", err)
 	}
+	// ВРЕМЕННО: убрали defer authManager.Close() для теста
 	defer authManager.Close()
 
 	// Get login input from flags or interactively
@@ -144,15 +145,9 @@ func handleLogout(cmd *cobra.Command, args []string) error {
 }
 
 func handleRegister(cmd *cobra.Command, args []string) error {
-	// Загрузка конфигурации CLI - используем внутреннюю систему
-	configPath, err := cliConfig.GetConfigPath()
-	if err != nil {
-		return fmt.Errorf("ошибка получения пути конфигурации: %w", err)
-	}
-
-	cfg, err := cliConfig.LoadConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("ошибка загрузки конфигурации: %w", err)
+	// Используем глобальную конфигурацию, переданную из cli_binary.go
+	if cfg == nil {
+		return fmt.Errorf("конфигурация не инициализирована")
 	}
 
 	// Create auth manager

@@ -99,10 +99,10 @@ func (s *TaskService) ExecuteCronTask(ctx context.Context, checkID string) error
 	}
 
 	// Проверяем, что проверка все еще активна
-	if check.Status != domain.CheckStatusActive {
-		s.logger.Info("Check is no longer active, skipping execution",
+	if !check.Enabled {
+		s.logger.Info("Check is disabled, skipping execution",
 			logger.String("check_id", checkID),
-			logger.String("status", string(check.Status)),
+			logger.Bool("enabled", check.Enabled),
 		)
 		return nil
 	}
@@ -110,7 +110,7 @@ func (s *TaskService) ExecuteCronTask(ctx context.Context, checkID string) error
 	now := time.Now()
 
 	// 3. Создание задачи (check_id, tenant_id, scheduled_time, priority)
-	task := domain.NewTaskForExecution(checkID, check.TenantID, now, check.Priority)
+	task := domain.NewTaskForExecution(checkID, check.TenantID, now, domain.PriorityNormal)
 	task.ID = s.generateTaskID()
 
 	// 4. Отправка задачи в RabbitMQ очередь check_tasks

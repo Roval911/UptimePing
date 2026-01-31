@@ -4,6 +4,7 @@ import (
 	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/auth-service/internal/domain"
+	"UptimePingPlatform/services/auth-service/internal/pkg/hash"
 	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
 	"UptimePingPlatform/services/auth-service/internal/pkg/password"
 	"UptimePingPlatform/services/auth-service/internal/repository"
@@ -68,6 +69,7 @@ type Service struct {
 	apiKeyRepository  repository.APIKeyRepository
 	jwtManager        jwt.JWTManager
 	passwordHasher    password.Hasher
+	tokenHasher       *hash.TokenHasher
 	log               logger.Logger
 }
 
@@ -88,6 +90,7 @@ func NewAuthService(
 		sessionRepository: sessionRepository,
 		jwtManager:        jwtManager,
 		passwordHasher:    passwordHasher,
+		tokenHasher:       hash.NewTokenHasher(),
 		log:               log,
 	}
 }
@@ -287,7 +290,7 @@ func (s *Service) Login(ctx context.Context, email, password string) (*TokenPair
 	}
 
 	// Хешируем токены для безопасного хранения
-	accessTokenHash, err := s.passwordHasher.Hash(accessToken)
+	accessTokenHash, err := s.tokenHasher.Hash(accessToken)
 	if err != nil {
 		s.log.Error("Failed to hash access token",
 			logger.String("email", email),
@@ -296,7 +299,7 @@ func (s *Service) Login(ctx context.Context, email, password string) (*TokenPair
 		return nil, fmt.Errorf("failed to hash access token: %w", err)
 	}
 
-	refreshTokenHash, err := s.passwordHasher.Hash(refreshToken)
+	refreshTokenHash, err := s.tokenHasher.Hash(refreshToken)
 	if err != nil {
 		s.log.Error("Failed to hash refresh token",
 			logger.String("email", email),
@@ -429,12 +432,12 @@ func (s *Service) Register(ctx context.Context, email, password, tenantName stri
 	}
 
 	// Хешируем токены для безопасного хранения
-	accessTokenHash, err := s.passwordHasher.Hash(accessToken)
+	accessTokenHash, err := s.tokenHasher.Hash(accessToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash access token: %w", err)
 	}
 
-	refreshTokenHash, err := s.passwordHasher.Hash(refreshToken)
+	refreshTokenHash, err := s.tokenHasher.Hash(refreshToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash refresh token: %w", err)
 	}
@@ -471,7 +474,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 	}
 
 	// Хешируем refresh токен для поиска в Redis
-	hashedRefreshToken, err := s.passwordHasher.Hash(refreshToken)
+	hashedRefreshToken, err := refreshToken, nil
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash refresh token: %w", err)
 	}
@@ -495,12 +498,12 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 	}
 
 	// Хешируем новые токены для безопасного хранения
-	newAccessTokenHash, err := s.passwordHasher.Hash(newAccessToken)
+	newAccessTokenHash, err := s.tokenHasher.Hash(newAccessToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash new access token: %w", err)
 	}
 
-	newRefreshTokenHash, err := s.passwordHasher.Hash(newRefreshToken)
+	newRefreshTokenHash, err := s.tokenHasher.Hash(newRefreshToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash new refresh token: %w", err)
 	}

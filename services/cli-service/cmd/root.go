@@ -9,22 +9,25 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"UptimePingPlatform/pkg/config"
+	pkgconfig "UptimePingPlatform/pkg/config"
 	pkgerrors "UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/services/cli-service/internal/config"
 )
 
 var (
-	cfg     *config.Config
-	appLogger  logger.Logger
-	rootCtx context.Context
+	cfg       *config.Config
+	appLogger logger.Logger
+	rootCtx   context.Context
+	pkgCfg    *pkgconfig.Config
 )
 
 // Execute executes the root command
-func Execute(ctx context.Context, config *config.Config, logger logger.Logger) error {
+func Execute(ctx context.Context, config *config.Config, logger logger.Logger, pkgConfig *pkgconfig.Config) error {
 	rootCtx = ctx
 	cfg = config
 	appLogger = logger
+	pkgCfg = pkgConfig
 
 	return rootCmd.Execute()
 }
@@ -104,11 +107,10 @@ func initConfig() {
 
 // setupLogging configures logging based on flags and config
 func setupLogging() {
-	if viper.GetBool("debug") {
-		// Enable debug logging
-		if appLogger != nil {
-			appLogger.Debug("Debug mode enabled")
-		}
+	// Simple logging setup - no complex initialization
+	debug := viper.GetBool("debug")
+	if debug {
+		fmt.Println("Debug mode enabled")
 	}
 }
 

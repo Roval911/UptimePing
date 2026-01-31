@@ -13,6 +13,7 @@ import (
 	cliClient "UptimePingPlatform/services/cli-service/internal/client"
 	cliConfig "UptimePingPlatform/services/cli-service/internal/config"
 	"UptimePingPlatform/services/cli-service/internal/output"
+	"UptimePingPlatform/services/cli-service/internal/store"
 )
 
 var incidentsCmd = &cobra.Command{
@@ -45,11 +46,11 @@ func init() {
 	incidentsListCmd.Flags().StringP("from", "f", "", "начальная дата (RFC3339)")
 	incidentsListCmd.Flags().StringP("to", "e", "", "конечная дата (RFC3339)")
 	incidentsListCmd.Flags().IntP("limit", "l", 50, "лимит записей")
-	
+
 	// Флаги формата вывода
-	incidentsListCmd.Flags().StringP("format", "o", "", "Формат вывода (table, json, yaml)")
+	incidentsListCmd.Flags().StringP("format", "r", "", "Формат вывода (table, json, yaml)")
 	incidentsListCmd.Flags().BoolP("pretty", "p", true, "Pretty JSON/YAML вывод")
-	incidentsListCmd.Flags().BoolP("colors", "c", true, "Цветной вывод")
+	incidentsListCmd.Flags().BoolP("colors", "w", true, "Цветной вывод")
 
 	// Incidents acknowledge flags
 	incidentsAcknowledgeCmd.Flags().StringP("message", "m", "", "сообщение подтверждения")
@@ -111,7 +112,13 @@ func getIncidentClient() (cliClient.IncidentClientInterface, error) {
 		baseURL = "http://localhost:8080" // Значение по умолчанию
 	}
 
-	return cliClient.NewIncidentClient(baseURL, log), nil
+	// Create token store for auth
+	tokenStore, err := store.NewTokenStore()
+	if err != nil {
+		return nil, fmt.Errorf("ошибка создания хранилища токенов: %w", err)
+	}
+
+	return cliClient.NewIncidentClient(baseURL, log, tokenStore), nil
 }
 
 func handleIncidentsList(cmd *cobra.Command, args []string) error {
@@ -121,7 +128,7 @@ func handleIncidentsList(cmd *cobra.Command, args []string) error {
 	from, _ := cmd.Flags().GetString("from")
 	to, _ := cmd.Flags().GetString("to")
 	limit, _ := cmd.Flags().GetInt("limit")
-	
+
 	// Получаем флаги формата
 	formatStr, _ := cmd.Flags().GetString("format")
 	pretty, _ := cmd.Flags().GetBool("pretty")
@@ -175,7 +182,7 @@ func handleIncidentsList(cmd *cobra.Command, args []string) error {
 				format = output.FormatYAML
 			}
 		}
-		
+
 		formatter := output.GetFormatter(format, pretty, useColors)
 		emptyOutput, _ := formatter.Format("No incidents found")
 		fmt.Println(emptyOutput)

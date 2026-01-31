@@ -1,19 +1,15 @@
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/sdk/resource"
-	tracesdk "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 	"go.opentelemetry.io/otel/trace"
-	
+
 	"UptimePingPlatform/pkg/config"
 )
 
@@ -35,24 +31,24 @@ type Metrics struct {
 // NewMetricsFromConfig создает метрики из конфигурации pkg/config
 func NewMetricsFromConfig(serviceName string, config *config.MetricsConfig) *Metrics {
 	metricsConfig := &MetricsConfig{
-		Enabled:        config.Enabled,
-		Port:           config.Port,
-		Path:           config.Path,
-		ScrapeInterval: config.ScrapeInterval,
-		Timeout:        config.Timeout,
-		RetryAttempts:  config.RetryAttempts,
-		Namespace:      config.Namespace,
-		Subsystem:      config.Subsystem,
-		Buckets:        config.Buckets,
-		TracingEnabled: config.TracingEnabled,
-		TracerName:     config.TracerName,
-		SamplingRate:   config.SamplingRate,
-		ServiceName:    config.ServiceName,
-		ServiceVersion: config.ServiceVersion,
+		Enabled:             config.Enabled,
+		Port:                config.Port,
+		Path:                config.Path,
+		ScrapeInterval:      config.ScrapeInterval,
+		Timeout:             config.Timeout,
+		RetryAttempts:       config.RetryAttempts,
+		Namespace:           config.Namespace,
+		Subsystem:           config.Subsystem,
+		Buckets:             config.Buckets,
+		TracingEnabled:      config.TracingEnabled,
+		TracerName:          config.TracerName,
+		SamplingRate:        config.SamplingRate,
+		ServiceName:         config.ServiceName,
+		ServiceVersion:      config.ServiceVersion,
 		EnableCustomMetrics: config.EnableCustomMetrics,
-		EnableSystemMetrics:  config.EnableSystemMetrics,
+		EnableSystemMetrics: config.EnableSystemMetrics,
 	}
-	
+
 	return NewMetricsWithConfig(serviceName, metricsConfig)
 }
 
@@ -76,13 +72,13 @@ func (m *Metrics) GetMetricsPort(config *config.MetricsConfig) int {
 func NewMetrics(serviceName string) *Metrics {
 	return NewMetricsWithConfig(serviceName, &MetricsConfig{
 		Enabled:        true,
-		Namespace:     "uptimeping",
-		Subsystem:     "http",
-		Buckets:       prometheus.DefBuckets,
-		TracingEnabled: true,
-		TracerName:    "uptimeping-tracer",
-		SamplingRate:  1.0,
-		ServiceName:   serviceName,
+		Namespace:      "uptimeping",
+		Subsystem:      "http",
+		Buckets:        prometheus.DefBuckets,
+		TracingEnabled: false, // Отключаем трассирование для предотвращения паники
+		TracerName:     "uptimeping-tracer",
+		SamplingRate:   1.0,
+		ServiceName:    serviceName,
 		ServiceVersion: "1.0.0",
 	})
 }
@@ -191,7 +187,7 @@ func NewMetricsWithConfig(serviceName string, config *MetricsConfig) *Metrics {
 	}
 
 	return &Metrics{
-		RequestCount:       requestCount,
+		RequestCount:      requestCount,
 		RequestDuration:   requestDuration,
 		ErrorsCount:       errorsCount,
 		ActiveConnections: activeConnections,
@@ -202,22 +198,22 @@ func NewMetricsWithConfig(serviceName string, config *MetricsConfig) *Metrics {
 
 // MetricsConfig представляет конфигурацию метрик
 type MetricsConfig struct {
-	Enabled        bool
-	Port           int
-	Path           string
-	ScrapeInterval string
-	Timeout        string
-	RetryAttempts  int
-	Namespace      string
-	Subsystem      string
-	Buckets        []float64
-	TracingEnabled bool
-	TracerName     string
-	SamplingRate   float64
-	ServiceName    string
-	ServiceVersion string
+	Enabled             bool
+	Port                int
+	Path                string
+	ScrapeInterval      string
+	Timeout             string
+	RetryAttempts       int
+	Namespace           string
+	Subsystem           string
+	Buckets             []float64
+	TracingEnabled      bool
+	TracerName          string
+	SamplingRate        float64
+	ServiceName         string
+	ServiceVersion      string
 	EnableCustomMetrics bool
-	EnableSystemMetrics  bool
+	EnableSystemMetrics bool
 }
 
 // registerMetricSafe безопасно регистрирует метрику
@@ -231,20 +227,9 @@ func registerMetricSafe(collector prometheus.Collector) {
 
 // initializeOpenTelemetry инициализирует OpenTelemetry с конфигурацией
 func initializeOpenTelemetry(config *MetricsConfig) trace.Tracer {
-	tp := tracesdk.NewTracerProvider(
-		tracesdk.WithResource(resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceNameKey.String(config.ServiceName),
-			semconv.ServiceVersionKey.String(config.ServiceVersion),
-		)),
-		tracesdk.WithSampler(tracesdk.TraceIDRatioBased(config.SamplingRate)),
-	)
-
-	otel.SetTracerProvider(tp)
-
-	tracer := tp.Tracer(config.TracerName)
-
-	return tracer
+	// Возвращаем nil чтобы полностью отключить трассировку
+	// Это предотвращает любые проблемы с OpenTelemetry SDK
+	return nil
 }
 
 // GetHandler возвращает HTTP обработчик для эндпоинта /metrics
@@ -255,9 +240,18 @@ func (m *Metrics) GetHandler() http.Handler {
 // Middleware создает middleware для сбора метрик
 func (m *Metrics) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Начинаем трассировку с OpenTelemetry
-		_, span := m.Tracer.Start(r.Context(), r.URL.Path)
-		defer span.End()
+		var ctx context.Context = r.Context()
+		var span trace.Span
+
+		// Начинаем трассировку с OpenTelemetry только если tracer доступен
+		if m.Tracer != nil {
+			ctx, span = m.Tracer.Start(r.Context(), r.URL.Path)
+			defer func() {
+				if span != nil {
+					span.End()
+				}
+			}()
+		}
 
 		// Создаем обертку для ResponseWriter для перехвата статуса
 		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
@@ -265,8 +259,12 @@ func (m *Metrics) Middleware(next http.Handler) http.Handler {
 		// Запоминаем время начала запроса
 		start := time.Now()
 
-		// Выполняем следующий обработчик
-		next.ServeHTTP(wrapped, r)
+		// Выполняем следующий обработчик с правильным контекстом
+		if m.Tracer != nil {
+			next.ServeHTTP(wrapped, r.WithContext(ctx))
+		} else {
+			next.ServeHTTP(wrapped, r)
+		}
 
 		// Собираем метрики
 		duration := time.Since(start).Seconds()
@@ -287,13 +285,6 @@ func (m *Metrics) Middleware(next http.Handler) http.Handler {
 			m.ErrorsCount.WithLabelValues(r.Method, epoch, errorType).Inc()
 		}
 
-		// Добавляем атрибуты в спан OpenTelemetry
-		span.SetAttributes(
-			attribute.String("http.method", r.Method),
-			attribute.String("http.url", r.URL.String()),
-			attribute.Int("http.status_code", wrapped.statusCode),
-			attribute.Float64("http.duration", duration),
-		)
 	})
 }
 
@@ -307,24 +298,6 @@ type responseWriter struct {
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.statusCode = code
 	rw.ResponseWriter.WriteHeader(code)
-}
-
-// InitializeOpenTelemetry инициализирует OpenTelemetry с экспортером
-func InitializeOpenTelemetry(serviceName string) error {
-	// Создаем базовый провайдер трассировки
-	tp := tracesdk.NewTracerProvider(
-		tracesdk.WithSampler(tracesdk.AlwaysSample()),
-		tracesdk.WithResource(resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceNameKey.String(serviceName),
-			semconv.ServiceVersionKey.String("1.0.0"),
-		)),
-	)
-
-	// Устанавливаем глобальный провайдер трассировки
-	otel.SetTracerProvider(tp)
-
-	return nil
 }
 
 // SetActiveConnections устанавливает количество активных подключений

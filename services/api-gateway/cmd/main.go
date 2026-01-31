@@ -15,9 +15,10 @@ import (
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
 	pkg_redis "UptimePingPlatform/pkg/redis"
-	
+
 	"UptimePingPlatform/services/api-gateway/internal/client"
 	httpHandler "UptimePingPlatform/services/api-gateway/internal/handler/http"
+	"UptimePingPlatform/services/api-gateway/internal/middleware"
 )
 
 // HealthHandlerAdapter адаптер для health.SimpleHealthChecker
@@ -76,79 +77,72 @@ func main() {
 
 	// Create gRPC connections
 	appLogger.Info("Connecting to Auth Service...")
-	// Убираем прямое gRPC подключение, так как клиенты создают свои соединения
 
-	// Create Auth Service gRPC client
-	appLogger.Info("Creating Auth Service gRPC client...")
-	authClient, err := client.NewGRPCAuthClient("localhost:50051", 5*time.Second, appLogger)
-	if err != nil {
-		appLogger.Error("Failed to create Auth Service client", logger.Error(err))
-		log.Fatalf("Auth Service client creation failed: %v", err)
+	// Create Auth Service HTTP client
+	authServiceAddr := os.Getenv("AUTH_SERVICE_ADDR")
+	if authServiceAddr == "" {
+		authServiceAddr = "http://localhost:50051"
 	}
-	appLogger.Info("Auth Service gRPC client created successfully")
+	httpAuthClient, err := client.NewHTTPAuthClient(authServiceAddr, 10*time.Second, appLogger)
+	if err != nil {
+		appLogger.Error("Failed to create HTTP Auth client", logger.Error(err))
+		log.Fatalf("HTTP Auth client creation failed: %v", err)
+	}
+	authAdapter := client.NewAuthHTTPAdapter(httpAuthClient)
+	appLogger.Info("Auth Service HTTP client created successfully")
+
+	// Create real gRPC clients for all services - make them optional for startup
+	var schedulerClient *client.SchedulerClient
+	var coreClient *client.CoreClient
+	var metricsClient *client.MetricsClient
+	var incidentClient *client.IncidentClient
+	var notificationClient *client.NotificationClient
+	var forgeClient *client.GRPCForgeClient
+
+	// Try to connect to services, but don't fail if they're not available
+	if schedulerClient, err = client.NewSchedulerClient("scheduler-service:50052", 10*time.Second, appLogger); err != nil {
+		appLogger.Warn("Scheduler Service client creation failed, continuing without it", logger.Error(err))
+	}
+	if coreClient, err = client.NewCoreClient("core-service:50054", 2*time.Second, appLogger); err != nil {
+		appLogger.Warn("Core Service client creation failed, continuing without it", logger.Error(err))
+	}
+	if metricsClient, err = client.NewMetricsClient("metrics-service:50055", 2*time.Second, appLogger); err != nil {
+		appLogger.Warn("Metrics Service client creation failed, continuing without it", logger.Error(err))
+	}
+	if incidentClient, err = client.NewIncidentClient("incident-manager:50056", 2*time.Second, appLogger); err != nil {
+		appLogger.Warn("Incident Service client creation failed, continuing without it", logger.Error(err))
+	}
+	if notificationClient, err = client.NewNotificationClient("notification-service:50057", 2*time.Second, appLogger); err != nil {
+		appLogger.Warn("Notification Service client creation failed, continuing without it", logger.Error(err))
+	}
+	if forgeClient, err = client.NewGRPCForgeClient("forge-service:50053", 2*time.Second, appLogger); err != nil {
+		appLogger.Warn("Forge Service client creation failed, continuing without it", logger.Error(err))
+	}
 
 	// Create Config Service client
-	configClient, err := client.NewConfigClient(5*time.Second, appLogger)
+	configClient, err := client.NewConfigClient(2*time.Second, appLogger)
 	if err != nil {
-		appLogger.Error("Failed to create Config Service client", logger.Error(err))
-		log.Fatalf("Config Service client creation failed: %v", err)
-	}
-
-	// Create real gRPC clients for all services
-	schedulerClient, err := client.NewSchedulerClient("localhost:50052", 5*time.Second, appLogger)
-	if err != nil {
-		appLogger.Error("Failed to create Scheduler Service client", logger.Error(err))
-		log.Fatalf("Scheduler Service client creation failed: %v", err)
-	}
-
-	coreClient, err := client.NewCoreClient("localhost:50054", 5*time.Second, appLogger)
-	if err != nil {
-		appLogger.Error("Failed to create Core Service client", logger.Error(err))
-		log.Fatalf("Core Service client creation failed: %v", err)
-	}
-
-	metricsClient, err := client.NewMetricsClient("localhost:50055", 5*time.Second, appLogger)
-	if err != nil {
-		appLogger.Error("Failed to create Metrics Service client", logger.Error(err))
-		log.Fatalf("Metrics Service client creation failed: %v", err)
-	}
-
-	incidentClient, err := client.NewIncidentClient("localhost:50056", 5*time.Second, appLogger)
-	if err != nil {
-		appLogger.Error("Failed to create Incident Service client", logger.Error(err))
-		log.Fatalf("Incident Service client creation failed: %v", err)
-	}
-
-	notificationClient, err := client.NewNotificationClient("localhost:50057", 5*time.Second, appLogger)
-	if err != nil {
-		appLogger.Error("Failed to create Notification Service client", logger.Error(err))
-		log.Fatalf("Notification Service client creation failed: %v", err)
-	}
-
-	forgeClient, err := client.NewGRPCForgeClient("localhost:50053", 5*time.Second, appLogger)
-	if err != nil {
-		appLogger.Error("Failed to create Forge Service client", logger.Error(err))
-		log.Fatalf("Forge Service client creation failed: %v", err)
+		appLogger.Warn("Config Service client creation failed, continuing without it", logger.Error(err))
 	}
 
 	// Create HTTP handler
 	httpHandlerInstance := httpHandler.NewHandler(
-		authClient,
+		authAdapter,
 		healthChecker,
-		*schedulerClient,
-		*coreClient,
-		*metricsClient,
-		*incidentClient,
-		*notificationClient,
-		*configClient,
-		*forgeClient,
+		schedulerClient,
+		coreClient,
+		metricsClient,
+		incidentClient,
+		notificationClient,
+		configClient,
+		forgeClient,
 		appLogger,
 	)
 
 	// Start HTTP server with middleware
 	httpServer := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler: appMetrics.Middleware(httpHandlerInstance),
+		Handler: appMetrics.Middleware(middleware.AuthMiddleware(httpAuthClient, appLogger)(httpHandlerInstance)),
 	}
 
 	// Start server

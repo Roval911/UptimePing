@@ -73,6 +73,26 @@ message Check {
   string id = 1;
   string tenant_id = 2;
   string name = 3;
+  string description = 4; // ✅ ДОБАВЛЕНО!
+  string type = 5;
+  string target = 6;
+  int32 interval = 7;
+  int32 timeout = 8;
+  string status = 9;
+  int32 priority = 10;
+  repeated string tags = 11;
+  map<string, string> config = 12;
+  string created_at = 13;
+  string updated_at = 14;
+  string last_run_at = 15;
+  // next_run_at удален, т.к. не используется в новой структуре
+}
+
+// CreateCheckRequest содержит данные для создания проверки
+message CreateCheckRequest {
+  string tenant_id = 1;
+  string name = 2;
+  string description = 3; // ✅ ДОБАВЛЕНО!
   string type = 4;
   string target = 5;
   int32 interval = 6;
@@ -81,38 +101,21 @@ message Check {
   int32 priority = 9;
   repeated string tags = 10;
   map<string, string> config = 11;
-  string created_at = 12;
-  string updated_at = 13;
-  string last_run_at = 14;
-  string next_run_at = 15;
-}
-
-// CreateCheckRequest содержит данные для создания проверки
-message CreateCheckRequest {
-  string tenant_id = 1;
-  string name = 2;
-  string type = 3;
-  string target = 4;
-  int32 interval = 5;
-  int32 timeout = 6;
-  string status = 7;
-  int32 priority = 8;
-  repeated string tags = 9;
-  map<string, string> config = 10;
 }
 
 // UpdateCheckRequest содержит данные для обновления проверки
 message UpdateCheckRequest {
   string check_id = 1;
   string name = 2;
-  string type = 3;
-  string target = 4;
-  int32 interval = 5;
-  int32 timeout = 6;
-  string status = 7;
-  int32 priority = 8;
-  repeated string tags = 9;
-  map<string, string> config = 10;
+  string description = 3; // ✅ ДОБАВЛЕНО!
+  string type = 4;
+  string target = 5;
+  int32 interval = 6;
+  int32 timeout = 7;
+  string status = 8;
+  int32 priority = 9;
+  repeated string tags = 10;
+  map<string, string> config = 11;
 }
 
 // DeleteCheckRequest содержит ID проверки для удаления

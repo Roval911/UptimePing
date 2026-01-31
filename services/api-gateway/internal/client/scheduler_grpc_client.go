@@ -15,8 +15,8 @@ import (
 
 // SchedulerClient gRPC клиент для SchedulerService
 type SchedulerClient struct {
-	client schedulerv1.SchedulerServiceClient
-	conn   *grpc.ClientConn
+	client      schedulerv1.SchedulerServiceClient
+	conn        *grpc.ClientConn
 	baseHandler *grpcBase.BaseHandler
 }
 
@@ -34,17 +34,13 @@ func NewSchedulerClient(address string, timeout time.Duration, logger logger.Log
 		"timeout": timeout.String(),
 	})
 
-	// Устанавливаем соединение с gRPC сервером
-	conn, err := grpc.Dial(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// Устанавливаем соединение с gRPC сервером с опциями
+	conn, err := grpc.DialContext(ctx, address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
 	if err != nil {
 		baseHandler.LogError(ctx, err, "grpc_scheduler_client_connect_failed", "")
 		return nil, fmt.Errorf("failed to connect to scheduler service: %w", err)
-	}
-
-	// Проверяем соединение
-	if !conn.WaitForStateChange(ctx, conn.GetState()) {
-		baseHandler.LogError(ctx, fmt.Errorf("timeout while establishing connection"), "grpc_scheduler_client_connect_timeout", "")
-		return nil, fmt.Errorf("timeout while establishing connection")
 	}
 
 	client := schedulerv1.NewSchedulerServiceClient(conn)

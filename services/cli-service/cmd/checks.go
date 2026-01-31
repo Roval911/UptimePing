@@ -3,15 +3,16 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/pkg/validation"
 	"UptimePingPlatform/services/cli-service/internal/auth"
 	"UptimePingPlatform/services/cli-service/internal/client"
-	config "UptimePingPlatform/services/cli-service/internal/config"
+	cliConfig "UptimePingPlatform/services/cli-service/internal/config"
 )
 
 var checksCmd = &cobra.Command{
@@ -21,28 +22,52 @@ var checksCmd = &cobra.Command{
 запуск, проверка статуса, просмотр истории и списка проверок.`,
 }
 
-var checksRunCmd = &cobra.Command{
-	Use:   "run [check-id]",
-	Short: "Запустить проверку",
-	Long:  `Запускает проверку с указанным ID.`,
-	Args:  cobra.ExactArgs(1),
-	RunE:  handleChecksRun,
+var checksCreateCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Создать новую проверку",
+	Long: `Создает новую проверку доступности с указанными параметрами.
+Поддерживаются HTTP, TCP, ICMP, gRPC и GraphQL проверки.`,
+	RunE: handleChecksCreate,
 }
 
-var checksStatusCmd = &cobra.Command{
-	Use:   "status [check-id]",
-	Short: "Проверить статус проверки",
-	Long:  `Проверяет текущий статус указанной проверки.`,
+var checksGetCmd = &cobra.Command{
+	Use:   "get [check-id]",
+	Short: "Получить детали проверки",
+	Long:  `Отображает детальную информацию о проверке по ее ID.`,
 	Args:  cobra.ExactArgs(1),
-	RunE:  handleChecksStatus,
+	RunE:  handleChecksGet,
 }
 
-var checksHistoryCmd = &cobra.Command{
-	Use:   "history [check-id]",
-	Short: "Показать историю проверок",
-	Long:  `Отображает историю выполнения указанной проверки.`,
+var checksUpdateCmd = &cobra.Command{
+	Use:   "update [check-id]",
+	Short: "Обновить проверку",
+	Long:  `Обновляет параметры существующей проверки.`,
 	Args:  cobra.ExactArgs(1),
-	RunE:  handleChecksHistory,
+	RunE:  handleChecksUpdate,
+}
+
+var checksEnableCmd = &cobra.Command{
+	Use:   "enable [check-id]",
+	Short: "Включить проверку",
+	Long:  `Включает выполнение проверки по расписанию.`,
+	Args:  cobra.ExactArgs(1),
+	RunE:  handleChecksEnable,
+}
+
+var checksDisableCmd = &cobra.Command{
+	Use:   "disable [check-id]",
+	Short: "Отключить проверку",
+	Long:  `Отключает выполнение проверки по расписанию.`,
+	Args:  cobra.ExactArgs(1),
+	RunE:  handleChecksDisable,
+}
+
+var checksDeleteCmd = &cobra.Command{
+	Use:   "delete [check-id]",
+	Short: "Удалить проверку",
+	Long:  `Удаляет проверку и все связанные с ней данные.`,
+	Args:  cobra.ExactArgs(1),
+	RunE:  handleChecksDelete,
 }
 
 var checksListCmd = &cobra.Command{
@@ -53,15 +78,30 @@ var checksListCmd = &cobra.Command{
 }
 
 func init() {
-	checksCmd.AddCommand(checksRunCmd)
-	checksCmd.AddCommand(checksStatusCmd)
-	checksCmd.AddCommand(checksHistoryCmd)
+	checksCmd.AddCommand(checksCreateCmd)
+	checksCmd.AddCommand(checksGetCmd)
+	checksCmd.AddCommand(checksUpdateCmd)
+	checksCmd.AddCommand(checksEnableCmd)
+	checksCmd.AddCommand(checksDisableCmd)
+	checksCmd.AddCommand(checksDeleteCmd)
 	checksCmd.AddCommand(checksListCmd)
 
-	// Checks history flags
-	checksHistoryCmd.Flags().IntP("limit", "l", 50, "лимит записей")
-	checksHistoryCmd.Flags().IntP("page", "p", 1, "номер страницы")
-	checksHistoryCmd.Flags().StringP("format", "f", "table", "формат вывода (table, json)")
+	// Checks create flags
+	checksCreateCmd.Flags().StringP("name", "n", "", "название проверки (обязательно)")
+	checksCreateCmd.Flags().StringP("url", "u", "", "URL для проверки (обязательно для HTTP/HTTPS)")
+	checksCreateCmd.Flags().StringP("type", "t", "http", "тип проверки (http, https, tcp, icmp, grpc, graphql)")
+	checksCreateCmd.Flags().IntP("interval", "i", 60, "интервал проверки в секундах")
+	checksCreateCmd.Flags().IntP("timeout", "m", 10, "таймаут в секундах")
+	checksCreateCmd.Flags().StringSliceP("tags", "g", []string{}, "теги для проверки")
+	checksCreateCmd.Flags().BoolP("enabled", "e", true, "включить проверку")
+
+	// Checks update flags
+	checksUpdateCmd.Flags().StringP("name", "n", "", "новое название проверки")
+	checksUpdateCmd.Flags().StringP("url", "u", "", "новый URL для проверки")
+	checksUpdateCmd.Flags().IntP("interval", "i", 0, "новый интервал проверки в секундах")
+	checksUpdateCmd.Flags().IntP("timeout", "m", 0, "новый таймаут в секундах")
+	checksUpdateCmd.Flags().StringSliceP("tags", "g", []string{}, "новые теги для проверки")
+	checksUpdateCmd.Flags().BoolP("enabled", "e", false, "включить/отключить проверку")
 
 	// Checks list flags
 	checksListCmd.Flags().StringSliceP("tags", "t", []string{}, "фильтр по тегам")
@@ -75,274 +115,18 @@ func GetChecksCmd() *cobra.Command {
 	return checksCmd
 }
 
-func handleChecksRun(cmd *cobra.Command, args []string) error {
-	checkID := args[0]
-
-	// Load configuration
-	configPath, err := config.GetConfigPath()
-	if err != nil {
-		return fmt.Errorf("ошибка получения пути конфигурации: %w", err)
-	}
-
-	cfg, err := config.LoadConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("ошибка загрузки конфигурации: %w", err)
-	}
-
-	// Create auth manager and ensure valid token
-	authManager, err := auth.NewAuthManager(cfg)
-	if err != nil {
-		return fmt.Errorf("ошибка создания менеджера аутентификации: %w", err)
-	}
-	defer authManager.Close()
-
-	ctx := context.Background()
-	if err := authManager.EnsureValidToken(ctx); err != nil {
-		return fmt.Errorf("ошибка аутентификации: %w", err)
-	}
-
-	// Create logger
-	log, err := logger.NewLogger("dev", "info", "cli-service", false)
-	if err != nil {
-		return fmt.Errorf("ошибка создания логгера: %w", err)
-	}
-
-	// Create config client
-	var configClient *client.ConfigClient
-	if cfg.GRPC.UseGRPC {
-		configClient, err = client.NewConfigClientWithGRPC(
-			cfg.API.BaseURL,
-			cfg.GRPC.SchedulerAddress,
-			cfg.GRPC.CoreAddress,
-			log,
-		)
-		if err != nil {
-			return fmt.Errorf("ошибка создания gRPC клиента: %w", err)
-		}
-		defer configClient.Close()
-	} else {
-		configClient = client.NewConfigClient(cfg.API.BaseURL, log)
-	}
-
-	// Run check
-	response, err := configClient.RunCheck(ctx, checkID)
-	if err != nil {
-		return fmt.Errorf("ошибка запуска проверки: %w", err)
-	}
-
-	fmt.Printf("✅ Проверка запущена!\n")
-	fmt.Printf("🔍 ID проверки: %s\n", checkID)
-	fmt.Printf("🆔 ID выполнения: %s\n", response.ExecutionID)
-	fmt.Printf("📊 Статус: %s\n", response.Status)
-	fmt.Printf("🕐 Время запуска: %s\n", response.StartedAt.Format("2006-01-02 15:04:05"))
-	fmt.Printf("💬 Сообщение: %s\n", response.Message)
-
-	return nil
-}
-
-func handleChecksStatus(cmd *cobra.Command, args []string) error {
-	checkID := args[0]
-
-	// Load configuration
-	configPath, err := config.GetConfigPath()
-	if err != nil {
-		return fmt.Errorf("ошибка получения пути конфигурации: %w", err)
-	}
-
-	cfg, err := config.LoadConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("ошибка загрузки конфигурации: %w", err)
-	}
-
-	// Create auth manager and ensure valid token
-	authManager, err := auth.NewAuthManager(cfg)
-	if err != nil {
-		return fmt.Errorf("ошибка создания менеджера аутентификации: %w", err)
-	}
-	defer authManager.Close()
-
-	ctx := context.Background()
-	if err := authManager.EnsureValidToken(ctx); err != nil {
-		return fmt.Errorf("ошибка аутентификации: %w", err)
-	}
-
-	// Create logger
-	log, err := logger.NewLogger("dev", "info", "cli-service", false)
-	if err != nil {
-		return fmt.Errorf("ошибка создания логгера: %w", err)
-	}
-
-	// Create config client
-	var configClient *client.ConfigClient
-	if cfg.GRPC.UseGRPC {
-		configClient, err = client.NewConfigClientWithGRPC(
-			cfg.API.BaseURL,
-			cfg.GRPC.SchedulerAddress,
-			cfg.GRPC.CoreAddress,
-			log,
-		)
-		if err != nil {
-			return fmt.Errorf("ошибка создания gRPC клиента: %w", err)
-		}
-		defer configClient.Close()
-	} else {
-		configClient = client.NewConfigClient(cfg.API.BaseURL, log)
-	}
-
-	// Get check status
-	response, err := configClient.GetCheckStatus(ctx, checkID)
-	if err != nil {
-		return fmt.Errorf("ошибка получения статуса: %w", err)
-	}
-
-	fmt.Printf("📊 Статус проверки: %s\n", checkID)
-	fmt.Printf("🔍 ID: %s\n", response.CheckID)
-	fmt.Printf("📈 Текущий статус: %s\n", response.Status)
-	fmt.Printf("🕐 Последний запуск: %s\n", response.LastRun.Format("2006-01-02 15:04:05"))
-	fmt.Printf("⏰ Следующий запуск: %s\n", response.NextRun.Format("2006-01-02 15:04:05"))
-	fmt.Printf("📋 Последний статус: %s\n", response.LastStatus)
-	fmt.Printf("💬 Последнее сообщение: %s\n", response.LastMessage)
-	fmt.Printf("🔄 Выполняется: %t\n", response.IsRunning)
-
-	return nil
-}
-
-func handleChecksHistory(cmd *cobra.Command, args []string) error {
-	checkID := args[0]
-
-	limit, _ := cmd.Flags().GetInt("limit")
-	page, _ := cmd.Flags().GetInt("page")
-	format, _ := cmd.Flags().GetString("format")
-
-	// Load configuration
-	configPath, err := config.GetConfigPath()
-	if err != nil {
-		return fmt.Errorf("ошибка получения пути конфигурации: %w", err)
-	}
-
-	cfg, err := config.LoadConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("ошибка загрузки конфигурации: %w", err)
-	}
-
-	// Create auth manager and ensure valid token
-	authManager, err := auth.NewAuthManager(cfg)
-	if err != nil {
-		return fmt.Errorf("ошибка создания менеджера аутентификации: %w", err)
-	}
-	defer authManager.Close()
-
-	ctx := context.Background()
-	if err := authManager.EnsureValidToken(ctx); err != nil {
-		return fmt.Errorf("ошибка аутентификации: %w", err)
-	}
-
-	// Create logger
-	log, err := logger.NewLogger("dev", "info", "cli-service", false)
-	if err != nil {
-		return fmt.Errorf("ошибка создания логгера: %w", err)
-	}
-
-	// Create config client
-	var configClient *client.ConfigClient
-	if cfg.GRPC.UseGRPC {
-		configClient, err = client.NewConfigClientWithGRPC(
-			cfg.API.BaseURL,
-			cfg.GRPC.SchedulerAddress,
-			cfg.GRPC.CoreAddress,
-			log,
-		)
-		if err != nil {
-			return fmt.Errorf("ошибка создания gRPC клиента: %w", err)
-		}
-		defer configClient.Close()
-	} else {
-		configClient = client.NewConfigClient(cfg.API.BaseURL, log)
-	}
-
-	// Get check history
-	response, err := configClient.GetCheckHistory(ctx, checkID, page, limit)
-	if err != nil {
-		return fmt.Errorf("ошибка получения истории: %w", err)
-	}
-
-	if len(response.Executions) == 0 {
-		fmt.Printf("📭 История проверок для %s пуста\n", checkID)
-		return nil
-	}
-
-	switch format {
-	case "json":
-		fmt.Println("[")
-		for i, execution := range response.Executions {
-			if i > 0 {
-				fmt.Println(",")
-			}
-			fmt.Printf(`  {"execution_id": "%s", "status": "%s", "message": "%s", "duration": %d, "started_at": "%s", "completed_at": "%s"}`,
-				execution.ExecutionID,
-				execution.Status,
-				execution.Message,
-				execution.Duration,
-				execution.StartedAt.Format(time.RFC3339),
-				execution.CompletedAt.Format(time.RFC3339))
-		}
-		fmt.Println("\n]")
-	default:
-		fmt.Printf("📋 История проверок для %s (страница %d):\n", checkID, page)
-		fmt.Printf("%-20s %-10s %-15s %s\n", "🕐 Время", "📊 Статус", "⏱️ Длительность", "💬 Сообщение")
-		fmt.Println(strings.Repeat("-", 80))
-
-		for _, execution := range response.Executions {
-			timestamp := execution.StartedAt.Format("2006-01-02 15:04:05")
-			status := execution.Status
-			duration := fmt.Sprintf("%dms", execution.Duration)
-			message := execution.Message
-
-			if len(message) > 50 {
-				message = message[:47] + "..."
-			}
-
-			// Добавляем эмодзи для статуса
-			switch status {
-			case "success":
-				status = "✅ " + status
-			case "failed":
-				status = "❌ " + status
-			case "timeout":
-				status = "⏰ " + status
-			default:
-				status = "⏳️ " + status
-			}
-
-			fmt.Printf("%-20s %-15s %-15s %s\n", timestamp, status, duration, message)
-		}
-	}
-
-	fmt.Printf("\n📊 Всего записей: %d\n", response.Total)
-	fmt.Printf("📄 Страница: %d из %d\n", page, (response.Total+limit-1)/limit)
-
-	return nil
-}
-
 func handleChecksList(cmd *cobra.Command, args []string) error {
-	tags, _ := cmd.Flags().GetStringSlice("tags")
-	enabled, _ := cmd.Flags().GetBool("enabled")
 	page, _ := cmd.Flags().GetInt("page")
 	limit, _ := cmd.Flags().GetInt("limit")
 	format, _ := cmd.Flags().GetString("format")
 
-	var enabledPtr *bool
-	if cmd.Flags().Changed("enabled") {
-		enabledPtr = &enabled
-	}
-
 	// Load configuration
-	configPath, err := config.GetConfigPath()
+	configPath, err := cliConfig.GetConfigPath()
 	if err != nil {
 		return fmt.Errorf("ошибка получения пути конфигурации: %w", err)
 	}
 
-	cfg, err := config.LoadConfig(configPath)
+	cfg, err := cliConfig.LoadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("ошибка загрузки конфигурации: %w", err)
 	}
@@ -359,36 +143,17 @@ func handleChecksList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("ошибка аутентификации: %w", err)
 	}
 
-	// Create logger
-	log, err := logger.NewLogger("dev", "info", "cli-service", false)
-	if err != nil {
-		return fmt.Errorf("ошибка создания логгера: %w", err)
-	}
-
-	// Create config client
-	var configClient *client.ConfigClient
-	if cfg.GRPC.UseGRPC {
-		configClient, err = client.NewConfigClientWithGRPC(
-			cfg.API.BaseURL,
-			cfg.GRPC.SchedulerAddress,
-			cfg.GRPC.CoreAddress,
-			log,
-		)
-		if err != nil {
-			return fmt.Errorf("ошибка создания gRPC клиента: %w", err)
-		}
-		defer configClient.Close()
-	} else {
-		configClient = client.NewConfigClient(cfg.API.BaseURL, log)
-	}
+	// Create checks client instead of config client
+	checksClient := client.NewChecksClient(cfg.API.BaseURL, authManager.GetTokenStore())
+	defer checksClient.Close()
 
 	// Get checks list
-	response, err := configClient.ListChecks(ctx, tags, enabledPtr, page, limit)
+	checks, err := checksClient.ListChecks(ctx)
 	if err != nil {
 		return fmt.Errorf("ошибка получения списка проверок: %w", err)
 	}
 
-	if len(response.Checks) == 0 {
+	if len(checks) == 0 {
 		fmt.Printf("📭 Проверки не найдены\n")
 		return nil
 	}
@@ -396,7 +161,7 @@ func handleChecksList(cmd *cobra.Command, args []string) error {
 	switch format {
 	case "json":
 		fmt.Println("[")
-		for i, check := range response.Checks {
+		for i, check := range checks {
 			if i > 0 {
 				fmt.Println(",")
 			}
@@ -409,7 +174,7 @@ func handleChecksList(cmd *cobra.Command, args []string) error {
 				check.Timeout,
 				check.Enabled,
 				strings.Join(check.Tags, ", "),
-				check.CreatedAt.Format(time.RFC3339))
+				check.CreatedAt)
 		}
 		fmt.Println("\n]")
 	default:
@@ -417,7 +182,7 @@ func handleChecksList(cmd *cobra.Command, args []string) error {
 		fmt.Printf("%-20s %-25s %-10s %-30s %-10s %-10s %s\n", "🔍 ID", "📝 Название", "🔧 Тип", "🎯 Цель", "⏱️ Интервал", "⏰ Таймаут", "🏷️ Теги")
 		fmt.Println(strings.Repeat("-", 120))
 
-		for _, check := range response.Checks {
+		for _, check := range checks {
 			id := check.ID
 			if len(id) > 18 {
 				id = id[:15] + "..."
@@ -445,8 +210,446 @@ func handleChecksList(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Printf("\n📊 Всего проверок: %d\n", response.Total)
-	fmt.Printf("📄 Страница: %d из %d\n", page, (response.Total+limit-1)/limit)
+	fmt.Printf("\n📊 Всего проверок: %d\n", len(checks))
+	fmt.Printf("📄 Страница: %d из %d\n", page, (len(checks)+limit-1)/limit)
+
+	return nil
+}
+
+// handleChecksCreate обрабатывает создание новой проверки
+func handleChecksCreate(cmd *cobra.Command, args []string) error {
+	// Загрузка конфигурации CLI
+	configPath, err := cliConfig.GetConfigPath()
+	if err != nil {
+		return fmt.Errorf("ошибка получения пути конфигурации: %w", err)
+	}
+
+	cfg, err := cliConfig.LoadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("ошибка загрузки конфигурации: %w", err)
+	}
+
+	// Create auth manager and ensure valid token
+	authManager, err := auth.NewAuthManager(cfg)
+	if err != nil {
+		return fmt.Errorf("ошибка создания менеджера аутентификации: %w", err)
+	}
+	defer authManager.Close()
+
+	// Get token
+	ctx := context.Background()
+	if err := authManager.EnsureValidToken(ctx); err != nil {
+		return fmt.Errorf("ошибка проверки токена: %w", err)
+	}
+
+	token := authManager.GetTokenStore().GetAccessToken()
+
+	// Добавляем токен в контекст
+	ctx = context.WithValue(ctx, "access_token", token)
+
+	// Get flags
+	name, _ := cmd.Flags().GetString("name")
+	url, _ := cmd.Flags().GetString("url")
+	checkType, _ := cmd.Flags().GetString("type")
+	interval, _ := cmd.Flags().GetInt("interval")
+	timeout, _ := cmd.Flags().GetInt("timeout")
+	tags, _ := cmd.Flags().GetStringSlice("tags")
+	enabled, _ := cmd.Flags().GetBool("enabled")
+
+	// Validate required fields
+	if name == "" {
+		return fmt.Errorf("флаг --name обязателен")
+	}
+
+	if checkType == "http" || checkType == "https" {
+		if url == "" {
+			return fmt.Errorf("флаг --url обязателен для HTTP/HTTPS проверок")
+		}
+	}
+
+	// Create checks client
+	checksClient := client.NewChecksClient(cfg.API.BaseURL, authManager.GetTokenStore())
+	defer checksClient.Close()
+
+	// Create check request
+	request := &client.Check{
+		Name:     name,
+		Type:     checkType,
+		Target:   url,
+		Interval: interval,
+		Timeout:  timeout,
+		Tags:     tags,
+		Metadata: map[string]interface{}{
+			"enabled": fmt.Sprintf("%t", enabled),
+		},
+	}
+
+	// Create check
+	response, err := checksClient.CreateCheck(ctx, request)
+	if err != nil {
+		return fmt.Errorf("ошибка создания проверки: %w", err)
+	}
+
+	// Display result
+	fmt.Printf("✅ Проверка создана успешно!\n")
+	fmt.Printf("📝 ID: %s\n", response.ID)
+	fmt.Printf("🔗 URL: %s\n", response.Target)
+	fmt.Printf("⏱️ Интервал: %d секунд\n", response.Interval)
+	fmt.Printf("⏰ Таймаут: %d секунд\n", response.Timeout)
+	if len(response.Tags) > 0 {
+		fmt.Printf("🏷️ Теги: %s\n", strings.Join(response.Tags, ", "))
+	}
+	fmt.Printf("🔧 Статус: ")
+	if response.Enabled {
+		fmt.Printf("Включена\n")
+	} else {
+		fmt.Printf("Отключена\n")
+	}
+
+	return nil
+}
+
+// handleChecksGet обрабатывает получение деталей проверки
+func handleChecksGet(cmd *cobra.Command, args []string) error {
+	checkID := args[0]
+
+	// Валидация UUID
+	validator := &validation.Validator{}
+	if err := validator.ValidateUUID(checkID, "check_id"); err != nil {
+		return fmt.Errorf("невалидный ID проверки: %w", err)
+	}
+
+	// Загрузка конфигурации CLI
+	configPath, err := cliConfig.GetConfigPath()
+	if err != nil {
+		return fmt.Errorf("ошибка получения пути конфигурации: %w", err)
+	}
+
+	cfg, err := cliConfig.LoadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("ошибка загрузки конфигурации: %w", err)
+	}
+
+	// Create auth manager and ensure valid token
+	authManager, err := auth.NewAuthManager(cfg)
+	if err != nil {
+		return fmt.Errorf("ошибка создания менеджера аутентификации: %w", err)
+	}
+	defer authManager.Close()
+
+	// Get token
+	ctx := context.Background()
+	if err := authManager.EnsureValidToken(ctx); err != nil {
+		return fmt.Errorf("ошибка проверки токена: %w", err)
+	}
+
+	token := authManager.GetTokenStore().GetAccessToken()
+
+	// Добавляем токен в контекст
+	ctx = context.WithValue(ctx, "access_token", token)
+
+	// Create checks client instead of config client
+	checksClient := client.NewChecksClient(cfg.API.BaseURL, authManager.GetTokenStore())
+	defer checksClient.Close()
+
+	// Get check
+	check, err := checksClient.GetCheck(ctx, checkID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения проверки: %w", err)
+	}
+
+	// Display result
+	fmt.Printf("✅ Детали проверки:\n\n")
+	fmt.Printf("📝 ID: %s\n", check.ID)
+	fmt.Printf("🔗 Название: %s\n", check.Name)
+	fmt.Printf("🌐 Тип: %s\n", check.Type)
+	fmt.Printf("🎯 Цель: %s\n", check.Target)
+	fmt.Printf("⏱️ Интервал: %d секунд\n", check.Interval)
+	fmt.Printf("⏰ Таймаут: %d секунд\n", check.Timeout)
+
+	if len(check.Tags) > 0 {
+		fmt.Printf("🏷️ Теги: %s\n", strings.Join(check.Tags, ", "))
+	}
+
+	fmt.Printf("🔧 Статус: ")
+	if check.Enabled {
+		fmt.Printf("Включена\n")
+	} else {
+		fmt.Printf("Отключена\n")
+	}
+
+	if check.CreatedAt != "" {
+		// Пробуем распарсить как Unix timestamp
+		if timestamp, err := strconv.ParseInt(check.CreatedAt, 10, 64); err == nil {
+			parsedTime := time.Unix(timestamp, 0)
+			fmt.Printf("📅 Создана: %s\n", parsedTime.Format("2006-01-02 15:04:05"))
+		} else if parsedTime, err := time.Parse(time.RFC3339, check.CreatedAt); err == nil {
+			fmt.Printf("📅 Создана: %s\n", parsedTime.Format("2006-01-02 15:04:05"))
+		}
+	}
+
+	if check.UpdatedAt != "" {
+		// Пробуем распарсить как Unix timestamp
+		if timestamp, err := strconv.ParseInt(check.UpdatedAt, 10, 64); err == nil {
+			parsedTime := time.Unix(timestamp, 0)
+			fmt.Printf("🔄 Обновлена: %s\n", parsedTime.Format("2006-01-02 15:04:05"))
+		} else if parsedTime, err := time.Parse(time.RFC3339, check.UpdatedAt); err == nil {
+			fmt.Printf("🔄 Обновлена: %s\n", parsedTime.Format("2006-01-02 15:04:05"))
+		}
+	}
+
+	return nil
+}
+
+// handleChecksUpdate обрабатывает обновление проверки
+func handleChecksUpdate(cmd *cobra.Command, args []string) error {
+	checkID := args[0]
+
+	// Валидация UUID
+	validator := &validation.Validator{}
+	if err := validator.ValidateUUID(checkID, "check_id"); err != nil {
+		return fmt.Errorf("невалидный ID проверки: %w", err)
+	}
+
+	// Загрузка конфигурации CLI
+	configPath, err := cliConfig.GetConfigPath()
+	if err != nil {
+		return fmt.Errorf("ошибка получения пути конфигурации: %w", err)
+	}
+
+	cfg, err := cliConfig.LoadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("ошибка загрузки конфигурации: %w", err)
+	}
+
+	// Create auth manager and ensure valid token
+	authManager, err := auth.NewAuthManager(cfg)
+	if err != nil {
+		return fmt.Errorf("ошибка создания менеджера аутентификации: %w", err)
+	}
+	defer authManager.Close()
+
+	// Get token
+	ctx := context.Background()
+	if err := authManager.EnsureValidToken(ctx); err != nil {
+		return fmt.Errorf("ошибка проверки токена: %w", err)
+	}
+
+	token := authManager.GetTokenStore().GetAccessToken()
+
+	// Добавляем токен в контекст
+	ctx = context.WithValue(ctx, "access_token", token)
+
+	// Get flags
+	name, _ := cmd.Flags().GetString("name")
+	url, _ := cmd.Flags().GetString("url")
+	interval, _ := cmd.Flags().GetInt("interval")
+	timeout, _ := cmd.Flags().GetInt("timeout")
+	tags, _ := cmd.Flags().GetStringSlice("tags")
+	enabled, _ := cmd.Flags().GetBool("enabled")
+
+	// Проверяем, что хотя бы один флаг установлен
+	if name == "" && url == "" && interval == 0 && timeout == 0 && len(tags) == 0 && !cmd.Flags().Changed("enabled") {
+		return fmt.Errorf("необходимо указать хотя бы один параметр для обновления")
+	}
+
+	// Create checks client
+	checksClient := client.NewChecksClient(cfg.API.BaseURL, authManager.GetTokenStore())
+	defer checksClient.Close()
+
+	// Create update request
+	request := &client.Check{
+		Metadata: map[string]interface{}{},
+	}
+
+	// Устанавливаем только те поля, которые были изменены
+	if name != "" {
+		request.Name = name
+	}
+	if url != "" {
+		request.Target = url
+	}
+	if interval > 0 {
+		request.Interval = interval
+	}
+	if timeout > 0 {
+		request.Timeout = timeout
+	}
+	if len(tags) > 0 {
+		request.Tags = tags
+	}
+	if cmd.Flags().Changed("enabled") {
+		request.Enabled = enabled
+		request.Metadata["enabled"] = fmt.Sprintf("%t", enabled)
+	}
+
+	// Update check
+	response, err := checksClient.UpdateCheck(ctx, checkID, request)
+	if err != nil {
+		return fmt.Errorf("ошибка обновления проверки: %w", err)
+	}
+
+	// Display result
+	fmt.Printf("✅ Проверка обновлена успешно!\n")
+	fmt.Printf("📝 ID: %s\n", response.ID)
+	fmt.Printf("🔗 Название: %s\n", response.Name)
+	fmt.Printf("🎯 Цель: %s\n", response.Target)
+	fmt.Printf("⏱️ Интервал: %d секунд\n", response.Interval)
+	fmt.Printf("⏰ Таймаут: %d секунд\n", response.Timeout)
+
+	if len(response.Tags) > 0 {
+		fmt.Printf("🏷️ Теги: %s\n", strings.Join(response.Tags, ", "))
+	}
+
+	fmt.Printf("🔧 Статус: ")
+	if response.Enabled {
+		fmt.Printf("Включена\n")
+	} else {
+		fmt.Printf("Отключена\n")
+	}
+
+	return nil
+}
+
+// handleChecksEnable обрабатывает включение проверки
+func handleChecksEnable(cmd *cobra.Command, args []string) error {
+	return handleChecksToggle(cmd, args, true)
+}
+
+// handleChecksDisable обрабатывает отключение проверки
+func handleChecksDisable(cmd *cobra.Command, args []string) error {
+	return handleChecksToggle(cmd, args, false)
+}
+
+// handleChecksToggle обрабатывает включение/отключение проверки
+func handleChecksToggle(cmd *cobra.Command, args []string, enabled bool) error {
+	checkID := args[0]
+
+	// Валидация UUID
+	validator := &validation.Validator{}
+	if err := validator.ValidateUUID(checkID, "check_id"); err != nil {
+		return fmt.Errorf("невалидный ID проверки: %w", err)
+	}
+
+	// Загрузка конфигурации CLI
+	configPath, err := cliConfig.GetConfigPath()
+	if err != nil {
+		return fmt.Errorf("ошибка получения пути конфигурации: %w", err)
+	}
+
+	cfg, err := cliConfig.LoadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("ошибка загрузки конфигурации: %w", err)
+	}
+
+	// Create auth manager and ensure valid token
+	authManager, err := auth.NewAuthManager(cfg)
+	if err != nil {
+		return fmt.Errorf("ошибка создания менеджера аутентификации: %w", err)
+	}
+	defer authManager.Close()
+
+	// Get token
+	ctx := context.Background()
+	if err := authManager.EnsureValidToken(ctx); err != nil {
+		return fmt.Errorf("ошибка проверки токена: %w", err)
+	}
+
+	token := authManager.GetTokenStore().GetAccessToken()
+
+	// Добавляем токен в контекст
+	ctx = context.WithValue(ctx, "access_token", token)
+
+	// Create checks client
+	checksClient := client.NewChecksClient(cfg.API.BaseURL, authManager.GetTokenStore())
+	defer checksClient.Close()
+
+	// Create update request
+	request := &client.Check{
+		Enabled: enabled,
+		Metadata: map[string]interface{}{
+			"enabled": fmt.Sprintf("%t", enabled),
+		},
+	}
+
+	// Update check
+	response, err := checksClient.UpdateCheck(ctx, checkID, request)
+	if err != nil {
+		return fmt.Errorf("ошибка %s проверки: %w", func() string {
+			if enabled {
+				return "включения"
+			}
+			return "отключения"
+		}(), err)
+	}
+
+	// Display result
+	action := "отключена"
+	if enabled {
+		action = "включена"
+	}
+
+	fmt.Printf("✅ Проверка %s успешно!\n", action)
+	fmt.Printf("📝 ID: %s\n", response.ID)
+	fmt.Printf("🔗 Название: %s\n", response.Name)
+	fmt.Printf("🔧 Статус: %s\n", action)
+
+	return nil
+}
+
+// handleChecksDelete обрабатывает удаление проверки
+func handleChecksDelete(cmd *cobra.Command, args []string) error {
+	checkID := args[0]
+
+	// Валидация UUID
+	validator := &validation.Validator{}
+	if err := validator.ValidateUUID(checkID, "check_id"); err != nil {
+		return fmt.Errorf("невалидный ID проверки: %w", err)
+	}
+
+	// Загрузка конфигурации CLI
+	configPath, err := cliConfig.GetConfigPath()
+	if err != nil {
+		return fmt.Errorf("ошибка получения пути конфигурации: %w", err)
+	}
+
+	cfg, err := cliConfig.LoadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("ошибка загрузки конфигурации: %w", err)
+	}
+
+	// Create auth manager and ensure valid token
+	authManager, err := auth.NewAuthManager(cfg)
+	if err != nil {
+		return fmt.Errorf("ошибка создания менеджера аутентификации: %w", err)
+	}
+	defer authManager.Close()
+
+	// Get token
+	ctx := context.Background()
+	if err := authManager.EnsureValidToken(ctx); err != nil {
+		return fmt.Errorf("ошибка проверки токена: %w", err)
+	}
+
+	token := authManager.GetTokenStore().GetAccessToken()
+
+	// Добавляем токен в контекст
+	ctx = context.WithValue(ctx, "access_token", token)
+
+	// Create checks client
+	checksClient := client.NewChecksClient(cfg.API.BaseURL, authManager.GetTokenStore())
+	defer checksClient.Close()
+
+	// Delete check
+	err = checksClient.DeleteCheck(ctx, checkID)
+	if err != nil {
+		return fmt.Errorf("ошибка удаления проверки: %w", err)
+	}
+
+	// Display result
+	fmt.Printf("✅ Проверка удалена успешно!\n")
+	fmt.Printf("📝 ID: %s\n", checkID)
+	fmt.Printf("🗑️ Все связанные данные также удалены\n")
 
 	return nil
 }

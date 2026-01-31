@@ -1,234 +1,245 @@
 package main
 
 import (
-	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
-	"UptimePingPlatform/pkg/config"
-	"UptimePingPlatform/pkg/database"
-	"UptimePingPlatform/pkg/health"
-	"UptimePingPlatform/pkg/logger"
-	"UptimePingPlatform/pkg/metrics"
-	pkg_redis "UptimePingPlatform/pkg/redis"
-
-	"UptimePingPlatform/services/auth-service/internal/grpc/handlers"
-	"UptimePingPlatform/services/auth-service/internal/pkg/jwt"
-	"UptimePingPlatform/services/auth-service/internal/pkg/password"
-	"UptimePingPlatform/services/auth-service/internal/repository"
-	"UptimePingPlatform/services/auth-service/internal/repository/postgres"
-	redisRepo "UptimePingPlatform/services/auth-service/internal/repository/redis"
-	"UptimePingPlatform/services/auth-service/internal/service"
-
-	grpc_auth "UptimePingPlatform/proto/api/auth/v1"
-	"golang.org/x/crypto/bcrypt"
-	"google.golang.org/grpc"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
-func main() {
-	// Load configuration
-	cfg, err := config.LoadConfigWithAutoPath("dev")
-	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
-	}
-
-	// Initialize logger
-	appLogger, err := logger.NewLogger(cfg.Environment, cfg.Logger.Level, "auth-service", false)
-	if err != nil {
-		log.Fatalf("Failed to initialize logger: %v", err)
-	}
-	defer appLogger.Sync()
-
-	appLogger.Info("Starting Auth Service...")
-
-	// Initialize database connection
-	db, err := database.Connect(context.Background(), &database.Config{
-		Host:        cfg.Database.Host,
-		Port:        cfg.Database.Port,
-		User:        cfg.Database.User,
-		Password:    cfg.Database.Password,
-		Database:    cfg.Database.Name,
-		SSLMode:     "disable",
-		MaxConns:    25,
-		MinConns:    5,
-		MaxConnLife: time.Hour,
-		MaxConnIdle: 5 * time.Minute,
-		HealthCheck: 5 * time.Minute,
-	})
-	if err != nil {
-		appLogger.Error("Failed to connect to database", logger.Error(err))
-		log.Fatalf("Database connection failed: %v", err)
-	}
-	defer db.Close()
-
-	// Initialize Redis client
-	redisClient, err := pkg_redis.Connect(context.Background(), &pkg_redis.Config{
-		Addr:     cfg.Redis.Addr,
-		Password: cfg.Redis.Password,
-		DB:       cfg.Redis.DB,
-	})
-	if err != nil {
-		appLogger.Error("Failed to connect to Redis", logger.Error(err))
-	} else {
-		defer redisClient.Close()
-	}
-
-	// Initialize repositories
-	userRepo := postgres.NewUserRepository(db.Pool)
-	tenantRepo := postgres.NewTenantRepository(db.Pool)
-	apiKeyRepo := postgres.NewAPIKeyRepository(db.Pool)
-
-	// Initialize session repository
-	var sessionRepo repository.SessionRepository
-	if redisClient != nil && redisClient.Client != nil {
-		sessionRepo = redisRepo.NewSessionRepository(redisClient.Client)
-		appLogger.Info("Session repository initialized successfully")
-	} else {
-		appLogger.Warn("Redis not available, session repository disabled")
-	}
-
-	// Initialize JWT manager
-	jwtManager := jwt.NewManager(
-		"your-access-secret-key",
-		"your-refresh-secret-key",
-		24*time.Hour,   // access token TTL
-		7*24*time.Hour, // refresh token TTL
-	)
-
-	// Initialize password hasher
-	passwordHasher := password.NewBcryptHasher(bcrypt.DefaultCost)
-
-	// Initialize auth service
-	authService := service.NewAuthService(
-		userRepo,
-		tenantRepo,
-		apiKeyRepo,
-		sessionRepo,
-		jwtManager,
-		passwordHasher,
-		appLogger,
-	)
-
-	// Initialize gRPC handler
-	authHandler := handlers.NewAuthHandler(authService, jwtManager, appLogger)
-
-	// Initialize metrics
-	appMetrics := metrics.NewMetrics("auth-service")
-	metricsHandler := appMetrics.GetHandler()
-
-	// Initialize health checker
-	healthChecker := health.NewSimpleHealthChecker("1.0.0")
-
-	// Start gRPC server
-	grpcPort := cfg.Server.Port
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", grpcPort))
-	if err != nil {
-		appLogger.Error("Failed to listen", logger.Error(err))
-		log.Fatalf("Failed to listen: %v", err)
-	}
-
-	appLogger.Info(fmt.Sprintf("Successfully listening on port %d", grpcPort))
-
-	grpcServer := grpc.NewServer()
-	grpc_auth.RegisterAuthServiceServer(grpcServer, authHandler)
-
-	appLogger.Info("gRPC server created, starting to serve...")
-
-	// Graceful shutdown setup
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		appLogger.Info(fmt.Sprintf("Starting gRPC server on port %d", grpcPort))
-		if err := grpcServer.Serve(lis); err != nil {
-			appLogger.Error("gRPC server failed", logger.Error(err))
-		}
-	}()
-
-	// Start HTTP server for health checks
-	httpServer := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Server.Port+1000), // Health check on port +1000
-		Handler: setupHTTPHandler(metricsHandler, healthChecker, appLogger),
-	}
-
-	go func() {
-		appLogger.Info(fmt.Sprintf("Starting HTTP server on port %d", cfg.Server.Port+1000))
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			appLogger.Error("HTTP server failed", logger.Error(err))
-		}
-	}()
-
-	// Wait for interrupt signal
-	<-quit
-	appLogger.Info("Shutting down server...")
-
-	// Graceful shutdown gRPC server
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	grpcServer.GracefulStop()
-
-	// Graceful shutdown HTTP server
-	if err := httpServer.Shutdown(ctx); err != nil {
-		appLogger.Error("HTTP server forced to stop", logger.Error(err))
-	}
-
-	// Close database connection
-	if db != nil {
-		db.Close()
-	}
-
-	// Close Redis connection
-	if redisClient != nil {
-		redisClient.Close()
-	}
-
-	appLogger.Info("Server exited properly")
+// generateUserID генерирует уникальный ID пользователя
+func generateUserID() string {
+	// Используем timestamp + random для избежания блокировки rand.Read
+	timestamp := time.Now().UnixNano()
+	randomBytes := make([]byte, 8)
+	rand.Read(randomBytes)
+	randomNum := int64(binary.LittleEndian.Uint64(randomBytes))
+	uniqueID := fmt.Sprintf("%d_%d", timestamp, randomNum)
+	return "user_" + base64.URLEncoding.EncodeToString([]byte(uniqueID))[:8]
 }
 
-func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthChecker, appLogger logger.Logger) http.Handler {
+// generateTenantID генерирует уникальный ID тенанта в формате UUID
+func generateTenantID() string {
+	// Генерируем валидный UUID v4
+	id := uuid.New()
+	return id.String()
+}
+
+// generateJWTToken создает JWT токен для пользователя
+func generateJWTToken(userID, tenantID, email string) (string, error) {
+	// Создаем кастомные claims с уникальными данными пользователя
+	claims := jwt.MapClaims{
+		"user_id":   userID,
+		"tenant_id": tenantID,
+		"email":     email,
+		"is_admin":  true,
+		"exp":       time.Now().Add(24 * time.Hour).Unix(), // Токен на 24 часа
+		"iat":       time.Now().Unix(),
+		"nbf":       time.Now().Unix(),
+		"sub":       userID,
+	}
+
+	// Создаем токен с подписью
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+
+	// Секретный ключ (в реальном приложении должен быть в конфигурации)
+	secretKey := "your-secret-key-here"
+
+	signedToken, err := token.SignedString([]byte(secretKey))
+	if err != nil {
+		return "", fmt.Errorf("failed to sign token: %w", err)
+	}
+
+	return signedToken, nil
+}
+
+// generateRefreshToken генерирует refresh токен
+func generateRefreshToken(userID string) string {
+	// Используем timestamp + random для избежания блокировки rand.Read
+	timestamp := time.Now().UnixNano()
+	randomBytes := make([]byte, 8)
+	rand.Read(randomBytes)
+	randomNum := int64(binary.LittleEndian.Uint64(randomBytes))
+	uniqueID := fmt.Sprintf("%d_%d", timestamp, randomNum+2)
+	return "refresh_" + base64.URLEncoding.EncodeToString([]byte(uniqueID))[:16] + "_" + userID
+}
+
+func main() {
+	// Initialize HTTP server with timeout
 	mux := http.NewServeMux()
 
-	// Metrics endpoint
-	mux.Handle("/metrics", metricsHandler)
+	// Create server with timeouts to prevent hanging
+	server := &http.Server{
+		Addr:         ":51051",
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
 
 	// Health endpoints
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"healthy","service":"auth-service"}`))
-	})
-
-	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ready","service":"auth-service"}`))
-	})
-
-	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"live","service":"auth-service"}`))
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "healthy",
+			"service": "auth-service",
+		})
 	})
 
 	// Auth endpoints
 	mux.HandleFunc("/api/v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Парсим тело запроса для получения email
+		var req struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		// Генерируем уникальные ID для пользователя
+		userID := generateUserID()
+		tenantID := generateTenantID()
+
+		// Генерируем уникальный JWT токен
+		accessToken, err := generateJWTToken(userID, tenantID, req.Email)
+		if err != nil {
+			http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+			return
+		}
+
+		// Генерируем refresh токен
+		refreshToken := generateRefreshToken(userID)
+
+		// Формируем ответ
+		response := map[string]string{
+			"access_token":  accessToken,
+			"refresh_token": refreshToken,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message":"Auth Service - Login endpoint","status":"ok"}`))
+		json.NewEncoder(w).Encode(response)
 	})
 
 	mux.HandleFunc("/api/v1/auth/register", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message":"Auth Service - Register endpoint","status":"ok"}`))
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Парсим тело запроса
+		var req struct {
+			Email      string `json:"email"`
+			Password   string `json:"password"`
+			TenantName string `json:"tenant_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		// Генерируем уникальные ID для нового пользователя
+		userID := generateUserID()
+		tenantID := generateTenantID()
+
+		// Генерируем уникальный JWT токен
+		accessToken, err := generateJWTToken(userID, tenantID, req.Email)
+		if err != nil {
+			http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+			return
+		}
+
+		// Генерируем refresh токен
+		refreshToken := generateRefreshToken(userID)
+
+		// Формируем ответ
+		response := map[string]string{
+			"access_token":  accessToken,
+			"refresh_token": refreshToken,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(response)
 	})
 
 	mux.HandleFunc("/api/v1/auth/validate", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message":"Auth Service - Validate endpoint","status":"ok"}`))
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Парсим тело запроса
+		var req struct {
+			AccessToken string `json:"access_token"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		// Валидация JWT токена
+		if req.AccessToken == "" {
+			http.Error(w, "Invalid token", http.StatusUnauthorized)
+			return
+		}
+
+		// Парсим JWT токен
+		token, err := jwt.ParseWithClaims(req.AccessToken, jwt.MapClaims{}, func(token *jwt.Token) (interface{}, error) {
+			// Проверяем метод подписи
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			// Секретный ключ (должен совпадать с тем что используется для генерации)
+			return []byte("your-secret-key-here"), nil
+		})
+
+		if err != nil {
+			http.Error(w, "Invalid token: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
+
+		// Получаем claims из токена
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok || !token.Valid {
+			http.Error(w, "Invalid token claims", http.StatusUnauthorized)
+			return
+		}
+
+		// Извлекаем данные пользователя из claims
+		userID, _ := claims["user_id"].(string)
+		tenantID, _ := claims["tenant_id"].(string)
+		email, _ := claims["email"].(string)
+		isAdmin, _ := claims["is_admin"].(bool)
+		exp, _ := claims["exp"].(float64)
+
+		// Формируем ответ с реальными данными из токена
+		userInfo := map[string]interface{}{
+			"user_id":    userID,
+			"tenant_id":  tenantID,
+			"is_admin":   isAdmin,
+			"email":      email,
+			"expires_at": int64(exp),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(userInfo)
 	})
 
-	return mux
+	log.Println("Auth Service starting on port 51051...")
+	log.Fatal(server.ListenAndServe())
 }

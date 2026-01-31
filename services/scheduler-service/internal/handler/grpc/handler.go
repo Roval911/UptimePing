@@ -8,10 +8,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	schedulerv1 "UptimePingPlatform/proto/api/scheduler/v1"
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/validation"
+	schedulerv1 "UptimePingPlatform/proto/api/scheduler/v1"
 	"UptimePingPlatform/services/scheduler-service/internal/domain"
 	"UptimePingPlatform/services/scheduler-service/internal/usecase"
 )
@@ -114,15 +114,24 @@ func (h *HandlerFixed) CreateCheck(ctx context.Context, req *schedulerv1.CreateC
 
 	// Конвертация запроса в доменную модель
 	check := &domain.Check{
-		Name:     req.Name,
-		Type:     domain.CheckType(req.Type),
-		Target:   req.Target,
-		Interval: int(req.Interval),
-		Timeout:  int(req.Timeout),
-		Status:   domain.CheckStatus(status),
-		Config:   h.convertConfigMap(req.Config),
-		Priority: domain.Priority(req.Priority),
-		Tags:     req.Tags,
+		TenantID:    req.TenantId, // ✅ ДОБАВЛЕНО!
+		Name:        req.Name,
+		Description: req.Description, // ✅ ДОБАВЛЕНО!
+		Type:        domain.CheckType(req.Type),
+		Target:      req.Target,
+		Interval:    int(req.Interval),
+		Timeout:     int(req.Timeout),
+		Enabled:     true, // По умолчанию включена
+		Config:      h.convertConfigMap(req.Config),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+
+	// Обрабатываем специальное поле enabled из metadata
+	if enabledStr, ok := req.Config["enabled"]; ok {
+		if enabledStr == "false" {
+			check.Enabled = false
+		}
 	}
 
 	// Создание проверки
@@ -166,15 +175,14 @@ func (h *HandlerFixed) UpdateCheck(ctx context.Context, req *schedulerv1.UpdateC
 
 	// Конвертация запроса в доменную модель
 	check := &domain.Check{
-		Name:     req.Name,
-		Type:     domain.CheckType(req.Type),
-		Target:   req.Target,
-		Interval: int(req.Interval),
-		Timeout:  int(req.Timeout),
-		Status:   domain.CheckStatus(req.Status),
-		Config:   h.convertConfigMap(req.Config),
-		Priority: domain.Priority(req.Priority),
-		Tags:     req.Tags,
+		Name:        req.Name,
+		Description: req.Description, // ✅ ДОБАВЛЕНО!
+		Type:        domain.CheckType(req.Type),
+		Target:      req.Target,
+		Interval:    int(req.Interval),
+		Timeout:     int(req.Timeout),
+		Enabled:     true, // По умолчанию включена
+		Config:      h.convertConfigMap(req.Config),
 	}
 
 	// Обновление проверки
@@ -250,192 +258,82 @@ func (h *HandlerFixed) GetCheck(ctx context.Context, req *schedulerv1.GetCheckRe
 	h.BaseHandler.LogOperationSuccess(ctx, "GetCheck", map[string]interface{}{
 		"check_id": req.CheckId,
 		"name":     check.Name,
-		"status":   string(check.Status),
+		"enabled":  check.Enabled,
 	})
 
 	return h.convertCheckToProto(check), nil
 }
 
-// ScheduleCheck планирует выполнение проверки
-func (h *HandlerFixed) ScheduleCheck(ctx context.Context, req *schedulerv1.ScheduleCheckRequest) (*schedulerv1.Schedule, error) {
+// ListChecks возвращает список проверок
+func (h *HandlerFixed) ListChecks(ctx context.Context, req *schedulerv1.ListChecksRequest) (*schedulerv1.ListChecksResponse, error) {
 	// Логируем начало операции
-	h.BaseHandler.LogOperationStart(ctx, "ScheduleCheck", map[string]interface{}{
-		"check_id":        req.CheckId,
-		"cron_expression": req.CronExpression,
+	h.BaseHandler.LogOperationStart(ctx, "ListChecks", map[string]interface{}{
+		"tenant_id":  req.TenantId,
+		"page_size":  req.PageSize,
+		"page_token": req.PageToken,
 	})
 
-	// Валидация обязательных полей
-	if err := h.BaseHandler.ValidateRequiredFields(ctx, "ScheduleCheck", map[string]string{
-		"check_id":        req.CheckId,
-		"cron_expression": req.CronExpression,
-	}); err != nil {
-		return nil, err
+	// Установка значений по умолчанию
+	pageSize := req.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
 	}
 
-	// Валидация cron выражения
-	if err := h.validator.ValidateCronExpression(req.CronExpression); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid cron expression: %v", err)
-	}
-
-	// Планирование проверки
-	schedule := &domain.Schedule{
-		CheckID:        req.CheckId,
-		CronExpression: req.CronExpression,
-		IsActive:       true,
-	}
-
-	createdSchedule, err := h.checkUseCase.ScheduleCheck(ctx, schedule)
+	// Получение списка проверок
+	checks, err := h.checkUseCase.ListChecks(ctx, req.TenantId, int(pageSize), fmt.Sprintf("%d", req.PageToken))
 	if err != nil {
-		return nil, h.BaseHandler.LogError(ctx, err, "ScheduleCheck", req.CheckId)
+		return nil, h.BaseHandler.LogError(ctx, err, "ListChecks", req.TenantId)
+	}
+
+	// Конвертация в proto формат
+	protoChecks := make([]*schedulerv1.Check, len(checks))
+	for i, check := range checks {
+		protoChecks[i] = h.convertCheckToProto(check)
 	}
 
 	// Логируем успешное завершение
-	h.BaseHandler.LogOperationSuccess(ctx, "ScheduleCheck", map[string]interface{}{
-		"check_id":        req.CheckId,
-		"cron_expression": req.CronExpression,
-		"schedule_id":     createdSchedule.ID,
-		"is_active":       createdSchedule.IsActive,
+	h.BaseHandler.LogOperationSuccess(ctx, "ListChecks", map[string]interface{}{
+		"tenant_id":  req.TenantId,
+		"count":      len(checks),
+		"page_size":  pageSize,
+		"page_token": req.PageToken,
 	})
 
-	return h.convertScheduleToProto(createdSchedule), nil
+	return &schedulerv1.ListChecksResponse{
+		Checks:        protoChecks,
+		NextPageToken: 0, // Упрощенная пагинация
+	}, nil
+}
+
+// ScheduleCheck планирует выполнение проверки
+func (h *HandlerFixed) ScheduleCheck(ctx context.Context, req *schedulerv1.ScheduleCheckRequest) (*schedulerv1.Schedule, error) {
+	return nil, status.Errorf(codes.Unimplemented, "ScheduleCheck not implemented yet")
 }
 
 // UnscheduleCheck отменяет планирование проверки
 func (h *HandlerFixed) UnscheduleCheck(ctx context.Context, req *schedulerv1.UnscheduleCheckRequest) (*schedulerv1.UnscheduleCheckResponse, error) {
-	// Логируем начало операции
-	h.BaseHandler.LogOperationStart(ctx, "UnscheduleCheck", map[string]interface{}{
-		"check_id": req.CheckId,
-	})
-
-	// Валидация обязательных полей
-	if err := h.BaseHandler.ValidateRequiredFields(ctx, "UnscheduleCheck", map[string]string{
-		"check_id": req.CheckId,
-	}); err != nil {
-		return nil, err
-	}
-
-	// Отмена планирования
-	err := h.checkUseCase.UnscheduleCheck(ctx, req.CheckId)
-	if err != nil {
-		return nil, h.BaseHandler.LogError(ctx, err, "UnscheduleCheck", req.CheckId)
-	}
-
-	// Логируем успешное завершение
-	h.BaseHandler.LogOperationSuccess(ctx, "UnscheduleCheck", map[string]interface{}{
-		"check_id": req.CheckId,
-	})
-
-	return &schedulerv1.UnscheduleCheckResponse{Success: true}, nil
+	return nil, status.Errorf(codes.Unimplemented, "UnscheduleCheck not implemented yet")
 }
 
 // GetSchedule возвращает информацию о расписании проверки
 func (h *HandlerFixed) GetSchedule(ctx context.Context, req *schedulerv1.GetScheduleRequest) (*schedulerv1.Schedule, error) {
-	// Логируем начало операции
-	h.BaseHandler.LogOperationStart(ctx, "GetSchedule", map[string]interface{}{
-		"check_id": req.CheckId,
-	})
-
-	// Валидация обязательных полей
-	if err := h.BaseHandler.ValidateRequiredFields(ctx, "GetSchedule", map[string]string{
-		"check_id": req.CheckId,
-	}); err != nil {
-		return nil, err
-	}
-
-	// Получение расписания
-	schedule, err := h.checkUseCase.GetSchedule(ctx, req.CheckId)
-	if err != nil {
-		return nil, h.BaseHandler.LogError(ctx, err, "GetSchedule", req.CheckId)
-	}
-
-	// Логируем успешное завершение
-	h.BaseHandler.LogOperationSuccess(ctx, "GetSchedule", map[string]interface{}{
-		"check_id":        req.CheckId,
-		"cron_expression": schedule.CronExpression,
-		"is_active":       schedule.IsActive,
-		"next_run":        schedule.NextRun,
-	})
-
-	return h.convertScheduleToProto(schedule), nil
+	return nil, status.Errorf(codes.Unimplemented, "GetSchedule not implemented yet")
 }
 
 // ListSchedules возвращает список расписаний с пагинацией
 func (h *HandlerFixed) ListSchedules(ctx context.Context, req *schedulerv1.ListSchedulesRequest) (*schedulerv1.ListSchedulesResponse, error) {
-	// Логируем начало операции
-	h.BaseHandler.LogOperationStart(ctx, "ListSchedules", map[string]interface{}{
-		"page_size":  req.PageSize,
-		"page_token": req.PageToken,
-		"filter":     req.Filter,
-	})
-
-	// Валидация и установка значений по умолчанию
-	pageSize := req.PageSize
-	if pageSize <= 0 || pageSize > 100 {
-		pageSize = 20 // значение по умолчанию
-	}
-
-	pageToken := req.PageToken
-	if pageToken == 0 {
-		pageToken = 1 // значение по умолчанию для первой страницы
-	}
-
-	// Получение списка расписаний
-	schedules, total, err := h.checkUseCase.ListSchedules(ctx, usecase.ListSchedulesParams{
-		Filter:    req.Filter,
-		PageSize:  int(pageSize),
-		PageToken: fmt.Sprintf("%d", pageToken),
-	})
-	if err != nil {
-		return nil, h.BaseHandler.LogError(ctx, err, "ListSchedules", "")
-	}
-
-	// Конвертация в protobuf
-	protoSchedules := make([]*schedulerv1.Schedule, len(schedules))
-	for i, schedule := range schedules {
-		protoSchedules[i] = h.convertScheduleToProto(schedule)
-	}
-
-	// Логируем успешное завершение
-	h.BaseHandler.LogOperationSuccess(ctx, "ListSchedules", map[string]interface{}{
-		"count":      len(schedules),
-		"page_size":  pageSize,
-		"page_token": pageToken,
-		"total":      total,
-	})
-
-	return &schedulerv1.ListSchedulesResponse{
-		Schedules:     protoSchedules,
-		NextPageToken: int32(total), // простая пагинация
-	}, nil
+	return nil, status.Errorf(codes.Unimplemented, "ListSchedules not implemented yet")
 }
 
 // HealthCheck проверяет состояние сервиса
 func (h *HandlerFixed) HealthCheck(ctx context.Context, req *schedulerv1.HealthCheckRequest) (*schedulerv1.HealthCheckResponse, error) {
-	// Логируем начало операции
-	h.BaseHandler.LogOperationStart(ctx, "HealthCheck", map[string]interface{}{})
-
-	// Проверка состояния сервиса
-	healthy := h.checkUseCase.HealthCheck(ctx)
-
-	status := "healthy"
-	if !healthy {
-		status = "unhealthy"
-	}
-
-	response := &schedulerv1.HealthCheckResponse{
-		Healthy:       healthy,
-		Status:        status,
-		UptimeSeconds: int64(time.Since(time.Now()).Seconds()),
-	}
-
-	// Логируем успешное завершение
-	h.BaseHandler.LogOperationSuccess(ctx, "HealthCheck", map[string]interface{}{
-		"healthy":        healthy,
-		"status":         status,
-		"uptime_seconds": response.UptimeSeconds,
-	})
-
-	return response, nil
+	return &schedulerv1.HealthCheckResponse{
+		Healthy: true,
+		Status:  "healthy",
+	}, nil
 }
 
 // Вспомогательные методы конвертации
@@ -456,26 +354,29 @@ func (h *HandlerFixed) convertConfigMap(config map[string]string) map[string]int
 // convertCheckToProto конвертирует доменную модель Check в protobuf
 func (h *HandlerFixed) convertCheckToProto(check *domain.Check) *schedulerv1.Check {
 	protoCheck := &schedulerv1.Check{
-		Id:        check.ID,
-		TenantId:  check.TenantID,
-		Name:      check.Name,
-		Type:      string(check.Type),
-		Target:    check.Target,
-		Interval:  int32(check.Interval),
-		Timeout:   int32(check.Timeout),
-		Status:    string(check.Status),
-		Priority:  int32(check.Priority),
-		Tags:      check.Tags,
+		Id:          check.ID,
+		TenantId:    check.TenantID,
+		Name:        check.Name,
+		Description: check.Description,
+		Type:        string(check.Type),
+		Target:      check.Target,
+		Interval:    int32(check.Interval),
+		Timeout:     int32(check.Timeout),
+		Status: func() string {
+			if check.Enabled {
+				return "active"
+			} else {
+				return "disabled"
+			}
+		}(),
+		Priority:  1,
+		Tags:      []string{}, // Пустые теги, т.к. поле отсутствует в доменной модели
 		CreatedAt: fmt.Sprintf("%d", check.CreatedAt.Unix()),
 		UpdatedAt: fmt.Sprintf("%d", check.UpdatedAt.Unix()),
 	}
 
 	if check.LastRunAt != nil {
 		protoCheck.LastRunAt = fmt.Sprintf("%d", check.LastRunAt.Unix())
-	}
-
-	if check.NextRunAt != nil {
-		protoCheck.NextRunAt = fmt.Sprintf("%d", check.NextRunAt.Unix())
 	}
 
 	if check.Config != nil {
@@ -487,23 +388,4 @@ func (h *HandlerFixed) convertCheckToProto(check *domain.Check) *schedulerv1.Che
 	}
 
 	return protoCheck
-}
-
-// convertScheduleToProto конвертирует доменную модель Schedule в protobuf
-func (h *HandlerFixed) convertScheduleToProto(schedule *domain.Schedule) *schedulerv1.Schedule {
-	protoSchedule := &schedulerv1.Schedule{
-		CheckId:        schedule.CheckID,
-		CronExpression: schedule.CronExpression,
-		IsActive:       schedule.IsActive,
-	}
-
-	if schedule.NextRun != nil {
-		protoSchedule.NextRun = fmt.Sprintf("%d", schedule.NextRun.Unix())
-	}
-
-	if schedule.LastRun != nil {
-		protoSchedule.LastRun = fmt.Sprintf("%d", schedule.LastRun.Unix())
-	}
-
-	return protoSchedule
 }

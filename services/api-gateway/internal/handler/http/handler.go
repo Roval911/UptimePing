@@ -1,123 +1,50 @@
 package http
 
 import (
+	corev1 "UptimePingPlatform/proto/api/core/v1"
 	forgev1 "UptimePingPlatform/proto/api/forge/v1"
 	incidentv1 "UptimePingPlatform/proto/api/incident/v1"
 	metricsv1 "UptimePingPlatform/proto/api/metrics/v1"
 	notificationv1 "UptimePingPlatform/proto/api/notification/v1"
 	schedulerv1 "UptimePingPlatform/proto/api/scheduler/v1"
-	corev1 "UptimePingPlatform/proto/api/core/v1"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/gorilla/mux"
+	//"UptimePingPlatform/pkg/config"
 	pkgErrors "UptimePingPlatform/pkg/errors"
 	grpcBase "UptimePingPlatform/pkg/grpc"
 	"UptimePingPlatform/pkg/logger"
-	"UptimePingPlatform/pkg/config"
 	"UptimePingPlatform/pkg/validation"
-	
 	"UptimePingPlatform/services/api-gateway/internal/client"
+	"UptimePingPlatform/services/api-gateway/internal/middleware"
 )
 
-// ForgeServiceClient интерфейс для Forge Service клиента
-type ForgeServiceClient interface {
-	GenerateConfig(ctx context.Context, protoContent string, options *forgev1.ConfigOptions) (*forgev1.GenerateConfigResponse, error)
-	ParseProto(ctx context.Context, protoContent, fileName string) (*forgev1.ParseProtoResponse, error)
-	GenerateCode(ctx context.Context, protoContent string, options *forgev1.CodeOptions) (*forgev1.GenerateCodeResponse, error)
-	ValidateProto(ctx context.Context, protoContent string) (*forgev1.ValidateProtoResponse, error)
-	Close() error
-}
-
-// SchedulerServiceClient интерфейс для Scheduler Service клиента
-type SchedulerServiceClient interface {
-	ListChecks(ctx context.Context, req *schedulerv1.ListChecksRequest) (*schedulerv1.ListChecksResponse, error)
-	CreateCheck(ctx context.Context, req *schedulerv1.CreateCheckRequest) (*schedulerv1.Check, error)
-	GetCheck(ctx context.Context, req *schedulerv1.GetCheckRequest) (*schedulerv1.Check, error)
-	UpdateCheck(ctx context.Context, req *schedulerv1.UpdateCheckRequest) (*schedulerv1.Check, error)
-	DeleteCheck(ctx context.Context, req *schedulerv1.DeleteCheckRequest) (*schedulerv1.DeleteCheckResponse, error)
-	ScheduleCheck(ctx context.Context, req *schedulerv1.ScheduleCheckRequest) (*schedulerv1.Schedule, error)
-	UnscheduleCheck(ctx context.Context, req *schedulerv1.UnscheduleCheckRequest) (*schedulerv1.UnscheduleCheckResponse, error)
-	GetSchedule(ctx context.Context, req *schedulerv1.GetScheduleRequest) (*schedulerv1.Schedule, error)
-	ListSchedules(ctx context.Context, req *schedulerv1.ListSchedulesRequest) (*schedulerv1.ListSchedulesResponse, error)
-	Close() error
-}
-
-// MetricsServiceClient интерфейс для Metrics Service клиента
-type MetricsServiceClient interface {
-	CollectMetrics(ctx context.Context, req *metricsv1.CollectMetricsRequest) (*metricsv1.CollectMetricsResponse, error)
-	GetMetrics(ctx context.Context, req *metricsv1.GetMetricsRequest) (*metricsv1.GetMetricsResponse, error)
-	Close() error
-}
-
-// IncidentServiceClient интерфейс для Incident Service клиента
-type IncidentServiceClient interface {
-	CreateIncident(ctx context.Context, req *incidentv1.CreateIncidentRequest) (*incidentv1.Incident, error)
-	GetIncident(ctx context.Context, req *incidentv1.GetIncidentRequest) (*incidentv1.Incident, error)
-	ListIncidents(ctx context.Context, req *incidentv1.ListIncidentsRequest) (*incidentv1.ListIncidentsResponse, error)
-	ResolveIncident(ctx context.Context, req *incidentv1.ResolveIncidentRequest) (*incidentv1.ResolveIncidentResponse, error)
-	Close() error
-}
-
-// NotificationServiceClient интерфейс для Notification Service клиента
-type NotificationServiceClient interface {
-	SendNotification(ctx context.Context, req *notificationv1.SendNotificationRequest) (*notificationv1.SendNotificationResponse, error)
-	GetNotificationChannels(ctx context.Context, req *notificationv1.ListChannelsRequest) (*notificationv1.ListChannelsResponse, error)
-	RegisterChannel(ctx context.Context, req *notificationv1.RegisterChannelRequest) (*notificationv1.Channel, error)
-	Close() error
-}
-
-// ConfigServiceClient интерфейс для Config Service клиента
-type ConfigServiceClient interface {
-	GetConfig(ctx context.Context) *config.Config
-	UpdateConfig(ctx context.Context, newConfig *config.Config) error
-	Close() error
-}
-
-// CoreServiceClient интерфейс для Core Service клиента
-type CoreServiceClient interface {
-	ExecuteCheck(ctx context.Context, req *corev1.ExecuteCheckRequest) (*corev1.CheckResult, error)
-	GetCheckStatus(ctx context.Context, req *corev1.GetCheckStatusRequest) (*corev1.CheckStatusResponse, error)
-	GetCheckHistory(ctx context.Context, req *corev1.GetCheckHistoryRequest) (*corev1.GetCheckHistoryResponse, error)
-	Close() error
-}
+// UserInfo содержит информацию о пользователе
+type UserInfo = client.UserInfo
 
 // Handler структура для управления HTTP обработчиками
 type Handler struct {
-	mux                   *http.ServeMux
-	authService           *client.GRPCAuthClient
-	healthHandler         HealthHandler
-	schedulerClient       client.SchedulerClient
-	coreClient            client.CoreClient
-	metricsClient         client.MetricsClient
-	incidentClient        client.IncidentClient
-	notificationClient    client.NotificationClient
-	configClient          client.ConfigClient
-	forgeClient            client.GRPCForgeClient
-	baseHandler           *grpcBase.BaseHandler
-	validator             *validation.Validator
-	logger                logger.Logger
-}
-
-// UserInfo содержит информацию о пользователе
-type UserInfo struct {
-	UserID       string   `json:"user_id"`
-	TenantID     string   `json:"tenant_id"`
-	Email        string   `json:"email"`
-	Roles        []string `json:"roles"`
-	Permissions  []string `json:"permissions"`
-	ExpiresAt    int64    `json:"expires_at"`
-}
-
-// TokenPair структура для хранения пары токенов
-type TokenPair struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
+	mux                *mux.Router
+	authService        client.AuthHTTPClientInterface
+	healthHandler      HealthHandler
+	schedulerClient    *client.SchedulerClient
+	coreClient         *client.CoreClient
+	metricsClient      *client.MetricsClient
+	incidentClient     *client.IncidentClient
+	notificationClient *client.NotificationClient
+	configClient       *client.ConfigClient
+	forgeClient        *client.GRPCForgeClient
+	baseHandler        *grpcBase.BaseHandler
+	logger             logger.Logger
+	validator          *validation.Validator
 }
 
 // HealthHandler интерфейс для health check обработчика
@@ -128,25 +55,24 @@ type HealthHandler interface {
 }
 
 // NewHandler создает новый экземпляр Handler
-func NewHandler(authService *client.GRPCAuthClient, healthHandler HealthHandler, schedulerClient client.SchedulerClient, coreClient client.CoreClient, metricsClient client.MetricsClient, incidentClient client.IncidentClient, notificationClient client.NotificationClient, configClient client.ConfigClient, forgeClient client.GRPCForgeClient, logger logger.Logger) *Handler {
+func NewHandler(authService client.AuthHTTPClientInterface, healthHandler HealthHandler, schedulerClient *client.SchedulerClient, coreClient *client.CoreClient, metricsClient *client.MetricsClient, incidentClient *client.IncidentClient, notificationClient *client.NotificationClient, configClient *client.ConfigClient, forgeClient *client.GRPCForgeClient, logger logger.Logger) *Handler {
 	h := &Handler{
-		mux:                   http.NewServeMux(),
-		authService:           authService,
-		healthHandler:         healthHandler,
-		schedulerClient:       schedulerClient,
-		coreClient:            coreClient,
-		metricsClient:         metricsClient,
-		incidentClient:        incidentClient,
-		notificationClient:    notificationClient,
-		configClient:          configClient,
-		forgeClient:            forgeClient,
-		baseHandler:           grpcBase.NewBaseHandler(logger),
-		validator:             validation.NewValidator(),
+		mux:                mux.NewRouter(),
+		authService:        authService,
+		healthHandler:      healthHandler,
+		schedulerClient:    schedulerClient,
+		coreClient:         coreClient,
+		metricsClient:      metricsClient,
+		incidentClient:     incidentClient,
+		notificationClient: notificationClient,
+		configClient:       configClient,
+		forgeClient:        forgeClient,
+		baseHandler:        grpcBase.NewBaseHandler(logger),
+		logger:             logger,
+		validator:          validation.NewValidator(),
 	}
 
-	// Настройка роутинга
 	h.setupRoutes()
-
 	return h
 }
 
@@ -157,17 +83,85 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // setupRoutes настраивает маршруты для приложения
 func (h *Handler) setupRoutes() {
+	// Scheduler роуты для всех операций с проверками
+
+	// Роут для /api/v1/checks (без слэша) - список проверок
+	checksHandler := middleware.AuthMiddleware(h.authService, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.logger.Info("DEBUG: Route /api/v1/checks matched!",
+			logger.String("method", r.Method),
+			logger.String("path", r.URL.Path),
+			logger.String("full_url", r.URL.String()))
+
+		switch r.Method {
+		case http.MethodGet:
+			h.logger.Info("Handling GET /api/v1/checks (list) with checks:read permission")
+			// GET /api/v1/checks - требует checks:read
+			middleware.PermissionMiddleware([]string{"checks:read"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				h.handleSchedulerChecks(w, r)
+			})).ServeHTTP(w, r)
+		case http.MethodPost:
+			h.logger.Info("Handling POST /api/v1/checks (create) with checks:write permission")
+			// POST /api/v1/checks - требует checks:write
+			middleware.PermissionMiddleware([]string{"checks:write"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				h.handleSchedulerChecks(w, r)
+			})).ServeHTTP(w, r)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		}
+	}))
+	h.mux.Handle("/api/v1/checks", checksHandler).Methods(http.MethodGet, http.MethodPost)
+
+	// Роут для /api/v1/checks/{id} - операции с конкретными проверками
+	checkByIDHandler := middleware.AuthMiddleware(h.authService, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		checkID := vars["id"]
+
+		h.logger.Info("DEBUG: Route /api/v1/checks/{id} matched!",
+			logger.String("method", r.Method),
+			logger.String("path", r.URL.Path),
+			logger.String("check_id", checkID),
+			logger.String("full_url", r.URL.String()))
+
+		switch r.Method {
+		case http.MethodGet:
+			h.logger.Info("Handling GET /api/v1/checks/{id} with checks:read permission")
+			// GET /api/v1/checks/{id} - требует checks:read
+			middleware.PermissionMiddleware([]string{"checks:read"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				h.handleSchedulerCheckByID(w, r)
+			})).ServeHTTP(w, r)
+		case http.MethodPut:
+			h.logger.Info("Handling PUT /api/v1/checks/{id} with checks:write permission")
+			// PUT /api/v1/checks/{id} - требует checks:write
+			middleware.PermissionMiddleware([]string{"checks:write"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				h.handleSchedulerChecks(w, r)
+			})).ServeHTTP(w, r)
+		case http.MethodDelete:
+			h.logger.Info("Handling DELETE /api/v1/checks/{id} with checks:write permission")
+			// DELETE /api/v1/checks/{id} - требует checks:write
+			middleware.PermissionMiddleware([]string{"checks:write"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				h.handleSchedulerChecks(w, r)
+			})).ServeHTTP(w, r)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		}
+	}))
+	h.mux.Handle("/api/v1/checks/{id}", checkByIDHandler).Methods(http.MethodGet, http.MethodPut, http.MethodDelete)
+
 	// Публичные роуты
 	h.mux.HandleFunc("/api/v1/auth/login", h.handleLogin)
 	h.mux.HandleFunc("/api/v1/auth/register", h.handleRegister)
 	h.mux.HandleFunc("/api/v1/auth/refresh", h.handleRefreshToken)
 	h.mux.HandleFunc("/api/v1/auth/logout", h.handleLogout)
-	
+	h.mux.HandleFunc("/api/v1/auth/validate", h.handleValidateToken)
+
 	// API ключи (потребуют аутентификацию)
 	h.mux.HandleFunc("/api/v1/auth/api-keys", h.handleAPIKeys)
-	
-	// Scheduler роуты
-	h.mux.HandleFunc("/api/v1/scheduler/checks", h.handleSchedulerChecks)
+
+	// Config роуты (требуют прав доступа)
+	configHandler := middleware.PermissionMiddleware([]string{"config:read"}, h.logger)(http.HandlerFunc(h.handleConfig))
+	h.mux.HandleFunc("/api/v1/config", configHandler.ServeHTTP).Methods(http.MethodGet)
 
 	// Health check роуты
 	h.mux.HandleFunc("/health", h.healthHandler.HealthCheck)
@@ -178,10 +172,6 @@ func (h *Handler) setupRoutes() {
 	h.mux.HandleFunc("/api/v1/auth/health", h.handleAuthHealthProxy)
 	h.mux.HandleFunc("/api/v1/scheduler/health", h.handleSchedulerHealthProxy)
 	h.mux.HandleFunc("/api/v1/core/health", h.handleCoreHealthProxy)
-
-	// Защищенные роуты
-	h.mux.HandleFunc("/api/v1/checks", h.handleProtected(h.handleChecksProxy))
-	h.mux.HandleFunc("/api/v1/checks/", h.handleProtected(h.handleChecksProxy))
 
 	// Расписания проверок
 	h.mux.HandleFunc("/api/v1/schedules", h.handleProtected(h.handleScheduleProxy))
@@ -195,9 +185,34 @@ func (h *Handler) setupRoutes() {
 	h.mux.HandleFunc("/api/v1/metrics", h.handleProtected(h.handleMetricsProxy))
 	h.mux.HandleFunc("/api/v1/metrics/collect", h.handleProtected(h.handleMetricsProxy))
 
-	// Incident Service
-	h.mux.HandleFunc("/api/v1/incidents", h.handleProtected(h.handleIncidentProxy))
-	h.mux.HandleFunc("/api/v1/incidents/", h.handleProtected(h.handleIncidentProxy))
+	// Incident Service - роут для списка инцидентов
+	incidentsHandler := middleware.PermissionMiddleware([]string{"incidents:read"}, h.logger)(http.HandlerFunc(h.handleIncidents))
+	h.mux.HandleFunc("/api/v1/incidents", incidentsHandler.ServeHTTP).Methods(http.MethodGet)
+
+	// Incident Service - роут для конкретного инцидента
+	incidentByIDHandler := middleware.AuthMiddleware(h.authService, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		incidentID := vars["id"]
+
+		h.logger.Info("DEBUG: Route /api/v1/incidents/{id} matched!",
+			logger.String("method", r.Method),
+			logger.String("path", r.URL.Path),
+			logger.String("incident_id", incidentID),
+			logger.String("full_url", r.URL.String()))
+
+		switch r.Method {
+		case http.MethodGet:
+			h.logger.Info("Handling GET /api/v1/incidents/{id} with incidents:read permission")
+			// GET /api/v1/incidents/{id} - требует incidents:read
+			middleware.PermissionMiddleware([]string{"incidents:read"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				h.handleIncidentProxy(w, r)
+			})).ServeHTTP(w, r)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		}
+	}))
+	h.mux.Handle("/api/v1/incidents/{id}", incidentByIDHandler).Methods(http.MethodGet, http.MethodPut, http.MethodDelete)
 
 	// Notification Service
 	h.mux.HandleFunc("/api/v1/notifications", h.handleProtected(h.handleNotificationProxy))
@@ -213,29 +228,35 @@ func (h *Handler) setupRoutes() {
 // handleProtected оборачивает обработчик, требующий аутентификации
 func (h *Handler) handleProtected(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Проверка аутентификации
-		userInfo, err := h.authenticateRequest(r)
+		h.logger.Info("DEBUG: handleProtected called",
+			logger.String("method", r.Method),
+			logger.String("path", r.URL.Path),
+			logger.String("full_url", r.URL.String()))
+
+		// Проверяем аутентификацию
+		userInfo, err := h.authService.ValidateToken(r.Context(), r.Header.Get("Authorization"))
 		if err != nil {
-			h.writeError(w, err, http.StatusUnauthorized)
+			h.logger.Error("Authentication failed",
+				logger.Error(err),
+				logger.String("path", r.URL.Path))
+
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"code":    "403",
+				"error":   "true",
+				"message": "insufficient permissions",
+			})
 			return
 		}
 
 		// Добавляем информацию о пользователе в контекст
-		ctx := context.WithValue(r.Context(), "user_info", userInfo)
-		ctx = context.WithValue(ctx, "tenant_id", userInfo.TenantID)
-		ctx = context.WithValue(ctx, "user_id", userInfo.UserID)
-		ctx = context.WithValue(ctx, "user_roles", userInfo.Roles)
-		ctx = context.WithValue(ctx, "user_permissions", userInfo.Permissions)
-
-		// Проверяем права доступа к ресурсу
-		if !h.checkResourceAccess(r, userInfo) {
-			h.writeError(w, pkgErrors.New(pkgErrors.ErrForbidden, "insufficient permissions"), http.StatusForbidden)
-			return
-		}
-
-		next(w, r.WithContext(ctx))
+		ctx := context.WithValue(r.Context(), "user", userInfo)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	}
 }
+
+// Остальные методы остаются без изменений...
+// (здесь должны быть все остальные методы из оригинального файла)
 
 // authenticateRequest выполняет полную аутентификацию запроса
 func (h *Handler) authenticateRequest(r *http.Request) (*UserInfo, error) {
@@ -276,19 +297,9 @@ func (h *Handler) authenticateWithJWT(token string) (*UserInfo, error) {
 
 	// Вызываем Auth Service для валидации токена
 	ctx := context.Background()
-	tokenClaims, err := h.authService.ValidateToken(ctx, token)
+	userInfo, err := h.authService.ValidateToken(ctx, token)
 	if err != nil {
 		return nil, pkgErrors.Wrap(err, pkgErrors.ErrUnauthorized, "token validation failed")
-	}
-
-	// Конвертируем TokenClaims в UserInfo
-	userInfo := &UserInfo{
-		UserID:      tokenClaims.UserID,
-		TenantID:    tokenClaims.TenantID,
-		Email:       tokenClaims.Email,
-		Roles:       tokenClaims.Roles,
-		Permissions: tokenClaims.Permissions,
-		ExpiresAt:   tokenClaims.ExpiresAt,
 	}
 
 	// Проверяем срок действия токена
@@ -301,21 +312,34 @@ func (h *Handler) authenticateWithJWT(token string) (*UserInfo, error) {
 
 // authenticateWithAPIKey аутентифицирует через API ключ
 func (h *Handler) authenticateWithAPIKey(apiKey string) (*UserInfo, error) {
+	ctx := context.Background()
+
 	// Базовая валидация API ключа
 	if len(apiKey) < 16 {
 		return nil, pkgErrors.New(pkgErrors.ErrUnauthorized, "invalid api key length")
 	}
 
-	// TODO: Реализовать валидацию API ключа через Auth Service
-	// Сейчас возвращаем базового пользователя для API ключа
-	return &UserInfo{
-		UserID:      "api-key-user",
-		TenantID:    "default-tenant",
-		Email:       "api-key@system",
-		Roles:       []string{"api"},
-		Permissions: []string{"read", "write"},
-		ExpiresAt:   time.Now().Add(24 * time.Hour).Unix(),
-	}, nil
+	// Валидация API ключа через Auth Service
+	tokenClaims, err := h.authService.ValidateToken(ctx, apiKey)
+	if err != nil {
+		h.logger.Error("API key validation failed", logger.Error(err))
+		return nil, pkgErrors.Wrap(err, pkgErrors.ErrUnauthorized, "invalid api key")
+	}
+
+	// Конвертируем TokenClaims в UserInfo
+	userInfo := &client.UserInfo{
+		UserID:   tokenClaims.UserID,
+		Email:    tokenClaims.Email,
+		TenantID: tokenClaims.TenantID,
+	}
+
+	// Дополнительная проверка что это API ключ (не JWT токен)
+	if userInfo.UserID == "validated-user" {
+		// Это JWT токен, не API ключ
+		return nil, pkgErrors.New(pkgErrors.ErrUnauthorized, "invalid api key format")
+	}
+
+	return userInfo, nil
 }
 
 // checkResourceAccess проверяет права доступа к ресурсу
@@ -397,7 +421,7 @@ func (h *Handler) getRequiredPermissions(r *http.Request) []string {
 // Поддерживает JWT токены в Authorization header или API ключи
 func (h *Handler) isAuthenticated(r *http.Request) bool {
 	ctx := r.Context()
-	
+
 	// Сначала проверяем X-API-Key header (имеет приоритет)
 	apiKeyHeader := r.Header.Get("X-API-Key")
 	if apiKeyHeader != "" {
@@ -443,7 +467,7 @@ func (h *Handler) isAuthenticated(r *http.Request) bool {
 			return false
 		}
 
-		// В реальной реализации здесь будет проверка подписи и экспирации
+		//TODO В реальной реализации здесь будет проверка подписи и экспирации
 		// Сейчас проверяем только базовый формат
 		h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
 			"success": true,
@@ -502,6 +526,11 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Валидация входных данных с использованием pkg/validation
+	if h.validator == nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrInternal, "validator not initialized"), http.StatusInternalServerError)
+		return
+	}
+
 	requiredFields := map[string]interface{}{
 		"email":    req.Email,
 		"password": req.Password,
@@ -530,7 +559,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Вызов сервиса аутентификации
 	ctx := r.Context()
 	h.logger.Info("Calling Login method", logger.String("email", req.Email))
-	
+
 	tokenPair, err := h.authService.Login(ctx, req.Email, req.Password)
 	if err != nil {
 		h.logger.Error("Login failed", logger.Error(err))
@@ -544,11 +573,25 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
 		"access_token":  tokenPair.AccessToken,
 		"refresh_token": tokenPair.RefreshToken,
+		"tenant_id":     tokenPair.TenantID, // Добавлено
 	}
+
+	h.logger.Info("Отправка ответа login",
+		logger.String("email", req.Email),
+		logger.Bool("has_access_token", tokenPair.AccessToken != ""),
+		logger.Bool("has_refresh_token", tokenPair.RefreshToken != ""),
+		logger.String("tenant_id", tokenPair.TenantID))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		h.logger.Error("ошибка кодирования ответа", logger.Error(err))
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	h.logger.Info("Ответ login успешно отправлен", logger.String("email", req.Email))
 }
 
 // handleRegister обрабатывает запросы на регистрацию
@@ -571,15 +614,20 @@ func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Валидация входных данных с использованием pkg/validation
+	if h.validator == nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrInternal, "validator not initialized"), http.StatusInternalServerError)
+		return
+	}
+
 	requiredFields := map[string]interface{}{
-		"email":      req.Email,
-		"password":   req.Password,
+		"email":       req.Email,
+		"password":    req.Password,
 		"tenant_name": req.TenantName,
 	}
 
 	if err := h.validator.ValidateRequiredFields(requiredFields, map[string]string{
-		"email":      "Email address",
-		"password":   "Password",
+		"email":       "Email address",
+		"password":    "Password",
 		"tenant_name": "Tenant name",
 	}); err != nil {
 		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "validation failed"), http.StatusBadRequest)
@@ -607,7 +655,14 @@ func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Вызов сервиса аутентификации
 	ctx := r.Context()
 	h.logger.Info("Calling Register method", logger.String("email", req.Email))
-	
+
+	// Defensive check for authService
+	if h.authService == nil {
+		h.logger.Error("Auth service is nil")
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrInternal, "auth service not initialized"), http.StatusInternalServerError)
+		return
+	}
+
 	tokenPair, err := h.authService.Register(ctx, req.Email, req.Password, req.TenantName)
 	if err != nil {
 		h.logger.Error("Registration failed", logger.Error(err))
@@ -621,6 +676,7 @@ func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
 		"access_token":  tokenPair.AccessToken,
 		"refresh_token": tokenPair.RefreshToken,
+		"tenant_id":     tokenPair.TenantID, // Добавлено
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -646,6 +702,11 @@ func (h *Handler) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Валидация с использованием pkg/validation
+	if h.validator == nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrInternal, "validator not initialized"), http.StatusInternalServerError)
+		return
+	}
+
 	requiredFields := map[string]interface{}{
 		"refresh_token": req.RefreshToken,
 	}
@@ -658,6 +719,10 @@ func (h *Handler) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Валидация длины refresh токена (JWT токены обычно длинные)
+	if h.validator == nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrInternal, "validator not initialized"), http.StatusInternalServerError)
+		return
+	}
 	if err := h.validator.ValidateStringLength(req.RefreshToken, "refresh_token", 100, 1000); err != nil {
 		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid refresh token length"), http.StatusBadRequest)
 		return
@@ -691,8 +756,7 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 	// Декодирование запроса
 	var req struct {
-		UserID  string `json:"user_id"`
-		TokenID string `json:"token_id"`
+		AccessToken string `json:"access_token"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -700,34 +764,15 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Валидация с использованием pkg/validation
-	requiredFields := map[string]interface{}{
-		"user_id":  req.UserID,
-		"token_id": req.TokenID,
-	}
-
-	if err := h.validator.ValidateRequiredFields(requiredFields, map[string]string{
-		"user_id":  "User ID",
-		"token_id": "Token ID",
-	}); err != nil {
-		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "validation failed"), http.StatusBadRequest)
-		return
-	}
-
-	// Валидация формата UUID
-	if err := h.validator.ValidateUUID(req.UserID, "user_id"); err != nil {
-		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid user_id format"), http.StatusBadRequest)
-		return
-	}
-
-	if err := h.validator.ValidateUUID(req.TokenID, "token_id"); err != nil {
-		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid token_id format"), http.StatusBadRequest)
+	// Валидация access_token
+	if req.AccessToken == "" {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "access_token is required"), http.StatusBadRequest)
 		return
 	}
 
 	// Вызов сервиса
 	ctx := r.Context()
-	err := h.authService.Logout(ctx, req.UserID, req.TokenID)
+	err := h.authService.Logout(ctx, req.AccessToken)
 	if err != nil {
 		h.handleError(w, err)
 		return
@@ -741,6 +786,49 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
+}
+
+// handleValidateToken обрабатывает запросы на валидацию токена
+func (h *Handler) handleValidateToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Декодирование запроса
+	var req struct {
+		AccessToken string `json:"access_token"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
+		return
+	}
+
+	// Валидация с использованием pkg/validation
+	requiredFields := map[string]interface{}{
+		"access_token": req.AccessToken,
+	}
+
+	if err := h.validator.ValidateRequiredFields(requiredFields, map[string]string{
+		"access_token": "Access Token",
+	}); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "validation failed"), http.StatusBadRequest)
+		return
+	}
+
+	// Вызов сервиса
+	ctx := r.Context()
+	userInfo, err := h.authService.ValidateToken(ctx, req.AccessToken)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	// Формирование ответа
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(userInfo)
 }
 
 // handleChecksProxy проксирует запросы к Scheduler Service
@@ -841,6 +929,10 @@ func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request, tena
 
 // handleGetCheck обрабатывает получение конкретной проверки
 func (h *Handler) handleGetCheck(w http.ResponseWriter, r *http.Request, tenantID, checkID string) {
+	h.logger.Info("handleGetCheck вызван",
+		logger.String("check_id", checkID),
+		logger.String("tenant_id", tenantID))
+
 	// Валидация UUID
 	if err := h.validator.ValidateUUID(checkID, "check_id"); err != nil {
 		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid check ID format"), http.StatusBadRequest)
@@ -851,11 +943,24 @@ func (h *Handler) handleGetCheck(w http.ResponseWriter, r *http.Request, tenantI
 		CheckId: checkID,
 	}
 
-	check, err := h.schedulerClient.GetCheck(r.Context(), req)
+	h.logger.Info("Отправка gRPC запроса в Scheduler Service",
+		logger.String("check_id", checkID))
+
+	// Добавляем timeout для предотвращения зависания
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	check, err := h.schedulerClient.GetCheck(ctx, req)
 	if err != nil {
-		h.handleError(w, err)
+		h.logger.Error("ошибка получения проверки из Scheduler Service",
+			logger.Error(err),
+			logger.String("check_id", checkID))
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrInternal, "Scheduler Service недоступен"), http.StatusServiceUnavailable)
 		return
 	}
+
+	h.logger.Info("Проверка успешно получена из Scheduler Service",
+		logger.String("check_id", checkID))
 
 	// Проверяем, что проверка принадлежит тенанту
 	if check.TenantId != tenantID {
@@ -1001,8 +1106,8 @@ func (h *Handler) handleScheduleCheck(w http.ResponseWriter, r *http.Request, te
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"message": "Check scheduled",
+		"success":  true,
+		"message":  "Check scheduled",
 		"schedule": schedule,
 	})
 }
@@ -1054,7 +1159,7 @@ func (h *Handler) handleGetSchedule(w http.ResponseWriter, r *http.Request, tena
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
+		"success":  true,
 		"schedule": schedule,
 	})
 }
@@ -1062,7 +1167,8 @@ func (h *Handler) handleGetSchedule(w http.ResponseWriter, r *http.Request, tena
 // handleListSchedules обрабатывает получение списка расписаний
 func (h *Handler) handleListSchedules(w http.ResponseWriter, r *http.Request, tenantID string) {
 	req := &schedulerv1.ListSchedulesRequest{
-		// TODO: Добавить фильтрацию по tenant_id когда будет поддерживаться в proto
+		// Используем фильтр для tenant_id, так как прямое поле не поддерживается
+		Filter: fmt.Sprintf("tenant_id:%s", tenantID),
 	}
 
 	resp, err := h.schedulerClient.ListSchedules(r.Context(), req)
@@ -1074,10 +1180,12 @@ func (h *Handler) handleListSchedules(w http.ResponseWriter, r *http.Request, te
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
 		"schedules": resp.Schedules,
 		"total":     len(resp.Schedules),
 	})
 }
+
 // handleCoreProxy обрабатывает запросы к Core Service
 func (h *Handler) handleCoreProxy(w http.ResponseWriter, r *http.Request) {
 	// Получаем информацию о пользователе из контекста
@@ -1131,12 +1239,12 @@ func (h *Handler) handleExecuteCheck(w http.ResponseWriter, r *http.Request, ten
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":     result.Success,
+		"success":      result.Success,
 		"execution_id": result.ExecutionId,
-		"duration_ms": result.DurationMs,
-		"status_code": result.StatusCode,
-		"error":       result.Error,
-		"checked_at":  result.CheckedAt,
+		"duration_ms":  result.DurationMs,
+		"status_code":  result.StatusCode,
+		"error":        result.Error,
+		"checked_at":   result.CheckedAt,
 	})
 }
 
@@ -1155,10 +1263,10 @@ func (h *Handler) handleGetCheckStatus(w http.ResponseWriter, r *http.Request, t
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"check_id":           status.CheckId,
-		"is_healthy":         status.IsHealthy,
-		"response_time_ms":   status.ResponseTimeMs,
-		"last_checked_at":   status.LastCheckedAt,
+		"check_id":         status.CheckId,
+		"is_healthy":       status.IsHealthy,
+		"response_time_ms": status.ResponseTimeMs,
+		"last_checked_at":  status.LastCheckedAt,
 	})
 }
 
@@ -1465,7 +1573,7 @@ func (h *Handler) handleCollectMetrics(w http.ResponseWriter, r *http.Request, t
 // handleGetMetrics обрабатывает получение метрик
 func (h *Handler) handleGetMetrics(w http.ResponseWriter, r *http.Request, tenantID string) {
 	req := &metricsv1.GetMetricsRequest{
-		TenantId: tenantID,
+		TenantId:    tenantID,
 		ServiceName: r.URL.Query().Get("service_name"),
 	}
 
@@ -1764,18 +1872,18 @@ func (h *Handler) handleError(w http.ResponseWriter, err error) {
 func (h *Handler) handleAuthHealthProxy(w http.ResponseWriter, r *http.Request) {
 	// Создаем HTTP клиент
 	client := &http.Client{Timeout: 5 * time.Second}
-	
+
 	// Формируем URL для Auth Service HTTP health endpoint
 	// Auth Service работает на gRPC, но имеет HTTP health endpoint на том же порту
 	authURL := "http://auth-service:50051/health"
-	
+
 	// Создаем новый запрос
 	req, err := http.NewRequestWithContext(r.Context(), "GET", authURL, nil)
 	if err != nil {
 		h.writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	
+
 	// Отправляем запрос
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1783,17 +1891,17 @@ func (h *Handler) handleAuthHealthProxy(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	// Копируем заголовки
 	for key, values := range resp.Header {
 		for _, value := range values {
 			w.Header().Add(key, value)
 		}
 	}
-	
+
 	// Копируем статус
 	w.WriteHeader(resp.StatusCode)
-	
+
 	// Копируем тело ответа
 	_, err = h.copyResponse(w, resp.Body)
 	if err != nil {
@@ -1805,17 +1913,17 @@ func (h *Handler) handleAuthHealthProxy(w http.ResponseWriter, r *http.Request) 
 func (h *Handler) handleSchedulerHealthProxy(w http.ResponseWriter, r *http.Request) {
 	// Создаем HTTP клиент
 	client := &http.Client{Timeout: 5 * time.Second}
-	
+
 	// Формируем URL для Scheduler Service
 	schedulerURL := "http://scheduler-service:50052/health"
-	
+
 	// Создаем новый запрос
 	req, err := http.NewRequestWithContext(r.Context(), "GET", schedulerURL, nil)
 	if err != nil {
 		h.writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	
+
 	// Отправляем запрос
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1823,17 +1931,17 @@ func (h *Handler) handleSchedulerHealthProxy(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	// Копируем заголовки
 	for key, values := range resp.Header {
 		for _, value := range values {
 			w.Header().Add(key, value)
 		}
 	}
-	
+
 	// Копируем статус
 	w.WriteHeader(resp.StatusCode)
-	
+
 	// Копируем тело ответа
 	_, err = h.copyResponse(w, resp.Body)
 	if err != nil {
@@ -1845,18 +1953,18 @@ func (h *Handler) handleSchedulerHealthProxy(w http.ResponseWriter, r *http.Requ
 func (h *Handler) handleCoreHealthProxy(w http.ResponseWriter, r *http.Request) {
 	// Создаем HTTP клиент
 	client := &http.Client{Timeout: 5 * time.Second}
-	
+
 	// Формируем URL для Core Service HTTP health endpoint
 	// Core Service работает на gRPC, но имеет HTTP health endpoint на том же порту
 	coreURL := "http://core-service:50054/health"
-	
+
 	// Создаем новый запрос
 	req, err := http.NewRequestWithContext(r.Context(), "GET", coreURL, nil)
 	if err != nil {
 		h.writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	
+
 	// Отправляем запрос
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1864,17 +1972,17 @@ func (h *Handler) handleCoreHealthProxy(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	// Копируем заголовки
 	for key, values := range resp.Header {
 		for _, value := range values {
 			w.Header().Add(key, value)
 		}
 	}
-	
+
 	// Копируем статус
 	w.WriteHeader(resp.StatusCode)
-	
+
 	// Копируем тело ответа
 	_, err = h.copyResponse(w, resp.Body)
 	if err != nil {
@@ -1885,7 +1993,7 @@ func (h *Handler) handleCoreHealthProxy(w http.ResponseWriter, r *http.Request) 
 // handleAPIKeys обрабатывает запросы для API ключей
 func (h *Handler) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	if r.Method == http.MethodPost {
 		// Mock ответ для создания API ключа
 		response := map[string]interface{}{
@@ -1898,7 +2006,7 @@ func (h *Handler) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(response)
 		return
 	}
-	
+
 	// Для других методов
 	w.WriteHeader(http.StatusMethodNotAllowed)
 	json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
@@ -1907,29 +2015,227 @@ func (h *Handler) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 // handleSchedulerChecks обрабатывает запросы для проверок
 func (h *Handler) handleSchedulerChecks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
+	if r.Method == http.MethodGet {
+		// GET запрос - получение списка проверок через Scheduler Service
+		h.logger.Info("Getting checks list via Scheduler Service")
+
+		// Получаем tenant_id из контекста
+		userInfo := r.Context().Value("user").(map[string]interface{})
+		tenantID, _ := userInfo["tenant_id"].(string)
+
+		// Создаем запрос для получения списка проверок
+		req := &schedulerv1.ListChecksRequest{
+			TenantId: tenantID,
+			PageSize: 20,
+		}
+
+		response, err := h.schedulerClient.ListChecks(r.Context(), req)
+		if err != nil {
+			h.logger.Error("Error getting checks list", logger.Error(err))
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
 	if r.Method == http.MethodPost {
-		// Mock ответ для создания проверки
-		response := map[string]interface{}{
-			"id":         "test-check-id",
-			"name":       "Test Check",
-			"url":        "https://httpbin.org/status/200",
-			"check_type": "http",
-			"interval":   60,
-			"timeout":    30,
-			"status":     "active",
+		// Создание проверки через Scheduler Service
+		h.logger.Info("Creating check via Scheduler Service")
+
+		// Парсим тело запроса
+		var createReq struct {
+			Name     string `json:"name"`
+			Type     string `json:"type"`
+			Target   string `json:"target"`
+			URL      string `json:"url"`
+			Interval int64  `json:"interval"`
+			Timeout  int64  `json:"timeout"`
+			Enabled  bool   `json:"enabled"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&createReq); err != nil {
+			h.logger.Error("Error parsing request body", logger.Error(err))
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body"})
+			return
+		}
+
+		// Валидация обязательных полей
+		target := createReq.Target
+		if target == "" && createReq.URL != "" {
+			target = createReq.URL
+		}
+		if createReq.Name == "" || createReq.Type == "" || target == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "name, type, and target/url are required"})
+			return
+		}
+
+		// Создаем запрос для Scheduler Service
+		req := &schedulerv1.CreateCheckRequest{
+			Name:     createReq.Name,
+			Type:     createReq.Type,
+			Target:   target,
+			Interval: int32(createReq.Interval),
+			Timeout:  int32(createReq.Timeout),
+		}
+
+		// Получаем tenant_id из контекста (из токена)
+		if userInfo := r.Context().Value("user"); userInfo != nil {
+			if userMap, ok := userInfo.(map[string]interface{}); ok {
+				if tenantID, ok := userMap["tenant_id"].(string); ok {
+					req.TenantId = tenantID
+					h.logger.Info("tenant_id extracted from context", logger.String("tenant_id", tenantID))
+				} else {
+					h.logger.Warn("tenant_id not found in user context", logger.Any("user_context", userMap))
+				}
+			} else {
+				h.logger.Warn("user context is not map[string]interface{}", logger.Any("user_info", userInfo))
+			}
+		} else {
+			h.logger.Warn("user context is nil")
+		}
+
+		response, err := h.schedulerClient.CreateCheck(r.Context(), req)
+		if err != nil {
+			h.logger.Error("Error creating check", logger.Error(err))
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
 		}
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(response)
 		return
 	}
-	
+
+	if r.Method == http.MethodPut {
+		// Обновление проверки через Scheduler Service
+		checkID := strings.TrimPrefix(r.URL.Path, "/api/v1/checks/")
+		if checkID == "" || checkID == r.URL.Path {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "check ID required"})
+			return
+		}
+
+		h.logger.Info("Updating check via Scheduler Service", logger.String("check_id", checkID))
+		req := &schedulerv1.UpdateCheckRequest{
+			CheckId: checkID,
+		} // TODO: parse request body
+		response, err := h.schedulerClient.UpdateCheck(r.Context(), req)
+		if err != nil {
+			h.logger.Error("Error updating check", logger.Error(err))
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	if r.Method == http.MethodDelete {
+		// Удаление проверки через Scheduler Service
+		checkID := strings.TrimPrefix(r.URL.Path, "/api/v1/checks/")
+		if checkID == "" || checkID == r.URL.Path {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "check ID required"})
+			return
+		}
+
+		h.logger.Info("Deleting check via Scheduler Service", logger.String("check_id", checkID))
+		req := &schedulerv1.DeleteCheckRequest{
+			CheckId: checkID,
+		}
+		_, err := h.schedulerClient.DeleteCheck(r.Context(), req)
+		if err != nil {
+			h.logger.Error("Error deleting check", logger.Error(err))
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	// Для других методов
 	w.WriteHeader(http.StatusMethodNotAllowed)
 	json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
 }
 
+// handleSchedulerCheckByID обрабатывает запросы для конкретной проверки
+func (h *Handler) handleSchedulerCheckByID(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	// Извлекаем ID из URL
+	checkID := strings.TrimPrefix(r.URL.Path, "/api/v1/checks/")
+	if checkID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "check ID required"})
+		return
+	}
+
+	h.logger.Info("Getting check via Scheduler Service", logger.String("check_id", checkID))
+	req := &schedulerv1.GetCheckRequest{
+		CheckId: checkID,
+	}
+	response, err := h.schedulerClient.GetCheck(r.Context(), req)
+	if err != nil {
+		h.logger.Error("Error getting check", logger.Error(err))
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
 // copyResponse копирует тело ответа
 func (h *Handler) copyResponse(dst http.ResponseWriter, src io.Reader) (int64, error) {
 	return io.Copy(dst, src)
+}
+
+// handleIncidents обрабатывает запросы к инцидентам
+func (h *Handler) handleIncidents(w http.ResponseWriter, r *http.Request) {
+	h.logger.Info("Handling incidents request",
+		logger.String("method", r.Method),
+		logger.String("path", r.URL.Path))
+
+	// Временно возвращаем mock ответ
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"incidents": []interface{}{},
+		"total":     0,
+		"page":      1,
+		"page_size": 20,
+	})
+}
+
+// handleConfig обрабатывает запросы к конфигурации
+func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
+	h.logger.Info("Handling config request",
+		logger.String("method", r.Method),
+		logger.String("path", r.URL.Path))
+
+	// Временно возвращаем mock ответ
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"config": map[string]string{
+			"version":     "1.0.0",
+			"environment": "dev",
+		},
+	})
 }

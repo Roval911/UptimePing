@@ -51,6 +51,7 @@ message TokenPair {
   string access_token = 1;
   string refresh_token = 2;
   int64 expires_in = 3;
+  string tenant_id = 4; // Добавлено
 }
 
 // ValidateTokenRequest содержит JWT токен для валидации
@@ -64,6 +65,10 @@ message ValidateTokenResponse {
   string email = 2;
   string tenant_id = 3;
   bool is_valid = 4;
+  repeated string roles = 5;
+  repeated string permissions = 6;
+  int64 expires_at = 7;
+  bool is_admin = 8;
 }
 
 // RefreshTokenRequest содержит refresh токен

@@ -19,3 +19,25 @@ logger:
   format: "json"
 
 environment: "dev"
+
+# CLI Configuration
+api:
+  base_url: "http://localhost:8080"
+  timeout: 30
+
+grpc:
+  scheduler_address: "scheduler-service:50052"
+  core_address: "core-service:50054"
+  auth_address: "auth-service:50051"
+  use_grpc: false
+  timeout: 30
+
+auth:
+  token_expiry: 3600
+  refresh_threshold: 300
+  access_secret: "your-access-secret-key"
+  refresh_secret: "your-refresh-secret-key"
+
+output:
+  format: "table"
+  colors: true

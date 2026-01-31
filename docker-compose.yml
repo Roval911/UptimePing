@@ -145,7 +145,7 @@ services:
       - LOG_LEVEL=info
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8080
-      - AUTH_SERVICE_ADDR=auth-service:50051
+      - AUTH_SERVICE_ADDR=http://auth-service:51051
       - SCHEDULER_SERVICE_ADDR=scheduler-service:50052
       - FORGE_SERVICE_ADDR=forge-service:50053
       - CORE_SERVICE_ADDR=core-service:50054
@@ -179,6 +179,7 @@ services:
     container_name: uptimeping-auth-service
     ports:
       - "50051:50051"
+      - "51051:51051"
     environment:
       - ENVIRONMENT=dev
       - LOG_LEVEL=info
@@ -430,7 +431,8 @@ services:
     environment:
       - ENVIRONMENT=dev
       - LOG_LEVEL=info
-      - AUTH_SERVICE_ADDR=auth-service:50051
+      - API_GATEWAY_ADDR=http://api-gateway:8080
+      - AUTH_SERVICE_ADDR=http://auth-service:51051
       - SCHEDULER_SERVICE_ADDR=scheduler-service:50052
       - CORE_SERVICE_ADDR=core-service:50054
       - METRICS_SERVICE_ADDR=metrics-service:50055
@@ -449,7 +451,7 @@ services:
       - forge-service
     profiles:
       - cli
-    restart: unless-stopped
+    restart: "no"
 
 volumes:
   postgres_data:

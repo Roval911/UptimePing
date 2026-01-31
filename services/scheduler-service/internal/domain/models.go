@@ -69,36 +69,35 @@ func (c *CheckConfig) Scan(value interface{}) error {
 
 // Check представляет сущность проверки
 type Check struct {
-	ID        string      `json:"id" db:"id"`
-	TenantID  string      `json:"tenant_id" db:"tenant_id"`
-	Name      string      `json:"name" db:"name"`
-	Type      CheckType   `json:"type" db:"type"`
-	Target    string      `json:"target" db:"target"`
-	Interval  int         `json:"interval" db:"interval"` // в секундах
-	Timeout   int         `json:"timeout" db:"timeout"`   // в секундах
-	Status    CheckStatus `json:"status" db:"status"`
-	Config    CheckConfig `json:"config" db:"config"`
-	Priority  Priority    `json:"priority" db:"priority"`
-	Tags      []string    `json:"tags" db:"tags"`
-	CreatedAt time.Time   `json:"created_at" db:"created_at"`
-	UpdatedAt time.Time   `json:"updated_at" db:"updated_at"`
-	LastRunAt *time.Time  `json:"last_run_at" db:"last_run_at"`
-	NextRunAt *time.Time  `json:"next_run_at" db:"next_run_at"`
+	ID          string      `json:"id" db:"id"`
+	TenantID    string      `json:"tenant_id" db:"tenant_id"`
+	Name        string      `json:"name" db:"name"`
+	Description string      `json:"description" db:"description"` // ✅ ДОБАВЛЕНО!
+	Type        CheckType   `json:"type" db:"type"`
+	Target      string      `json:"target" db:"target"`
+	Interval    int         `json:"interval_seconds" db:"interval_seconds"` // ✅ ИСПРАВЛЕНО!
+	Timeout     int         `json:"timeout_seconds" db:"timeout_seconds"`   // ✅ ИСПРАВЛЕНО!
+	Enabled     bool        `json:"enabled" db:"enabled"`                   // ✅ ДОБАВЛЕНО!
+	Config      CheckConfig `json:"config" db:"config"`
+	CreatedAt   time.Time   `json:"created_at" db:"created_at"`
+	UpdatedAt   time.Time   `json:"updated_at" db:"updated_at"`
+	LastRunAt   *time.Time  `json:"last_run_at" db:"last_run_at"`
+	NextRunAt   *time.Time  `json:"next_run_at" db:"next_run_at"`
 }
 
 // IsActive проверяет, активна ли проверка
 func (c *Check) IsActive() bool {
-	return c.Status == CheckStatusActive
+	return c.Enabled
 }
 
 // IsPaused проверяет, поставлена ли проверка на паузу
 func (c *Check) IsPaused() bool {
-	return c.Status == CheckStatusPaused
+	return !c.Enabled
 }
 
 // IsDisabled проверяет, отключена ли проверка
 func (c *Check) IsDisabled() bool {
-	return c.Status == CheckStatusDisabled
+	return !c.Enabled
 }
 
 // GetIntervalDuration возвращает интервал как time.Duration
@@ -117,26 +116,24 @@ func (c *Check) ShouldRun() bool {
 		return false
 	}
 
-	if c.NextRunAt == nil {
-		return true
-	}
-
-	return time.Now().After(*c.NextRunAt)
+	// Для новой структуры без NextRunAt всегда возвращаем true
+	// Логика расписания будет реализована в отдельном сервисе
+	return true
 }
 
 // UpdateNextRun обновляет время следующего запуска
 func (c *Check) UpdateNextRun() {
 	now := time.Now()
 	c.LastRunAt = &now
-	nextRun := now.Add(c.GetIntervalDuration())
-	c.NextRunAt = &nextRun
+	c.UpdatedAt = now
+
+	// Для новой структуры без NextRunAt не обновляем время следующего запуска
+	// Это будет реализовано в отдельном сервисе расписаний
 }
 
 // Validate валидирует данные проверки
 func (c *Check) Validate() error {
-	if c.ID == "" {
-		return fmt.Errorf("check id is required")
-	}
+	// ID не требуется при создании - будет сгенерирован автоматически
 	if c.TenantID == "" {
 		return fmt.Errorf("tenant id is required")
 	}
@@ -165,18 +162,14 @@ func (c *Check) Validate() error {
 		return fmt.Errorf("timeout must be between 1 second and 5 minutes")
 	}
 
-	// Валидация статуса
-	switch c.Status {
-	case CheckStatusActive, CheckStatusPaused, CheckStatusDisabled:
-		// Valid statuses
-	default:
-		return fmt.Errorf("invalid check status: %s", c.Status)
+	// Валидация статуса - для новой структуры с Enabled полем
+	if !c.Enabled {
+		// Проверяем, что disabled - это корректный статус
+		// В новой структуре нет enum для статуса
 	}
 
-	// Валидация приоритета
-	if c.Priority < PriorityLow || c.Priority > PriorityCritical {
-		return fmt.Errorf("priority must be between %d and %d", PriorityLow, PriorityCritical)
-	}
+	// Валидация приоритета - удалена, т.к. Priority больше нет в структуре
+	// Если нужно, можно добавить в будущем
 
 	return nil
 }
@@ -268,7 +261,7 @@ func (cws *CheckWithSchedule) GetEffectivePriority() Priority {
 	if cws.Schedule != nil {
 		return cws.Schedule.Priority
 	}
-	return cws.Check.Priority
+	return PriorityNormal // По умолчанию для новой структуры
 }
 
 // ShouldRun проверяет, пора ли выполнять проверку

@@ -28,5 +28,5 @@ type SchedulerRepository interface {
 	Count(ctx context.Context, filter string) (int, error)
 
 	// Health check метод
-	Ping(ctx context.Context) (interface{}, error)
+	Ping(ctx context.Context) error
 }

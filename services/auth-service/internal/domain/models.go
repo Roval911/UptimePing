@@ -12,6 +12,8 @@ type User struct {
 	Email        string    `json:"email"`
 	PasswordHash string    `json:"password_hash"`
 	TenantID     string    `json:"tenant_id"`
+	FirstName    string    `json:"first_name"`
+	LastName     string    `json:"last_name"`
 	IsActive     bool      `json:"is_active"`
 	IsAdmin      bool      `json:"is_admin"`
 	CreatedAt    time.Time `json:"created_at"`

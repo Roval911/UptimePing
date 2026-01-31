@@ -8,10 +8,10 @@ use (
 	./services/api-gateway
 	./services/auth-service
 	./services/cli-service
+	./services/core-service
 	./services/forge-service
 	./services/incident-manager
 	./services/metrics-service
 	./services/notification-service
 	./services/scheduler-service
-	./services/core-service
 )

@@ -4,23 +4,24 @@ import (
 	"context"
 	"time"
 
-	"UptimePingPlatform/pkg/metrics"
 	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/pkg/metrics"
 )
 
 // CLIMetrics содержит метрики для CLI операций
 type CLIMetrics struct {
-	metrics.Metrics
+	// metrics.Metrics // CLI не использует метрики
 	logger logger.Logger
 }
 
 // NewCLIMetrics создает новые метрики для CLI
 func NewCLIMetrics(logger logger.Logger) *CLIMetrics {
-	m := metrics.NewMetrics("cli-service")
-	
+	// CLI не использует метрики для предотвращения зависаний на macOS
+	// m := metrics.NewMetrics("cli-service")
+
 	return &CLIMetrics{
-		Metrics: *m,
-		logger:  logger,
+		// Metrics: *m,
+		logger: logger,
 	}
 }
 
@@ -277,14 +278,15 @@ func (c *CLIMetrics) NewOperationTimer(ctx context.Context) *OperationTimer {
 // Finish завершает операцию и регистрирует метрики
 func (t *OperationTimer) Finish(component, operation string, success bool) {
 	duration := time.Since(t.start)
-	
+
+	// CLI не использует метрики
 	if success {
-		t.metrics.RecordCounter(t.ctx, component, operation, "success")
+		// t.metrics.RecordCounter(t.ctx, component, operation, "success")
 	} else {
-		t.metrics.RecordCounter(t.ctx, component, operation, "error")
+		// t.metrics.RecordCounter(t.ctx, component, operation, "error")
 	}
-	
-	t.metrics.RecordLatency(t.ctx, component, operation, duration)
+
+	// t.metrics.RecordLatency(t.ctx, component, operation, duration)
 }
 
 // CommandTimer таймер для команд CLI
@@ -302,8 +304,9 @@ func (c *CLIMetrics) NewCommandTimer(ctx context.Context) *CommandTimer {
 // Finish завершает команду и регистрирует метрики
 func (t *CommandTimer) Finish(command string, success bool) {
 	duration := time.Since(t.start)
-	
-	t.metrics.CommandExecuted(t.ctx, command, success, duration)
+
+	// CLI не использует метрики
+	// t.metrics.CommandExecuted(t.ctx, command, success, duration)
 	t.OperationTimer.Finish("command", command, success)
 }
 
@@ -322,7 +325,8 @@ func (c *CLIMetrics) NewOutputTimer(ctx context.Context) *OutputTimer {
 // Finish завершает генерацию вывода и регистрирует метрики
 func (t *OutputTimer) Finish(format string, recordCount int, success bool) {
 	duration := time.Since(t.start)
-	
-	t.metrics.OutputGenerated(t.ctx, format, recordCount, duration)
+
+	// CLI не использует метрики
+	// t.metrics.OutputGenerated(t.ctx, format, recordCount, duration)
 	t.OperationTimer.Finish("output", format, success)
 }
