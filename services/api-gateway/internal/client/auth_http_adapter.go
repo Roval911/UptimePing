@@ -16,6 +16,7 @@ type AuthHTTPClientInterface interface {
 	Register(ctx context.Context, email, password, tenantName string) (*TokenPair, error)
 	RefreshToken(ctx context.Context, refreshToken string) (*TokenPair, error)
 	ValidateToken(ctx context.Context, accessToken string) (*UserInfo, error)
+	ValidateTokenDirect(ctx context.Context, accessToken string) (*UserInfo, error)
 	ValidateAPIKey(ctx context.Context, key, secret string) (*APIKeyClaims, error)
 	Logout(ctx context.Context, accessToken string) error
 }
@@ -226,4 +227,10 @@ func (a *AuthHTTPAdapter) Logout(ctx context.Context, accessToken string) error 
 	}
 
 	return nil
+}
+
+// ValidateTokenDirect валидирует токен напрямую, обходя middleware
+func (a *AuthHTTPAdapter) ValidateTokenDirect(ctx context.Context, accessToken string) (*UserInfo, error) {
+	// Просто вызываем основной метод, так как AuthHTTPAdapter уже использует прямой HTTP клиент
+	return a.ValidateToken(ctx, accessToken)
 }

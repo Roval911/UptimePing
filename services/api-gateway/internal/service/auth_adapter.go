@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"UptimePingPlatform/services/api-gateway/internal/client"
-	httphandler "UptimePingPlatform/services/api-gateway/internal/handler/http"
 )
 
 // AuthAdapter адаптирует HTTPAuthClient к интерфейсу AuthService
@@ -20,42 +19,18 @@ func NewAuthAdapter(authClient *client.HTTPAuthClient) *AuthAdapter {
 }
 
 // Login выполняет вход пользователя через gRPC клиент
-func (a *AuthAdapter) Login(ctx context.Context, email, password string) (*httphandler.TokenPair, error) {
-	tokenPair, err := a.authClient.Login(ctx, email, password)
-	if err != nil {
-		return nil, err
-	}
-
-	return &httphandler.TokenPair{
-		AccessToken:  tokenPair.AccessToken,
-		RefreshToken: tokenPair.RefreshToken,
-	}, nil
+func (a *AuthAdapter) Login(ctx context.Context, email, password string) (*client.TokenPair, error) {
+	return a.authClient.Login(ctx, email, password)
 }
 
 // Register выполняет регистрацию пользователя через gRPC клиент
-func (a *AuthAdapter) Register(ctx context.Context, email, password, tenantName string) (*httphandler.TokenPair, error) {
-	tokenPair, err := a.authClient.Register(ctx, email, password, tenantName)
-	if err != nil {
-		return nil, err
-	}
-
-	return &httphandler.TokenPair{
-		AccessToken:  tokenPair.AccessToken,
-		RefreshToken: tokenPair.RefreshToken,
-	}, nil
+func (a *AuthAdapter) Register(ctx context.Context, email, password, tenantName string) (*client.TokenPair, error) {
+	return a.authClient.Register(ctx, email, password, tenantName)
 }
 
 // RefreshToken обновляет токен доступа через gRPC клиент
-func (a *AuthAdapter) RefreshToken(ctx context.Context, refreshToken string) (*httphandler.TokenPair, error) {
-	tokenPair, err := a.authClient.RefreshToken(ctx, refreshToken)
-	if err != nil {
-		return nil, err
-	}
-
-	return &httphandler.TokenPair{
-		AccessToken:  tokenPair.AccessToken,
-		RefreshToken: tokenPair.RefreshToken,
-	}, nil
+func (a *AuthAdapter) RefreshToken(ctx context.Context, refreshToken string) (*client.TokenPair, error) {
+	return a.authClient.RefreshToken(ctx, refreshToken)
 }
 
 // Logout выполняет выход пользователя через HTTP клиент
@@ -65,18 +40,6 @@ func (a *AuthAdapter) Logout(ctx context.Context, userID, tokenID string) error 
 }
 
 // ValidateToken валидирует токен через gRPC клиент
-func (a *AuthAdapter) ValidateToken(ctx context.Context, token string) (*httphandler.UserInfo, error) {
-	userInfo, err := a.authClient.ValidateToken(ctx, token)
-	if err != nil {
-		return nil, err
-	}
-
-	return &httphandler.UserInfo{
-		UserID:      userInfo.UserID,
-		TenantID:    userInfo.TenantID,
-		Email:       userInfo.Email,
-		Roles:       userInfo.Roles,
-		Permissions: userInfo.Permissions,
-		ExpiresAt:   userInfo.ExpiresAt,
-	}, nil
+func (a *AuthAdapter) ValidateToken(ctx context.Context, token string) (*client.UserInfo, error) {
+	return a.authClient.ValidateToken(ctx, token)
 }

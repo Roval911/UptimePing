@@ -91,9 +91,10 @@ type IncidentFilters struct {
 // ConvertToProtoIncident конвертирует внутренний Incident в protobuf
 func (i *Incident) ConvertToProtoIncident() *incidentv1.Incident {
 	protoIncident := &incidentv1.Incident{
-		Id:       i.ID,
-		CheckId:  i.CheckID,
-		TenantId: i.TenantID,
+		Id:          i.ID,
+		CheckId:     i.CheckID,
+		Title:       i.Title,
+		Description: i.Description,
 	}
 
 	// Конвертация статуса
@@ -111,11 +112,11 @@ func (i *Incident) ConvertToProtoIncident() *incidentv1.Incident {
 	// Конвертация серьезности
 	switch i.Severity {
 	case IncidentSeverityLow:
-		protoIncident.Severity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_WARNING
+		protoIncident.Severity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_LOW
 	case IncidentSeverityMedium:
-		protoIncident.Severity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_ERROR
+		protoIncident.Severity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_MEDIUM
 	case IncidentSeverityHigh:
-		protoIncident.Severity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_ERROR
+		protoIncident.Severity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_HIGH
 	case IncidentSeverityCritical:
 		protoIncident.Severity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_CRITICAL
 	}

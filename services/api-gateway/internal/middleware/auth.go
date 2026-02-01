@@ -2,40 +2,13 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 
-	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/api-gateway/internal/client"
 )
-
-// isPublicRoute проверяет, является ли маршрут публичным
-func isPublicRoute(path string) bool {
-	publicRoutes := []string{
-		"/api/v1/auth/login",
-		"/api/v1/auth/register",
-		"/api/v1/auth/refresh",
-		"/api/v1/auth/logout",
-		"/api/v1/auth/validate",
-		"/health",
-		"/ready",
-		"/live",
-	}
-
-	for _, route := range publicRoutes {
-		if path == route {
-			return true
-		}
-	}
-
-	// Для роутов с параметрами
-	if strings.HasPrefix(path, "/api/v1/auth/") {
-		return true
-	}
-
-	return false
-}
 
 // AuthMiddleware проверяет аутентификацию запроса
 // Поддерживает два типа аутентификации:
@@ -47,7 +20,8 @@ func AuthMiddleware(authClient client.AuthHTTPClientInterface, log logger.Logger
 			log.Info("DEBUG: AuthMiddleware called",
 				logger.String("method", r.Method),
 				logger.String("path", r.URL.Path),
-				logger.String("auth_header", r.Header.Get("Authorization")))
+				logger.String("auth_header", r.Header.Get("Authorization")),
+				logger.String("request_id", fmt.Sprintf("%p", r))) // Уникальный ID запроса
 
 			// Пропускаем публичные роуты
 			if isPublicRoute(r.URL.Path) {
@@ -104,6 +78,7 @@ func AuthMiddleware(authClient client.AuthHTTPClientInterface, log logger.Logger
 			// Продолжение выполнения
 			log.Debug("Authentication successful, proceeding to next handler")
 			next.ServeHTTP(w, r)
+			log.Debug("Next handler completed")
 		})
 	}
 }
@@ -120,12 +95,6 @@ func isAPIKey(authHeader string) bool {
 
 // handleBearerAuth обрабатывает аутентификацию через Bearer токен
 func handleBearerAuth(r *http.Request, authHeader string, authClient client.AuthHTTPClientInterface) error {
-	// Создаем логгер для этого контекста
-	log, err := logger.NewLogger("dev", "debug", "api-gateway-auth", false)
-	if err != nil {
-		// Если не можем создать логгер, продолжаем без логирования
-	}
-
 	// Извлечение токена
 	token := authHeader[7:] // Убираем "Bearer "
 
@@ -133,12 +102,6 @@ func handleBearerAuth(r *http.Request, authHeader string, authClient client.Auth
 	if strings.HasPrefix(token, "mock-access-token-") {
 		// Mock токен от CLI - создаем mock claims с полными правами
 		email := strings.TrimPrefix(token, "mock-access-token-")
-
-		// Создаем логгер для этого контекста
-		log, err := logger.NewLogger("dev", "info", "api-gateway-auth", false)
-		if err != nil {
-			// Если не можем создать логгер, продолжаем без логирования
-		}
 
 		ctx := r.Context()
 		ctx = context.WithValue(ctx, "user_id", "user-cli-123")
@@ -169,21 +132,14 @@ func handleBearerAuth(r *http.Request, authHeader string, authClient client.Auth
 		}
 		ctx = context.WithValue(ctx, "user", userData)
 
-		log.Info("CLI mock токен валидирован",
-			logger.String("email", email),
-			logger.String("user_id", "user-cli-123"),
-			logger.String("tenant_id", "tenant-cli-456"),
-			logger.Bool("is_admin", true))
-
 		// Обновляем запрос с новым контекстом
 		*r = *r.WithContext(ctx)
 		return nil
 	}
 
-	// Для реальных токенов вызываем Auth Service
-	claims, err := authClient.ValidateToken(r.Context(), token)
+	// Для реальных токенов вызываем Auth Service напрямую (обход middleware)
+	claims, err := authClient.ValidateTokenDirect(r.Context(), token)
 	if err != nil {
-		log.Error("Token validation failed", logger.Error(err))
 		return err
 	}
 
@@ -230,13 +186,6 @@ func handleBearerAuth(r *http.Request, authHeader string, authClient client.Auth
 	}
 	ctx = context.WithValue(ctx, "user", userData)
 
-	log.Info("JWT токен валидирован",
-		logger.String("user_id", claims.UserID),
-		logger.String("tenant_id", claims.TenantID),
-		logger.String("email", claims.Email),
-		logger.Bool("is_admin", claims.IsAdmin),
-		logger.String("permissions", strings.Join(claims.Permissions, ",")))
-
 	// Обновляем запрос с новым контекстом
 	*r = *r.WithContext(ctx)
 	return nil
@@ -247,50 +196,62 @@ func handleAPIKeyAuth(r *http.Request, authHeader string, authClient client.Auth
 	// Извлечение key и secret
 	key, secret, err := extractAPIKeyCredentials(authHeader)
 	if err != nil {
-		return errors.Wrap(err, errors.ErrUnauthorized, "failed to extract API key credentials")
+		return err
 	}
 
 	// Вызов Auth Service: ValidateAPIKey()
 	claims, err := authClient.ValidateAPIKey(r.Context(), key, secret)
 	if err != nil {
-		return errors.Wrap(err, errors.ErrUnauthorized, "failed to validate API key")
+		return err
 	}
 
-	// Добавление tenant_id в контекст
+	// Создаем контекст с правами пользователя
 	ctx := r.Context()
+	ctx = context.WithValue(ctx, "user_id", claims.KeyID)
 	ctx = context.WithValue(ctx, "tenant_id", claims.TenantID)
-	ctx = context.WithValue(ctx, "api_key_id", claims.KeyID)
+	ctx = context.WithValue(ctx, "is_admin", false) // API ключи не админы
+	ctx = context.WithValue(ctx, "permissions", []string{"api:access"})
+
+	// Создаем единую структуру user для удобного доступа в handler'ах
+	userData := map[string]interface{}{
+		"user_id":     claims.KeyID,
+		"tenant_id":   claims.TenantID,
+		"is_admin":    false,
+		"permissions": []string{"api:access"},
+	}
+	ctx = context.WithValue(ctx, "user", userData)
 
 	// Обновляем запрос с новым контекстом
-	r = r.WithContext(ctx)
-
+	*r = *r.WithContext(ctx)
 	return nil
 }
 
-// extractAPIKeyCredentials извлекает key и secret из заголовка Authorization
+// extractAPIKeyCredentials извлекает key и secret из заголовка
 func extractAPIKeyCredentials(authHeader string) (string, string, error) {
-	// Удаляем "APIKey " префикс
-	credentials := authHeader[7:]
+	// Формат: APIKey <key>:<secret>
+	parts := strings.SplitN(authHeader[7:], ":", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("invalid API key format")
+	}
+	return parts[0], parts[1], nil
+}
 
-	// Ищем двоеточие, разделяющее key и secret
-	colonIndex := -1
-	for i, char := range credentials {
-		if char == ':' {
-			colonIndex = i
-			break
+// isPublicRoute проверяет, является ли маршрут публичным
+func isPublicRoute(path string) bool {
+	publicRoutes := []string{
+		"/health",
+		"/ready",
+		"/live",
+		"/metrics",
+		"/api/v1/auth/login",
+		"/api/v1/auth/register",
+		"/api/v1/auth/refresh",
+	}
+
+	for _, route := range publicRoutes {
+		if path == route {
+			return true
 		}
 	}
-
-	if colonIndex == -1 {
-		return "", "", errors.New(errors.ErrUnauthorized, "invalid API key format")
-	}
-
-	key := credentials[:colonIndex]
-	secret := credentials[colonIndex+1:]
-
-	if key == "" || secret == "" {
-		return "", "", errors.New(errors.ErrUnauthorized, "empty key or secret")
-	}
-
-	return key, secret, nil
+	return false
 }

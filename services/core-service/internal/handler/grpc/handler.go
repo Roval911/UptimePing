@@ -105,10 +105,15 @@ func (h *CoreHandler) GetCheckStatus(ctx context.Context, req *corev1.GetCheckSt
 	}
 
 	// Конвертируем в protobuf
+	status := "down"
+	if checkStatus.IsHealthy {
+		status = "up"
+	}
+
 	protoStatus := &corev1.CheckStatusResponse{
 		CheckId:        req.CheckId,
-		IsHealthy:      checkStatus.IsHealthy,
-		ResponseTimeMs: int32(checkStatus.ResponseTimeMs),
+		Status:         status,
+		ResponseTimeMs: float64(checkStatus.ResponseTimeMs),
 		LastCheckedAt:  checkStatus.LastCheckedAt,
 	}
 
@@ -201,13 +206,13 @@ func (h *CoreHandler) convertCheckResultToProto(result *domain.CheckResult) *cor
 	}
 
 	return &corev1.CheckResult{
-		CheckId:      result.CheckID,
-		Success:      result.Status == "up",
-		DurationMs:   int32(result.ResponseTimeMs),
-		StatusCode:   statusCode,
-		Error:        result.ErrorMessage,
-		ResponseBody: result.ResponseBody,
-		CheckedAt:    result.CreatedAt.Format(time.RFC3339),
+		CheckId:        result.CheckID,
+		Status:         result.Status,
+		ResponseTimeMs: result.ResponseTimeMs,
+		StatusCode:     statusCode,
+		ErrorMessage:   result.ErrorMessage,
+		ResponseBody:   result.ResponseBody,
+		CreatedAt:      result.CreatedAt.Format(time.RFC3339),
 	}
 }
 

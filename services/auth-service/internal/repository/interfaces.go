@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"UptimePingPlatform/services/auth-service/internal/domain"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // UserRepository интерфейс для работы с пользователями
@@ -14,6 +15,7 @@ type UserRepository interface {
 	FindByEmail(ctx context.Context, email string) (*domain.User, error)
 	Update(ctx context.Context, user *domain.User) error
 	Delete(ctx context.Context, id string) error
+	GetDB() *pgxpool.Pool // Возвращает пул соединений pgxpool
 }
 
 // TenantRepository интерфейс для работы с тенантами

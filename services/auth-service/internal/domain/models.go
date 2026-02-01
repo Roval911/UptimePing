@@ -64,3 +64,46 @@ type Session struct {
 	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
 }
+
+// Role представляет роль в системе
+type Role struct {
+	ID          string    `json:"id" db:"id"`
+	Name        string    `json:"name" db:"name"`
+	Description string    `json:"description" db:"description"`
+	IsActive    bool      `json:"is_active" db:"is_active"`
+	CreatedAt   time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
+}
+
+// Permission представляет разрешение в системе
+type Permission struct {
+	ID          string    `json:"id" db:"id"`
+	Name        string    `json:"name" db:"name"`
+	Resource    string    `json:"resource" db:"resource"`
+	Action      string    `json:"action" db:"action"`
+	Description string    `json:"description" db:"description"`
+	IsActive    bool      `json:"is_active" db:"is_active"`
+	CreatedAt   time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
+}
+
+// UserRole представляет связь пользователя и роли
+type UserRole struct {
+	ID         string     `json:"id" db:"id"`
+	UserID     string     `json:"user_id" db:"user_id"`
+	RoleID     string     `json:"role_id" db:"role_id"`
+	AssignedBy string     `json:"assigned_by" db:"assigned_by"`
+	AssignedAt time.Time  `json:"assigned_at" db:"assigned_at"`
+	ExpiresAt  *time.Time `json:"expires_at" db:"expires_at"`
+	IsActive   bool       `json:"is_active" db:"is_active"`
+	CreatedAt  time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at" db:"updated_at"`
+}
+
+// RolePermission представляет связь роли и разрешения
+type RolePermission struct {
+	ID           string    `json:"id" db:"id"`
+	RoleID       string    `json:"role_id" db:"role_id"`
+	PermissionID string    `json:"permission_id" db:"permission_id"`
+	CreatedAt    time.Time `json:"created_at" db:"created_at"`
+}

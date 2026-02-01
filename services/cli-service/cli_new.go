@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -259,11 +260,34 @@ func main() {
 
 				// API Gateway возвращает токены прямо в корне
 				if tokenResponse["access_token"] != nil {
+					// Определяем время истечения токена
+					var expiresAt time.Time
+					if exp, ok := tokenResponse["expires_in"]; ok {
+						// Если есть expires_in в секундах
+						if expSeconds, ok := exp.(float64); ok {
+							expiresAt = time.Now().Add(time.Duration(expSeconds) * time.Second)
+						} else if expStr, ok := exp.(string); ok {
+							if expSeconds, err := strconv.ParseFloat(expStr, 64); err == nil {
+								expiresAt = time.Now().Add(time.Duration(expSeconds) * time.Second)
+							}
+						}
+					} else if exp, ok := tokenResponse["expires_at"]; ok {
+						// Если есть expires_at как timestamp
+						if expStr, ok := exp.(string); ok {
+							if parsedTime, err := time.Parse(time.RFC3339, expStr); err == nil {
+								expiresAt = parsedTime
+							}
+						}
+					} else {
+						// По умолчанию 1 час
+						expiresAt = time.Now().Add(time.Hour)
+					}
+
 					tokenInfo := &TokenInfo{
 						AccessToken:  tokenResponse["access_token"].(string),
 						RefreshToken: tokenResponse["refresh_token"].(string),
 						Email:        emailFlag,
-						ExpiresAt:    time.Now().Add(time.Hour), // TODO: получить из ответа
+						ExpiresAt:    expiresAt,
 					}
 
 					// Добавляем tenant_id если он есть в ответе
@@ -319,11 +343,34 @@ func main() {
 
 				// API Gateway возвращает токены прямо в корне
 				if response["access_token"] != nil {
+					// Определяем время истечения токена
+					var expiresAt time.Time
+					if exp, ok := response["expires_in"]; ok {
+						// Если есть expires_in в секундах
+						if expSeconds, ok := exp.(float64); ok {
+							expiresAt = time.Now().Add(time.Duration(expSeconds) * time.Second)
+						} else if expStr, ok := exp.(string); ok {
+							if expSeconds, err := strconv.ParseFloat(expStr, 64); err == nil {
+								expiresAt = time.Now().Add(time.Duration(expSeconds) * time.Second)
+							}
+						}
+					} else if exp, ok := response["expires_at"]; ok {
+						// Если есть expires_at как timestamp
+						if expStr, ok := exp.(string); ok {
+							if parsedTime, err := time.Parse(time.RFC3339, expStr); err == nil {
+								expiresAt = parsedTime
+							}
+						}
+					} else {
+						// По умолчанию 1 час
+						expiresAt = time.Now().Add(time.Hour)
+					}
+
 					tokenInfo := &TokenInfo{
 						AccessToken:  response["access_token"].(string),
 						RefreshToken: response["refresh_token"].(string),
 						Email:        emailFlag,
-						ExpiresAt:    time.Now().Add(time.Hour), // TODO: получить из ответа
+						ExpiresAt:    expiresAt,
 					}
 
 					// Добавляем tenant_id если он есть в ответе

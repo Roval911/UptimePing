@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -20,15 +21,27 @@ type HTTPAuthClient struct {
 
 // NewHTTPAuthClient создает новый HTTP клиент для AuthService
 func NewHTTPAuthClient(baseURL string, timeout time.Duration, logger logger.Logger) (*HTTPAuthClient, error) {
+	// Создаем специальный transport для обхода middleware
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   timeout,
+			KeepAlive: timeout,
+		}).DialContext,
+		MaxIdleConns:       10,
+		IdleConnTimeout:    timeout,
+		DisableCompression: true,
+	}
+
 	client := &HTTPAuthClient{
 		baseURL: baseURL,
 		client: &http.Client{
-			Timeout: timeout,
+			Timeout:   timeout,
+			Transport: transport, // ВАЖНО: Прямой transport для обхода middleware
 		},
 		logger: logger,
 	}
 
-	logger.Info("HTTP клиент для Auth Service создан")
+	logger.Info("HTTP клиент для Auth Service создан (с обходом middleware)")
 
 	return client, nil
 }
@@ -211,6 +224,8 @@ func (c *HTTPAuthClient) ValidateToken(ctx context.Context, accessToken string) 
 		return nil, fmt.Errorf("ошибка создания запроса: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// ВАЖНО: Убираем Authorization header чтобы избежать рекурсии!
+	req.Header.Del("Authorization")
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -282,7 +297,70 @@ func (c *HTTPAuthClient) ValidateAPIKey(ctx context.Context, key, secret string)
 	return &apiKeyClaims, nil
 }
 
-// Logout выполняет выход пользователя
+// ValidateTokenDirect валидирует токен напрямую, обходя middleware
+func (c *HTTPAuthClient) ValidateTokenDirect(ctx context.Context, accessToken string) (*UserInfo, error) {
+	c.logger.Info("выполнение ValidateTokenDirect (обход middleware)")
+
+	body := map[string]interface{}{
+		"access_token": accessToken,
+	}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		c.logger.Error("ошибка кодирования запроса", logger.Error(err))
+		return nil, fmt.Errorf("ошибка кодирования запроса: %w", err)
+	}
+
+	// Создаем специальный transport для прямого подключения
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 10 * time.Second,
+		}).DialContext,
+		MaxIdleConns:       1,
+		IdleConnTimeout:    10 * time.Second,
+		DisableCompression: true,
+		// ВАЖНО: Обходим все прокси и middleware
+		Proxy: nil,
+	}
+
+	directClient := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: transport,
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/v1/auth/validate", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		c.logger.Error("ошибка создания запроса", logger.Error(err))
+		return nil, fmt.Errorf("ошибка создания запроса: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	// ВАЖНО: Убираем Authorization header чтобы избежать рекурсии!
+	req.Header.Del("Authorization")
+
+	resp, err := directClient.Do(req)
+	if err != nil {
+		c.logger.Error("ошибка выполнения прямого HTTP запроса", logger.Error(err))
+		return nil, fmt.Errorf("ошибка выполнения запроса: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Проверяем статус ответа
+	if resp.StatusCode != http.StatusOK {
+		c.logger.Error("неверный статус ответа", logger.Int("status", resp.StatusCode))
+		return nil, fmt.Errorf("сервер вернул статус: %d", resp.StatusCode)
+	}
+
+	// Парсим ответ
+	var userInfo UserInfo
+	if err := json.NewDecoder(resp.Body).Decode(&userInfo); err != nil {
+		c.logger.Error("ошибка декодирования ответа", logger.Error(err))
+		return nil, fmt.Errorf("ошибка декодирования ответа: %w", err)
+	}
+
+	c.logger.Info("токен успешно валидирован напрямую")
+	return &userInfo, nil
+}
 func (c *HTTPAuthClient) Logout(ctx context.Context, accessToken string) error {
 	c.logger.Info("выполнение Logout через HTTP")
 

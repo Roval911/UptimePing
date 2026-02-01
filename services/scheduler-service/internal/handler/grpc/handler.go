@@ -156,6 +156,8 @@ func (h *HandlerFixed) UpdateCheck(ctx context.Context, req *schedulerv1.UpdateC
 	h.BaseHandler.LogOperationStart(ctx, "UpdateCheck", map[string]interface{}{
 		"check_id": req.CheckId,
 		"name":     req.Name,
+		"type":     req.Type,
+		"target":   req.Target,
 	})
 
 	// Валидация обязательных полей
@@ -183,7 +185,17 @@ func (h *HandlerFixed) UpdateCheck(ctx context.Context, req *schedulerv1.UpdateC
 		Timeout:     int(req.Timeout),
 		Enabled:     true, // По умолчанию включена
 		Config:      h.convertConfigMap(req.Config),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 	}
+
+	// Логируем финальный check перед вызовом UpdateCheck
+	h.BaseHandler.LogOperationSuccess(ctx, "FinalCheckBeforeUpdate", map[string]interface{}{
+		"check_id":     check.ID,
+		"final_name":   check.Name,
+		"final_type":   string(check.Type),
+		"final_target": check.Target,
+	})
 
 	// Обновление проверки
 	err := h.checkUseCase.UpdateCheck(ctx, req.CheckId, check)
@@ -197,13 +209,15 @@ func (h *HandlerFixed) UpdateCheck(ctx context.Context, req *schedulerv1.UpdateC
 		return nil, h.BaseHandler.LogError(ctx, err, "GetCheck", req.CheckId)
 	}
 
+	// Конвертация в protobuf
+	protoCheck := h.convertCheckToProto(updatedCheck)
+
 	// Логируем успешное завершение
 	h.BaseHandler.LogOperationSuccess(ctx, "UpdateCheck", map[string]interface{}{
 		"check_id": req.CheckId,
-		"name":     updatedCheck.Name,
 	})
 
-	return h.convertCheckToProto(updatedCheck), nil
+	return protoCheck, nil
 }
 
 // DeleteCheck удаляет проверку

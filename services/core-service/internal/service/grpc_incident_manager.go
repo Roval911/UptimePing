@@ -122,11 +122,11 @@ func (g *GRPCIncidentManager) UpdateIncident(ctx context.Context, incidentID str
 	var protoSeverity incidentv1.IncidentSeverity
 	switch current.Severity {
 	case IncidentSeverityLow:
-		protoSeverity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_WARNING
+		protoSeverity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_LOW
 	case IncidentSeverityMedium:
-		protoSeverity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_ERROR
+		protoSeverity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_MEDIUM
 	case IncidentSeverityHigh:
-		protoSeverity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_ERROR
+		protoSeverity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_HIGH
 	case IncidentSeverityCritical:
 		protoSeverity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_CRITICAL
 	}
@@ -223,11 +223,11 @@ func (g *GRPCIncidentManager) ListIncidents(ctx context.Context, filters *Incide
 	if filters.Severity != "" {
 		switch filters.Severity {
 		case IncidentSeverityLow:
-			protoSeverity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_WARNING
+			protoSeverity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_LOW
 		case IncidentSeverityMedium:
-			protoSeverity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_ERROR
+			protoSeverity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_MEDIUM
 		case IncidentSeverityHigh:
-			protoSeverity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_ERROR
+			protoSeverity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_HIGH
 		case IncidentSeverityCritical:
 			protoSeverity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_CRITICAL
 		}
@@ -280,13 +280,13 @@ func (g *GRPCIncidentManager) GetActiveIncidents(ctx context.Context, tenantID s
 // convertFromProtoIncident конвертирует protobuf Incident в доменную модель
 func (g *GRPCIncidentManager) convertFromProtoIncident(protoIncident *incidentv1.Incident) *Incident {
 	incident := &Incident{
-		ID:        protoIncident.Id,
-		CheckID:   protoIncident.CheckId,
-		TenantID:  protoIncident.TenantId,
-		Error:     protoIncident.ErrorMessage,
-		CreatedAt: time.Now(), // Нет временных полей в protobuf
-		UpdatedAt: time.Now(),
-		Metadata:  make(map[string]interface{}),
+		ID:          protoIncident.Id,
+		CheckID:     protoIncident.CheckId,
+		Title:       protoIncident.Title,
+		Description: protoIncident.Description,
+		CreatedAt:   time.Now(), // Нет временных полей в protobuf
+		UpdatedAt:   time.Now(),
+		Metadata:    make(map[string]interface{}),
 	}
 
 	// Конвертация статуса
@@ -301,10 +301,12 @@ func (g *GRPCIncidentManager) convertFromProtoIncident(protoIncident *incidentv1
 
 	// Конвертация серьезности
 	switch protoIncident.Severity {
-	case incidentv1.IncidentSeverity_INCIDENT_SEVERITY_WARNING:
+	case incidentv1.IncidentSeverity_INCIDENT_SEVERITY_LOW:
 		incident.Severity = IncidentSeverityLow
-	case incidentv1.IncidentSeverity_INCIDENT_SEVERITY_ERROR:
+	case incidentv1.IncidentSeverity_INCIDENT_SEVERITY_MEDIUM:
 		incident.Severity = IncidentSeverityMedium
+	case incidentv1.IncidentSeverity_INCIDENT_SEVERITY_HIGH:
+		incident.Severity = IncidentSeverityHigh
 	case incidentv1.IncidentSeverity_INCIDENT_SEVERITY_CRITICAL:
 		incident.Severity = IncidentSeverityCritical
 	}

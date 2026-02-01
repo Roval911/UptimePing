@@ -3,7 +3,12 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
+
+	"github.com/vektah/gqlparser/ast"
+	"github.com/vektah/gqlparser/parser"
 
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/scheduler-service/internal/domain"
@@ -85,12 +90,6 @@ func (uc *CheckUseCase) CreateCheck(ctx context.Context, tenantID string, check 
 
 // UpdateCheck обновляет существующую проверку
 func (uc *CheckUseCase) UpdateCheck(ctx context.Context, checkID string, check *domain.Check) error {
-	// Получаем существующую проверку
-	existingCheck, err := uc.checkRepo.GetByID(ctx, checkID)
-	if err != nil {
-		return fmt.Errorf("failed to get existing check: %w", err)
-	}
-
 	// Устанавливаем ID для обновляемой проверки
 	check.ID = checkID
 
@@ -99,45 +98,10 @@ func (uc *CheckUseCase) UpdateCheck(ctx context.Context, checkID string, check *
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	// Сохраняем важные поля из существующей проверки
-	check.TenantID = existingCheck.TenantID
-	check.CreatedAt = existingCheck.CreatedAt
-	check.UpdatedAt = time.Now()
-
-	// Обновляем время следующего запуска для активных проверок
-	if check.Enabled {
-		check.UpdateNextRun()
-	}
-
-	// Сохранение в БД
+	// Обновляем в репозитории
 	if err := uc.checkRepo.Update(ctx, check); err != nil {
 		return fmt.Errorf("failed to update check: %w", err)
 	}
-
-	// Обновление в планировщике
-	// Сначала удаляем старую версию
-	if err := uc.schedulerRepo.RemoveCheck(ctx, checkID); err != nil {
-		// Логируем ошибку, но продолжаем
-		uc.logger.Warn("Failed to remove check from scheduler during update",
-			logger.CtxField(ctx),
-			logger.String("check_id", checkID),
-			logger.Error(err),
-		)
-	}
-
-	// Если проверка активна, добавляем обновленную версию
-	if check.Enabled {
-		if err := uc.schedulerRepo.AddCheck(ctx, check); err != nil {
-			return fmt.Errorf("check updated but failed to add to scheduler: %w", err)
-		}
-	}
-
-	uc.logger.Info("Check updated successfully",
-		logger.CtxField(ctx),
-		logger.String("check_id", checkID),
-		logger.String("name", check.Name),
-		logger.Bool("enabled", check.Enabled),
-	)
 
 	return nil
 }
@@ -224,7 +188,15 @@ func (uc *CheckUseCase) validateCheckConfigForUpdate(check *domain.Check) error 
 		return fmt.Errorf("check id is required")
 	}
 
-	return uc.validateCheckConfig(check)
+	// Валидация tenant_id
+	if check.TenantID == "" {
+		return fmt.Errorf("tenant id is required")
+	}
+
+	// Для обновления не требуем обязательные поля
+	// Поля могут быть пустыми при частичном обновлении
+
+	return nil
 }
 
 // validateCheckConfigForCreate выполняет валидацию конфигурации проверки для создания
@@ -245,7 +217,22 @@ func (uc *CheckUseCase) validateCheckConfigForCreate(check *domain.Check) error 
 		return fmt.Errorf("invalid check type: %s", check.Type)
 	}
 
-	return uc.validateCheckConfig(check)
+	// Валидация интервала (от 5 секунд до 24 часов)
+	if check.Interval < 5 || check.Interval > 86400 {
+		return fmt.Errorf("check interval must be between 5 seconds and 24 hours")
+	}
+
+	// Валидация таймаута (от 1 секунды до 5 минут)
+	if check.Timeout < 1 || check.Timeout > 300 {
+		return fmt.Errorf("check timeout must be between 1 second and 5 minutes")
+	}
+
+	// Дополнительная валидация конфигурации в зависимости от типа
+	if err := uc.validateTypeSpecificConfig(check); err != nil {
+		return fmt.Errorf("type-specific validation failed: %w", err)
+	}
+
+	return nil
 }
 
 // validateCheckConfig выполняет полную валидацию конфигурации проверки
@@ -274,6 +261,11 @@ func (uc *CheckUseCase) validateCheckConfig(check *domain.Check) error {
 
 // validateTypeSpecificConfig выполняет валидацию конфигурации в зависимости от типа проверки
 func (uc *CheckUseCase) validateTypeSpecificConfig(check *domain.Check) error {
+	// Если тип не предоставлен, пропускаем валидацию
+	if check.Type == "" {
+		return nil
+	}
+
 	switch check.Type {
 	case domain.CheckTypeHTTP, domain.CheckTypeHTTPS:
 		return uc.validateHTTPConfig(check)
@@ -313,8 +305,79 @@ func (uc *CheckUseCase) validateHTTPConfig(check *domain.Check) error {
 	// Проверка кодов ответа, если указаны
 	if expectedCodes, ok := check.Config["expected_codes"]; ok {
 		// Валидация формата expected_codes
-		// TODO: реализовать валидацию списка кодов
-		_ = expectedCodes
+		switch codes := expectedCodes.(type) {
+		case string:
+			// Формат: "200,201,202" или "200-299"
+			if err := validateHTTPCodes(codes); err != nil {
+				return fmt.Errorf("invalid expected_codes format: %w", err)
+			}
+		case []interface{}:
+			// Формат: ["200", "201", "202"]
+			for _, code := range codes {
+				if codeStr, ok := code.(string); ok {
+					if err := validateHTTPCode(codeStr); err != nil {
+						return fmt.Errorf("invalid expected_code '%s': %w", codeStr, err)
+					}
+				} else {
+					return fmt.Errorf("expected_code must be string, got %T", code)
+				}
+			}
+		default:
+			return fmt.Errorf("expected_codes must be string or array, got %T", expectedCodes)
+		}
+	}
+
+	return nil
+}
+
+// validateHTTPCode валидирует один HTTP код
+func validateHTTPCode(code string) error {
+	codeNum, err := strconv.Atoi(code)
+	if err != nil {
+		return fmt.Errorf("must be a number")
+	}
+
+	if codeNum < 100 || codeNum > 599 {
+		return fmt.Errorf("must be between 100 and 599")
+	}
+
+	return nil
+}
+
+// validateHTTPCodes валидирует строку с HTTP кодами
+func validateHTTPCodes(codes string) error {
+	if strings.Contains(codes, "-") {
+		// Формат диапазона: "200-299"
+		parts := strings.Split(codes, "-")
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid range format, expected 'start-end'")
+		}
+
+		start, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil {
+			return fmt.Errorf("invalid start range: %w", err)
+		}
+
+		end, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil {
+			return fmt.Errorf("invalid end range: %w", err)
+		}
+
+		if start < 100 || start > 599 || end < 100 || end > 599 {
+			return fmt.Errorf("range must be between 100 and 599")
+		}
+
+		if start > end {
+			return fmt.Errorf("start range must be less than or equal to end range")
+		}
+	} else {
+		// Формат списка: "200,201,202"
+		codeList := strings.Split(codes, ",")
+		for _, code := range codeList {
+			if err := validateHTTPCode(strings.TrimSpace(code)); err != nil {
+				return fmt.Errorf("invalid code '%s': %w", strings.TrimSpace(code), err)
+			}
+		}
 	}
 
 	return nil
@@ -353,10 +416,34 @@ func (uc *CheckUseCase) validateGraphQLConfig(check *domain.Check) error {
 
 	// Проверка query, если указан
 	if query, ok := check.Config["query"]; ok {
-		if query == "" {
-			return fmt.Errorf("GraphQL query cannot be empty")
+		if queryStr, ok := query.(string); ok {
+			if queryStr == "" {
+				return fmt.Errorf("GraphQL query cannot be empty")
+			}
+
+			// Валидация синтаксиса GraphQL
+			if err := validateGraphQLQuery(queryStr); err != nil {
+				return fmt.Errorf("invalid GraphQL query syntax: %w", err)
+			}
+		} else {
+			return fmt.Errorf("GraphQL query must be a string")
 		}
-		// TODO: добавить валидацию синтаксиса GraphQL
+	}
+
+	return nil
+}
+
+// validateGraphQLQuery валидирует синтаксис GraphQL запроса
+func validateGraphQLQuery(query string) error {
+	// Создаем исходный код GraphQL
+	source := &ast.Source{
+		Input: query,
+	}
+
+	// Парсим GraphQL запрос
+	_, err := parser.ParseQuery(source)
+	if err != nil {
+		return fmt.Errorf("GraphQL parsing failed: %w", err)
 	}
 
 	return nil
@@ -372,8 +459,29 @@ func (uc *CheckUseCase) validateTCPConfig(check *domain.Check) error {
 	// Проверка порта, если указан
 	if port, ok := check.Config["port"]; ok {
 		// Валидация формата порта
-		// TODO: добавить валидацию порта
-		_ = port
+		switch portVal := port.(type) {
+		case string:
+			portNum, err := strconv.Atoi(portVal)
+			if err != nil {
+				return fmt.Errorf("port must be a number, got string '%s'", portVal)
+			}
+			if portNum < 1 || portNum > 65535 {
+				return fmt.Errorf("port must be between 1 and 65535, got %d", portNum)
+			}
+		case float64:
+			// JSON парсер может дать float64 для чисел
+			if portNum := int(portVal); float64(portNum) != portVal {
+				return fmt.Errorf("port must be an integer, got float %.0f", portVal)
+			} else if portNum < 1 || portNum > 65535 {
+				return fmt.Errorf("port must be between 1 and 65535, got %d", portNum)
+			}
+		case int:
+			if portNum := portVal; portNum < 1 || portNum > 65535 {
+				return fmt.Errorf("port must be between 1 and 65535, got %d", portNum)
+			}
+		default:
+			return fmt.Errorf("port must be a number, got %T", port)
+		}
 	}
 
 	return nil

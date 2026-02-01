@@ -154,19 +154,30 @@ func (h *AuthHandler) ValidateToken(ctx context.Context, req *grpc_auth.Validate
 		return nil, status.Error(codes.Unauthenticated, fmt.Sprintf("user not found: %v", err))
 	}
 
+	// Получаем роли пользователя из базы данных
+	roles, err := h.authService.GetUserRoles(ctx, claims.UserID)
+	if err != nil {
+		h.LogOperationSuccess(ctx, "ValidateToken", map[string]interface{}{
+			"is_valid": false,
+			"error":    err.Error(),
+		})
+		return nil, status.Error(codes.Unauthenticated, fmt.Sprintf("failed to get user roles: %v", err))
+	}
+
 	h.LogOperationSuccess(ctx, "ValidateToken", map[string]interface{}{
 		"is_valid":  true,
 		"user_id":   claims.UserID,
 		"tenant_id": claims.TenantID,
 		"email":     user.Email,
 		"is_admin":  claims.IsAdmin,
+		"roles":     roles,
 	})
 
 	return &grpc_auth.ValidateTokenResponse{
 		UserId:      claims.UserID,
 		Email:       user.Email,
 		TenantId:    claims.TenantID,
-		Roles:       []string{"user"}, // TODO: Добавить реальные роли из БД
+		Roles:       roles, // Реальные роли из БД
 		Permissions: claims.Permissions,
 		ExpiresAt:   claims.ExpiresAt.Unix(),
 		IsAdmin:     claims.IsAdmin,

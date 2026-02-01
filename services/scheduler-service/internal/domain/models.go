@@ -137,6 +137,8 @@ func (c *Check) Validate() error {
 	if c.TenantID == "" {
 		return fmt.Errorf("tenant id is required")
 	}
+
+	// Валидация обязательных полей
 	if c.Name == "" {
 		return fmt.Errorf("check name is required")
 	}
@@ -164,12 +166,7 @@ func (c *Check) Validate() error {
 
 	// Валидация статуса - для новой структуры с Enabled полем
 	if !c.Enabled {
-		// Проверяем, что disabled - это корректный статус
-		// В новой структуре нет enum для статуса
 	}
-
-	// Валидация приоритета - удалена, т.к. Priority больше нет в структуре
-	// Если нужно, можно добавить в будущем
 
 	return nil
 }

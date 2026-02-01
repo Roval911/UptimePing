@@ -20,6 +20,11 @@ func NewUserRepository(pool *pgxpool.Pool) repository.UserRepository {
 	return &UserRepository{pool: pool}
 }
 
+// GetDB возвращает пул соединений для прямого доступа к базе данных
+func (r *UserRepository) GetDB() *pgxpool.Pool {
+	return r.pool
+}
+
 // Create сохраняет нового пользователя в базе данных
 func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
 	query := `INSERT INTO users (id, email, password_hash, tenant_id, first_name, last_name, is_active, is_admin, created_at, updated_at) 

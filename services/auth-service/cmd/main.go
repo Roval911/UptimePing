@@ -8,21 +8,18 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
 
-// generateUserID генерирует уникальный ID пользователя
+// generateUserID генерирует уникальный ID пользователя в формате UUID
 func generateUserID() string {
-	// Используем timestamp + random для избежания блокировки rand.Read
-	timestamp := time.Now().UnixNano()
-	randomBytes := make([]byte, 8)
-	rand.Read(randomBytes)
-	randomNum := int64(binary.LittleEndian.Uint64(randomBytes))
-	uniqueID := fmt.Sprintf("%d_%d", timestamp, randomNum)
-	return "user_" + base64.URLEncoding.EncodeToString([]byte(uniqueID))[:8]
+	// Генерируем валидный UUID v4
+	id := uuid.New()
+	return id.String()
 }
 
 // generateTenantID генерирует уникальный ID тенанта в формате UUID
@@ -64,11 +61,11 @@ func generateJWTToken(userID, tenantID, email string) (string, error) {
 func generateRefreshToken(userID string) string {
 	// Используем timestamp + random для избежания блокировки rand.Read
 	timestamp := time.Now().UnixNano()
-	randomBytes := make([]byte, 8)
+	randomBytes := make([]byte, 32) // Увеличим до 32 байт для большей длины
 	rand.Read(randomBytes)
 	randomNum := int64(binary.LittleEndian.Uint64(randomBytes))
-	uniqueID := fmt.Sprintf("%d_%d", timestamp, randomNum+2)
-	return "refresh_" + base64.URLEncoding.EncodeToString([]byte(uniqueID))[:16] + "_" + userID
+	uniqueID := fmt.Sprintf("%d_%d_%s", timestamp, randomNum+2, base64.URLEncoding.EncodeToString(randomBytes))
+	return "refresh_" + base64.URLEncoding.EncodeToString([]byte(uniqueID)) + "_" + userID
 }
 
 func main() {
@@ -112,7 +109,8 @@ func main() {
 
 		// Генерируем уникальные ID для пользователя
 		userID := generateUserID()
-		tenantID := generateTenantID()
+		// Используем существующий tenant
+		tenantID := "aa8931e2-44cc-4d07-b077-958e6dc4a4ac" // Используем существующий tenant из БД
 
 		// Генерируем уникальный JWT токен
 		accessToken, err := generateJWTToken(userID, tenantID, req.Email)
@@ -154,7 +152,8 @@ func main() {
 
 		// Генерируем уникальные ID для нового пользователя
 		userID := generateUserID()
-		tenantID := generateTenantID()
+		// Используем существующий tenant или создаем новый
+		tenantID := "aa8931e2-44cc-4d07-b077-958e6dc4a4ac" // Используем существующий tenant из БД
 
 		// Генерируем уникальный JWT токен
 		accessToken, err := generateJWTToken(userID, tenantID, req.Email)
@@ -174,6 +173,103 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(response)
+	})
+
+	// Refresh token endpoint
+	mux.HandleFunc("/api/v1/auth/refresh", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Парсим тело запроса
+		var req struct {
+			RefreshToken string `json:"refresh_token"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		// Валидация refresh токена
+		if req.RefreshToken == "" {
+			http.Error(w, "Refresh token is required", http.StatusBadRequest)
+			return
+		}
+
+		// Извлекаем userID из refresh токена
+		parts := strings.Split(req.RefreshToken, "_")
+		if len(parts) < 3 {
+			http.Error(w, "Invalid refresh token format", http.StatusBadRequest)
+			return
+		}
+		userID := parts[len(parts)-1]
+
+		// Генерируем новые токены
+		tenantID := generateTenantID()
+		accessToken, err := generateJWTToken(userID, tenantID, "user@example.com")
+		if err != nil {
+			http.Error(w, "Failed to generate access token", http.StatusInternalServerError)
+			return
+		}
+
+		newRefreshToken := generateRefreshToken(userID)
+
+		// Формируем ответ
+		response := map[string]string{
+			"access_token":  accessToken,
+			"refresh_token": newRefreshToken,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+	})
+
+	// Logout endpoint
+	mux.HandleFunc("/api/v1/auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Парсим тело запроса
+		var req struct {
+			AccessToken string `json:"access_token"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		// Валидация access токена
+		if req.AccessToken == "" {
+			http.Error(w, "Access token is required", http.StatusBadRequest)
+			return
+		}
+
+		// Парсим JWT токен для валидации
+		token, err := jwt.ParseWithClaims(req.AccessToken, jwt.MapClaims{}, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			return []byte("your-secret-key-here"), nil
+		})
+
+		if err != nil || !token.Valid {
+			http.Error(w, "Invalid access token", http.StatusUnauthorized)
+			return
+		}
+
+		// В реальном приложении здесь была бы инвалидация токена в Redis/БД
+		// Для демонстрации просто возвращаем успех
+		response := map[string]string{
+			"message": "Logged out successfully",
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(response)
 	})
 

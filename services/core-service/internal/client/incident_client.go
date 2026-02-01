@@ -24,7 +24,7 @@ type IncidentClient interface {
 	UpdateIncident(ctx context.Context, incidentID string, status v1.IncidentStatus, severity v1.IncidentSeverity) (*v1.Incident, error)
 	ResolveIncident(ctx context.Context, incidentID string) error
 	GetIncident(ctx context.Context, incidentID string) (*v1.Incident, error)
-	ListIncidents(ctx context.Context, tenantID string, status v1.IncidentStatus, severity v1.IncidentSeverity, pageSize, pageToken int32) ([]*v1.Incident, int32, error)
+	ListIncidents(ctx context.Context, checkID string, status v1.IncidentStatus, severity v1.IncidentSeverity, pageSize, pageToken int32) ([]*v1.Incident, int32, error)
 	Close() error
 	GetStats() *ClientStats
 }
@@ -334,7 +334,7 @@ func (c *incidentClient) generateErrorHash(checkID, errorMessage string) string 
 // determineSeverity определяет серьезность инцидента на основе результата проверки
 func (c *incidentClient) determineSeverity(result *domain.CheckResult) v1.IncidentSeverity {
 	if result.Status == "up" {
-		return v1.IncidentSeverity_INCIDENT_SEVERITY_WARNING
+		return v1.IncidentSeverity_INCIDENT_SEVERITY_LOW
 	}
 
 	// Определяем серьезность на основе типа ошибки
@@ -342,10 +342,10 @@ func (c *incidentClient) determineSeverity(result *domain.CheckResult) v1.Incide
 		return v1.IncidentSeverity_INCIDENT_SEVERITY_CRITICAL
 	}
 	if result.StatusCode != nil && *result.StatusCode >= 400 {
-		return v1.IncidentSeverity_INCIDENT_SEVERITY_ERROR
+		return v1.IncidentSeverity_INCIDENT_SEVERITY_HIGH
 	}
 
-	return v1.IncidentSeverity_INCIDENT_SEVERITY_ERROR
+	return v1.IncidentSeverity_INCIDENT_SEVERITY_MEDIUM
 }
 
 // executeWithRetry выполняет функцию с retry логикой
@@ -426,10 +426,10 @@ func (c *incidentClient) CreateIncident(ctx context.Context, result *domain.Chec
 
 	err := c.executeWithRetry(ctx, func() error {
 		req := &v1.CreateIncidentRequest{
-			CheckId:      result.CheckID,
-			TenantId:     tenantID,
-			Severity:     c.determineSeverity(result),
-			ErrorMessage: result.ErrorMessage,
+			CheckId:     result.CheckID,
+			Title:       fmt.Sprintf("Check failed: %s", result.CheckID),
+			Description: result.ErrorMessage,
+			Severity:    c.determineSeverity(result),
 		}
 
 		resp, err := c.client.CreateIncident(ctx, req)
@@ -449,7 +449,6 @@ func (c *incidentClient) CreateIncident(ctx context.Context, result *domain.Chec
 			c.logger.Error("Failed to create incident",
 				logger.Error(err),
 				logger.String("check_id", result.CheckID),
-				logger.String("tenant_id", tenantID),
 				logger.String("component", "incident_client"))
 		}
 		return nil, err
@@ -461,7 +460,6 @@ func (c *incidentClient) CreateIncident(ctx context.Context, result *domain.Chec
 		c.logger.Info("Created incident",
 			logger.String("incident_id", incident.Id),
 			logger.String("check_id", result.CheckID),
-			logger.String("tenant_id", tenantID),
 			logger.String("component", "incident_client"))
 	}
 
@@ -598,14 +596,14 @@ func (c *incidentClient) GetIncident(ctx context.Context, incidentID string) (*v
 }
 
 // ListIncidents возвращает список инцидентов
-func (c *incidentClient) ListIncidents(ctx context.Context, tenantID string, status v1.IncidentStatus, severity v1.IncidentSeverity, pageSize, pageToken int32) ([]*v1.Incident, int32, error) {
+func (c *incidentClient) ListIncidents(ctx context.Context, checkID string, status v1.IncidentStatus, severity v1.IncidentSeverity, pageSize, pageToken int32) ([]*v1.Incident, int32, error) {
 	var incidents []*v1.Incident
 	var nextPageToken int32
 	start := time.Now()
 
 	err := c.executeWithRetry(ctx, func() error {
 		req := &v1.ListIncidentsRequest{
-			TenantId:  tenantID,
+			CheckId:   checkID,
 			Status:    status,
 			Severity:  severity,
 			PageSize:  pageSize,

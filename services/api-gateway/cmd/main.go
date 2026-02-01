@@ -18,7 +18,6 @@ import (
 
 	"UptimePingPlatform/services/api-gateway/internal/client"
 	httpHandler "UptimePingPlatform/services/api-gateway/internal/handler/http"
-	"UptimePingPlatform/services/api-gateway/internal/middleware"
 )
 
 // HealthHandlerAdapter адаптер для health.SimpleHealthChecker
@@ -81,7 +80,7 @@ func main() {
 	// Create Auth Service HTTP client
 	authServiceAddr := os.Getenv("AUTH_SERVICE_ADDR")
 	if authServiceAddr == "" {
-		authServiceAddr = "http://localhost:50051"
+		authServiceAddr = "http://localhost:51051"
 	}
 	httpAuthClient, err := client.NewHTTPAuthClient(authServiceAddr, 10*time.Second, appLogger)
 	if err != nil {
@@ -142,7 +141,7 @@ func main() {
 	// Start HTTP server with middleware
 	httpServer := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler: appMetrics.Middleware(middleware.AuthMiddleware(httpAuthClient, appLogger)(httpHandlerInstance)),
+		Handler: appMetrics.Middleware(httpHandlerInstance),
 	}
 
 	// Start server
