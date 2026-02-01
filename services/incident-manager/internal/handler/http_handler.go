@@ -14,14 +14,14 @@ import (
 
 // HTTPHandler обрабатывает HTTP запросы для Incident Manager
 type HTTPHandler struct {
-	logger        logger.Logger
+	logger          logger.Logger
 	incidentService service.IncidentService
 }
 
 // NewHTTPHandler создает новый HTTP обработчик
 func NewHTTPHandler(logger logger.Logger, incidentService service.IncidentService) *HTTPHandler {
 	return &HTTPHandler{
-		logger:        logger,
+		logger:          logger,
 		incidentService: incidentService,
 	}
 }
@@ -99,16 +99,16 @@ func (h *HTTPHandler) listIncidents(w http.ResponseWriter, r *http.Request) {
 		s := domain.IncidentStatus(statusStr)
 		statusPtr = &s
 	}
-	
+
 	var severityPtr *domain.IncidentSeverity
 	if severityStr := severity; severityStr != "" {
 		sev := domain.IncidentSeverity(severityStr)
 		severityPtr = &sev
 	}
-	
+
 	limit := pageSize
 	offset := (page - 1) * pageSize
-	
+
 	filter := &domain.IncidentFilter{
 		Status:   statusPtr,
 		Severity: severityPtr,
@@ -129,8 +129,8 @@ func (h *HTTPHandler) listIncidents(w http.ResponseWriter, r *http.Request) {
 	for i, domainIncident := range domainIncidents {
 		incidents[i] = api.Incident{
 			ID:          domainIncident.ID,
-			Title:       domainIncident.ErrorMessage, // Используем ErrorMessage как Title
-			Description: domainIncident.Metadata["description"].(string), // Если есть
+			Title:       domainIncident.Title,
+			Description: domainIncident.Description,
 			Status:      string(domainIncident.Status),
 			Severity:    string(domainIncident.Severity),
 			CreatedAt:   domainIncident.CreatedAt,
@@ -164,8 +164,8 @@ func (h *HTTPHandler) getIncident(w http.ResponseWriter, r *http.Request, id str
 	// Конвертируем domain модель в API модель
 	incident := api.Incident{
 		ID:          domainIncident.ID,
-		Title:       domainIncident.ErrorMessage, // Используем ErrorMessage как Title
-		Description: "", // Domain модель не имеет поля Description
+		Title:       domainIncident.Title,
+		Description: domainIncident.Description,
 		Status:      string(domainIncident.Status),
 		Severity:    string(domainIncident.Severity),
 		CreatedAt:   domainIncident.CreatedAt,
@@ -217,8 +217,8 @@ func (h *HTTPHandler) acknowledgeIncident(w http.ResponseWriter, r *http.Request
 	// Конвертируем domain модель в API модель
 	incident := api.Incident{
 		ID:          domainIncident.ID,
-		Title:       domainIncident.ErrorMessage, // Используем ErrorMessage как Title
-		Description: "", // Domain модель не имеет поля Description
+		Title:       domainIncident.Title,
+		Description: domainIncident.Description,
 		Status:      string(domainIncident.Status),
 		Severity:    string(domainIncident.Severity),
 		CreatedAt:   domainIncident.CreatedAt,
@@ -273,8 +273,8 @@ func (h *HTTPHandler) resolveIncident(w http.ResponseWriter, r *http.Request, id
 	// Конвертируем domain модель в API модель
 	incident := api.Incident{
 		ID:          domainIncident.ID,
-		Title:       domainIncident.ErrorMessage, // Используем ErrorMessage как Title
-		Description: "", // Domain модель не имеет поля Description
+		Title:       domainIncident.Title,
+		Description: domainIncident.Description,
 		Status:      string(domainIncident.Status),
 		Severity:    string(domainIncident.Severity),
 		CreatedAt:   domainIncident.CreatedAt,

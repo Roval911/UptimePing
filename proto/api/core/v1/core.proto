@@ -26,13 +26,13 @@ message ExecuteCheckRequest {
 // CheckResult представляет результат выполнения проверки
 message CheckResult {
   string check_id = 1;
-  string execution_id = 2;
-  bool success = 3;
-  int32 duration_ms = 4;
-  int32 status_code = 5;
-  string error = 6;
-  string response_body = 7;
-  string checked_at = 8;
+  string status = 2; // up/down/unknown
+  double response_time_ms = 3; // NUMERIC(10,3)
+  int32 status_code = 4;
+  map<string, string> response_headers = 5;
+  string response_body = 6;
+  string error_message = 7;
+  string created_at = 8;
 }
 
 // GetCheckStatusRequest содержит ID проверки
@@ -43,8 +43,8 @@ message GetCheckStatusRequest {
 // CheckStatusResponse содержит текущий статус проверки
 message CheckStatusResponse {
   string check_id = 1;
-  bool is_healthy = 2;
-  int32 response_time_ms = 3;
+  string status = 2; // up/down/unknown
+  double response_time_ms = 3;
   string last_checked_at = 4;
 }
 

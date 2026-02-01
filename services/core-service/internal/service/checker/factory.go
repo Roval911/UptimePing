@@ -7,13 +7,13 @@ import (
 	"net/http"
 	"time"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/health/grpc_health_v1"
 	"UptimePingPlatform/pkg/connection"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/validation"
 	"UptimePingPlatform/services/core-service/internal/domain"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health/grpc_health_v1"
 )
 
 // DefaultCheckerFactory реализация CheckerFactory
@@ -118,16 +118,16 @@ type DefaultTCPDialer struct{}
 // Dial устанавливает TCP соединение
 func (d *DefaultTCPDialer) Dial(address string, timeout int64) (*TCPConnection, error) {
 	start := time.Now()
-	
+
 	// Создаем контекст с таймаутом
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
 	defer cancel()
-	
+
 	// Создаем TCP connecter
 	connecter := &tcpConnecter{
 		address: address,
 	}
-	
+
 	// Используем pkg/connection для retry логики
 	retryConfig := connection.RetryConfig{
 		MaxAttempts:  3,
@@ -136,14 +136,14 @@ func (d *DefaultTCPDialer) Dial(address string, timeout int64) (*TCPConnection, 
 		Multiplier:   2.0,
 		Jitter:       true,
 	}
-	
+
 	err := connection.ConnectWithRetry(ctx, connecter, retryConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to %s: %w", address, err)
 	}
-	
+
 	duration := time.Since(start)
-	
+
 	return &TCPConnection{
 		Connected:  true,
 		Address:    address,
@@ -163,12 +163,12 @@ func (t *tcpConnecter) Connect(ctx context.Context) error {
 	dialer := &net.Dialer{
 		Timeout: 5 * time.Second,
 	}
-	
+
 	conn, err := dialer.DialContext(ctx, "tcp", t.address)
 	if err != nil {
 		return err
 	}
-	
+
 	t.conn = conn
 	return nil
 }
@@ -195,13 +195,13 @@ func (i *icmpConnecter) Connect(ctx context.Context) error {
 	dialer := &net.Dialer{
 		Timeout: 5 * time.Second,
 	}
-	
+
 	conn, err := dialer.DialContext(ctx, "tcp", i.target+":80")
 	if err != nil {
 		return fmt.Errorf("ICMP ping to %s failed: %w", i.target, err)
 	}
 	conn.Close()
-	
+
 	return nil
 }
 
@@ -225,30 +225,30 @@ type grpcConnecter struct {
 func (g *grpcConnecter) Connect(ctx context.Context) error {
 	// Современная gRPC проверка через health service
 	// Используем неблокирующее подключение с контекстом
-	conn, err := grpc.DialContext(ctx, g.address, 
+	conn, err := grpc.DialContext(ctx, g.address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithReturnConnectionError(),
 	)
 	if err != nil {
 		return fmt.Errorf("gRPC connection to %s failed: %w", g.address, err)
 	}
-	
+
 	// Проверяем health service с таймаутом
 	healthCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	
+
 	healthClient := grpc_health_v1.NewHealthClient(conn)
-	
+
 	req := &grpc_health_v1.HealthCheckRequest{
 		Service: "", // Проверяем общее состояние сервиса
 	}
-	
+
 	_, err = healthClient.Check(healthCtx, req)
 	if err != nil {
 		conn.Close()
 		return fmt.Errorf("gRPC health check failed for %s: %w", g.address, err)
 	}
-	
+
 	g.conn = conn
 	return nil
 }
@@ -291,12 +291,12 @@ func (i *ICMPChecker) Execute(task *domain.Task) (*domain.CheckResult, error) {
 
 	// Реализация ICMP проверки с использованием pkg/connection
 	start := time.Now()
-	
+
 	// Создаем ICMP connecter
 	connecter := &icmpConnecter{
 		target: task.Target,
 	}
-	
+
 	// Используем pkg/connection для retry логики
 	retryConfig := connection.RetryConfig{
 		MaxAttempts:  3,
@@ -305,13 +305,13 @@ func (i *ICMPChecker) Execute(task *domain.Task) (*domain.CheckResult, error) {
 		Multiplier:   2.0,
 		Jitter:       true,
 	}
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	
+
 	err := connection.ConnectWithRetry(ctx, connecter, retryConfig)
 	duration := time.Since(start)
-	
+
 	success := err == nil
 	var errorMsg string
 	if err != nil {
@@ -326,14 +326,21 @@ func (i *ICMPChecker) Execute(task *domain.Task) (*domain.CheckResult, error) {
 			logger.Duration("duration", duration))
 	}
 
+	status := "down"
+	if success {
+		status = "up"
+	}
+
+	statusCode := &[]int{0}[0] // nullable int
+
 	return domain.NewCheckResult(
 		task.CheckID,
-		task.ExecutionID,
-		success,
-		duration.Milliseconds(),
-		0, // status_code
-		errorMsg,
-		"", // response_body
+		status,
+		float64(duration.Nanoseconds())/1000000.0, // Convert to milliseconds as float64
+		statusCode,
+		make(map[string]string), // response_headers
+		"",                      // response_body
+		errorMsg,                // error_message
 	), nil
 }
 
@@ -375,13 +382,13 @@ func (g *GRPCChecker) Execute(task *domain.Task) (*domain.CheckResult, error) {
 
 	// Реализация gRPC проверки с использованием pkg/connection
 	start := time.Now()
-	
+
 	// Создаем gRPC connecter
 	connecter := &grpcConnecter{
 		address: task.Target,
 		timeout: 30 * time.Second,
 	}
-	
+
 	// Используем pkg/connection для retry логики
 	retryConfig := connection.RetryConfig{
 		MaxAttempts:  3,
@@ -390,13 +397,13 @@ func (g *GRPCChecker) Execute(task *domain.Task) (*domain.CheckResult, error) {
 		Multiplier:   2.0,
 		Jitter:       true,
 	}
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	
+
 	err := connection.ConnectWithRetry(ctx, connecter, retryConfig)
 	duration := time.Since(start)
-	
+
 	success := err == nil
 	var errorMsg string
 	if err != nil {
@@ -411,14 +418,21 @@ func (g *GRPCChecker) Execute(task *domain.Task) (*domain.CheckResult, error) {
 			logger.Duration("duration", duration))
 	}
 
+	status := "down"
+	if success {
+		status = "up"
+	}
+
+	statusCode := &[]int{0}[0] // nullable int
+
 	return domain.NewCheckResult(
 		task.CheckID,
-		task.ExecutionID,
-		success,
-		duration.Milliseconds(),
-		0, // status_code
-		errorMsg,
-		"", // response_body
+		status,
+		float64(duration.Nanoseconds())/1000000.0, // Convert to milliseconds as float64
+		statusCode,
+		make(map[string]string), // response_headers
+		"",                      // response_body
+		errorMsg,                // error_message
 	), nil
 }
 
@@ -432,7 +446,7 @@ func (g *GRPCChecker) ValidateConfig(config map[string]interface{}) error {
 	if config == nil {
 		return nil
 	}
-	
+
 	// Валидируем timeout если указан
 	if timeout, ok := config["timeout"]; ok {
 		if timeoutStr, ok := timeout.(string); ok {
@@ -441,7 +455,7 @@ func (g *GRPCChecker) ValidateConfig(config map[string]interface{}) error {
 			}
 		}
 	}
-	
+
 	// Валидируем service если указан
 	if service, ok := config["service"]; ok {
 		if serviceStr, ok := service.(string); ok {
@@ -450,6 +464,6 @@ func (g *GRPCChecker) ValidateConfig(config map[string]interface{}) error {
 			}
 		}
 	}
-	
+
 	return nil
 }

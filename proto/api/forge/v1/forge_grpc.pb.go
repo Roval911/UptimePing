@@ -23,6 +23,11 @@ const (
 	ForgeService_GenerateConfig_FullMethodName = "/uptimeping.forge.v1.ForgeService/GenerateConfig"
 	ForgeService_GenerateCode_FullMethodName   = "/uptimeping.forge.v1.ForgeService/GenerateCode"
 	ForgeService_ValidateProto_FullMethodName  = "/uptimeping.forge.v1.ForgeService/ValidateProto"
+	ForgeService_CreateTemplate_FullMethodName = "/uptimeping.forge.v1.ForgeService/CreateTemplate"
+	ForgeService_GetTemplate_FullMethodName    = "/uptimeping.forge.v1.ForgeService/GetTemplate"
+	ForgeService_ListTemplates_FullMethodName  = "/uptimeping.forge.v1.ForgeService/ListTemplates"
+	ForgeService_UpdateTemplate_FullMethodName = "/uptimeping.forge.v1.ForgeService/UpdateTemplate"
+	ForgeService_DeleteTemplate_FullMethodName = "/uptimeping.forge.v1.ForgeService/DeleteTemplate"
 )
 
 // ForgeServiceClient is the client API for ForgeService service.
@@ -39,6 +44,16 @@ type ForgeServiceClient interface {
 	GenerateCode(ctx context.Context, in *GenerateCodeRequest, opts ...grpc.CallOption) (*GenerateCodeResponse, error)
 	// ValidateProto проверяет валидность .proto файла
 	ValidateProto(ctx context.Context, in *ValidateProtoRequest, opts ...grpc.CallOption) (*ValidateProtoResponse, error)
+	// CreateTemplate создает новый шаблон прототипа
+	CreateTemplate(ctx context.Context, in *CreateTemplateRequest, opts ...grpc.CallOption) (*ProtoTemplate, error)
+	// GetTemplate получает шаблон по ID
+	GetTemplate(ctx context.Context, in *GetTemplateRequest, opts ...grpc.CallOption) (*ProtoTemplate, error)
+	// ListTemplates возвращает список шаблонов
+	ListTemplates(ctx context.Context, in *ListTemplatesRequest, opts ...grpc.CallOption) (*ListTemplatesResponse, error)
+	// UpdateTemplate обновляет существующий шаблон
+	UpdateTemplate(ctx context.Context, in *UpdateTemplateRequest, opts ...grpc.CallOption) (*ProtoTemplate, error)
+	// DeleteTemplate удаляет шаблон
+	DeleteTemplate(ctx context.Context, in *DeleteTemplateRequest, opts ...grpc.CallOption) (*DeleteTemplateResponse, error)
 }
 
 type forgeServiceClient struct {
@@ -89,6 +104,56 @@ func (c *forgeServiceClient) ValidateProto(ctx context.Context, in *ValidateProt
 	return out, nil
 }
 
+func (c *forgeServiceClient) CreateTemplate(ctx context.Context, in *CreateTemplateRequest, opts ...grpc.CallOption) (*ProtoTemplate, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProtoTemplate)
+	err := c.cc.Invoke(ctx, ForgeService_CreateTemplate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *forgeServiceClient) GetTemplate(ctx context.Context, in *GetTemplateRequest, opts ...grpc.CallOption) (*ProtoTemplate, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProtoTemplate)
+	err := c.cc.Invoke(ctx, ForgeService_GetTemplate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *forgeServiceClient) ListTemplates(ctx context.Context, in *ListTemplatesRequest, opts ...grpc.CallOption) (*ListTemplatesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTemplatesResponse)
+	err := c.cc.Invoke(ctx, ForgeService_ListTemplates_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *forgeServiceClient) UpdateTemplate(ctx context.Context, in *UpdateTemplateRequest, opts ...grpc.CallOption) (*ProtoTemplate, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProtoTemplate)
+	err := c.cc.Invoke(ctx, ForgeService_UpdateTemplate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *forgeServiceClient) DeleteTemplate(ctx context.Context, in *DeleteTemplateRequest, opts ...grpc.CallOption) (*DeleteTemplateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteTemplateResponse)
+	err := c.cc.Invoke(ctx, ForgeService_DeleteTemplate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ForgeServiceServer is the server API for ForgeService service.
 // All implementations should embed UnimplementedForgeServiceServer
 // for forward compatibility.
@@ -103,6 +168,16 @@ type ForgeServiceServer interface {
 	GenerateCode(context.Context, *GenerateCodeRequest) (*GenerateCodeResponse, error)
 	// ValidateProto проверяет валидность .proto файла
 	ValidateProto(context.Context, *ValidateProtoRequest) (*ValidateProtoResponse, error)
+	// CreateTemplate создает новый шаблон прототипа
+	CreateTemplate(context.Context, *CreateTemplateRequest) (*ProtoTemplate, error)
+	// GetTemplate получает шаблон по ID
+	GetTemplate(context.Context, *GetTemplateRequest) (*ProtoTemplate, error)
+	// ListTemplates возвращает список шаблонов
+	ListTemplates(context.Context, *ListTemplatesRequest) (*ListTemplatesResponse, error)
+	// UpdateTemplate обновляет существующий шаблон
+	UpdateTemplate(context.Context, *UpdateTemplateRequest) (*ProtoTemplate, error)
+	// DeleteTemplate удаляет шаблон
+	DeleteTemplate(context.Context, *DeleteTemplateRequest) (*DeleteTemplateResponse, error)
 }
 
 // UnimplementedForgeServiceServer should be embedded to have
@@ -123,6 +198,21 @@ func (UnimplementedForgeServiceServer) GenerateCode(context.Context, *GenerateCo
 }
 func (UnimplementedForgeServiceServer) ValidateProto(context.Context, *ValidateProtoRequest) (*ValidateProtoResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ValidateProto not implemented")
+}
+func (UnimplementedForgeServiceServer) CreateTemplate(context.Context, *CreateTemplateRequest) (*ProtoTemplate, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateTemplate not implemented")
+}
+func (UnimplementedForgeServiceServer) GetTemplate(context.Context, *GetTemplateRequest) (*ProtoTemplate, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetTemplate not implemented")
+}
+func (UnimplementedForgeServiceServer) ListTemplates(context.Context, *ListTemplatesRequest) (*ListTemplatesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListTemplates not implemented")
+}
+func (UnimplementedForgeServiceServer) UpdateTemplate(context.Context, *UpdateTemplateRequest) (*ProtoTemplate, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateTemplate not implemented")
+}
+func (UnimplementedForgeServiceServer) DeleteTemplate(context.Context, *DeleteTemplateRequest) (*DeleteTemplateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteTemplate not implemented")
 }
 func (UnimplementedForgeServiceServer) testEmbeddedByValue() {}
 
@@ -216,6 +306,96 @@ func _ForgeService_ValidateProto_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ForgeService_CreateTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateTemplateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ForgeServiceServer).CreateTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ForgeService_CreateTemplate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ForgeServiceServer).CreateTemplate(ctx, req.(*CreateTemplateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ForgeService_GetTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTemplateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ForgeServiceServer).GetTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ForgeService_GetTemplate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ForgeServiceServer).GetTemplate(ctx, req.(*GetTemplateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ForgeService_ListTemplates_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTemplatesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ForgeServiceServer).ListTemplates(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ForgeService_ListTemplates_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ForgeServiceServer).ListTemplates(ctx, req.(*ListTemplatesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ForgeService_UpdateTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateTemplateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ForgeServiceServer).UpdateTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ForgeService_UpdateTemplate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ForgeServiceServer).UpdateTemplate(ctx, req.(*UpdateTemplateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ForgeService_DeleteTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteTemplateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ForgeServiceServer).DeleteTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ForgeService_DeleteTemplate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ForgeServiceServer).DeleteTemplate(ctx, req.(*DeleteTemplateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ForgeService_ServiceDesc is the grpc.ServiceDesc for ForgeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -238,6 +418,26 @@ var ForgeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ValidateProto",
 			Handler:    _ForgeService_ValidateProto_Handler,
+		},
+		{
+			MethodName: "CreateTemplate",
+			Handler:    _ForgeService_CreateTemplate_Handler,
+		},
+		{
+			MethodName: "GetTemplate",
+			Handler:    _ForgeService_GetTemplate_Handler,
+		},
+		{
+			MethodName: "ListTemplates",
+			Handler:    _ForgeService_ListTemplates_Handler,
+		},
+		{
+			MethodName: "UpdateTemplate",
+			Handler:    _ForgeService_UpdateTemplate_Handler,
+		},
+		{
+			MethodName: "DeleteTemplate",
+			Handler:    _ForgeService_DeleteTemplate_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

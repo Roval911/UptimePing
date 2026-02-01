@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"UptimePingPlatform/proto/api/incident/v1"
 	"UptimePingPlatform/pkg/connection"
 	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/proto/api/incident/v1"
 	"UptimePingPlatform/services/core-service/internal/domain"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -333,15 +333,15 @@ func (c *incidentClient) generateErrorHash(checkID, errorMessage string) string 
 
 // determineSeverity определяет серьезность инцидента на основе результата проверки
 func (c *incidentClient) determineSeverity(result *domain.CheckResult) v1.IncidentSeverity {
-	if result.Success {
+	if result.Status == "up" {
 		return v1.IncidentSeverity_INCIDENT_SEVERITY_WARNING
 	}
 
 	// Определяем серьезность на основе типа ошибки
-	if result.StatusCode >= 500 {
+	if result.StatusCode != nil && *result.StatusCode >= 500 {
 		return v1.IncidentSeverity_INCIDENT_SEVERITY_CRITICAL
 	}
-	if result.StatusCode >= 400 {
+	if result.StatusCode != nil && *result.StatusCode >= 400 {
 		return v1.IncidentSeverity_INCIDENT_SEVERITY_ERROR
 	}
 
@@ -376,7 +376,7 @@ func (c *incidentClient) executeWithRetry(ctx context.Context, fn func() error) 
 					logger.Error(err),
 					logger.String("component", "incident_client"))
 			}
-			
+
 			return err
 		}
 
@@ -429,7 +429,7 @@ func (c *incidentClient) CreateIncident(ctx context.Context, result *domain.Chec
 			CheckId:      result.CheckID,
 			TenantId:     tenantID,
 			Severity:     c.determineSeverity(result),
-			ErrorMessage: result.Error,
+			ErrorMessage: result.ErrorMessage,
 		}
 
 		resp, err := c.client.CreateIncident(ctx, req)

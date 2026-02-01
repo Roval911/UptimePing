@@ -19,6 +19,21 @@ service ForgeService {
   
   // ValidateProto проверяет валидность .proto файла
   rpc ValidateProto(ValidateProtoRequest) returns (ValidateProtoResponse) {}
+  
+  // CreateTemplate создает новый шаблон прототипа
+  rpc CreateTemplate(CreateTemplateRequest) returns (ProtoTemplate) {}
+  
+  // GetTemplate получает шаблон по ID
+  rpc GetTemplate(GetTemplateRequest) returns (ProtoTemplate) {}
+  
+  // ListTemplates возвращает список шаблонов
+  rpc ListTemplates(ListTemplatesRequest) returns (ListTemplatesResponse) {}
+  
+  // UpdateTemplate обновляет существующий шаблон
+  rpc UpdateTemplate(UpdateTemplateRequest) returns (ProtoTemplate) {}
+  
+  // DeleteTemplate удаляет шаблон
+  rpc DeleteTemplate(DeleteTemplateRequest) returns (DeleteTemplateResponse) {}
 }
 
 // ParseProtoRequest содержит данные для парсинга .proto файла
@@ -135,4 +150,60 @@ message ValidateProtoResponse {
   bool is_valid = 1;
   repeated string errors = 2;
   repeated string warnings = 3;
+}
+
+// ProtoTemplate представляет шаблон прототипа
+message ProtoTemplate {
+  string id = 1;
+  string name = 2;
+  string content = 3;
+  string version = 4;
+  string description = 5;
+  string created_at = 6;
+  string updated_at = 7;
+}
+
+// CreateTemplateRequest содержит данные для создания шаблона
+message CreateTemplateRequest {
+  string name = 1;
+  string content = 2;
+  string version = 3;
+  string description = 4;
+}
+
+// GetTemplateRequest содержит ID шаблона
+message GetTemplateRequest {
+  string template_id = 1;
+}
+
+// ListTemplatesRequest содержит параметры для получения списка шаблонов
+message ListTemplatesRequest {
+  int32 page_size = 1;
+  int32 page_token = 2;
+  string filter = 3;
+}
+
+// ListTemplatesResponse содержит список шаблонов
+message ListTemplatesResponse {
+  repeated ProtoTemplate templates = 1;
+  int32 next_page_token = 2;
+}
+
+// UpdateTemplateRequest содержит данные для обновления шаблона
+message UpdateTemplateRequest {
+  string template_id = 1;
+  string name = 2;
+  string content = 3;
+  string version = 4;
+  string description = 5;
+}
+
+// DeleteTemplateRequest содержит ID шаблона для удаления
+message DeleteTemplateRequest {
+  string template_id = 1;
+}
+
+// DeleteTemplateResponse подтверждает удаление шаблона
+message DeleteTemplateResponse {
+  bool success = 1;
 }

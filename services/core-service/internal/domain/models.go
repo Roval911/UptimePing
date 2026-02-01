@@ -21,10 +21,10 @@ type Task struct {
 type TaskType string
 
 const (
-	TaskTypeHTTP   TaskType = "http"
-	TaskTypeTCP    TaskType = "tcp"
-	TaskTypeICMP   TaskType = "icmp"
-	TaskTypeGRPC   TaskType = "grpc"
+	TaskTypeHTTP    TaskType = "http"
+	TaskTypeTCP     TaskType = "tcp"
+	TaskTypeICMP    TaskType = "icmp"
+	TaskTypeGRPC    TaskType = "grpc"
 	TaskTypeGraphQL TaskType = "graphql"
 )
 
@@ -41,44 +41,43 @@ const (
 
 // CheckResult представляет результат выполнения проверки
 type CheckResult struct {
-	ID           string            `json:"id"`
-	CheckID      string            `json:"check_id"`
-	ExecutionID  string            `json:"execution_id"`
-	Success      bool              `json:"success"`
-	DurationMs   int64             `json:"duration_ms"`
-	StatusCode   int               `json:"status_code,omitempty"`
-	Error        string            `json:"error,omitempty"`
-	ResponseBody string            `json:"response_body,omitempty"`
-	CheckedAt    time.Time         `json:"checked_at"`
-	Metadata     map[string]string `json:"metadata,omitempty"`
+	ID              string            `json:"id" db:"id"`
+	CheckID         string            `json:"check_id" db:"check_id"`
+	Status          string            `json:"status" db:"status"`
+	ResponseTimeMs  float64           `json:"response_time_ms" db:"response_time_ms"`
+	StatusCode      *int              `json:"status_code" db:"status_code"`
+	ResponseHeaders map[string]string `json:"response_headers" db:"response_headers"`
+	ResponseBody    string            `json:"response_body" db:"response_body"`
+	ErrorMessage    string            `json:"error_message" db:"error_message"`
+	CreatedAt       time.Time         `json:"created_at" db:"created_at"`
 }
 
 // CheckStatus представляет статус проверки
 type CheckStatus string
 
 const (
-	CheckStatusUp   CheckStatus = "up"
-	CheckStatusDown CheckStatus = "down"
+	CheckStatusUp      CheckStatus = "up"
+	CheckStatusDown    CheckStatus = "down"
 	CheckStatusUnknown CheckStatus = "unknown"
 )
 
 // HTTPConfig представляет конфигурацию HTTP проверки
 type HTTPConfig struct {
-	Method            string            `json:"method"`
-	URL               string            `json:"url"`
-	Headers           map[string]string `json:"headers,omitempty"`
-	Body              string            `json:"body,omitempty"`
-	ExpectedStatus    int               `json:"expected_status"`
-	Timeout           time.Duration     `json:"timeout"`
-	FollowRedirects   bool              `json:"follow_redirects"`
-	ValidateSSL       bool              `json:"validate_ssl"`
+	Method          string            `json:"method"`
+	URL             string            `json:"url"`
+	Headers         map[string]string `json:"headers,omitempty"`
+	Body            string            `json:"body,omitempty"`
+	ExpectedStatus  int               `json:"expected_status"`
+	Timeout         time.Duration     `json:"timeout"`
+	FollowRedirects bool              `json:"follow_redirects"`
+	ValidateSSL     bool              `json:"validate_ssl"`
 }
 
 // TCPConfig представляет конфигурацию TCP проверки
 type TCPConfig struct {
-	Host     string        `json:"host"`
-	Port     int           `json:"port"`
-	Timeout  time.Duration `json:"timeout"`
+	Host    string        `json:"host"`
+	Port    int           `json:"port"`
+	Timeout time.Duration `json:"timeout"`
 }
 
 // ICMPConfig представляет конфигурацию ICMP проверки
@@ -91,23 +90,23 @@ type ICMPConfig struct {
 
 // gRPCConfig представляет конфигурацию gRPC проверки
 type GPRCConfig struct {
-	Service     string            `json:"service"`
-	Method      string            `json:"method"`
-	Host        string            `json:"host"`
-	Port        int               `json:"port"`
-	Headers     map[string]string `json:"headers,omitempty"`
-	Timeout     time.Duration     `json:"timeout"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
+	Service  string            `json:"service"`
+	Method   string            `json:"method"`
+	Host     string            `json:"host"`
+	Port     int               `json:"port"`
+	Headers  map[string]string `json:"headers,omitempty"`
+	Timeout  time.Duration     `json:"timeout"`
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // GraphQLConfig представляет конфигурацию GraphQL проверки
 type GraphQLConfig struct {
-	URL          string                 `json:"url"`
-	Query        string                 `json:"query"`
-	Variables    map[string]interface{} `json:"variables,omitempty"`
-	OperationName string               `json:"operation_name,omitempty"`
-	Headers      map[string]string     `json:"headers,omitempty"`
-	Timeout      time.Duration         `json:"timeout"`
+	URL           string                 `json:"url"`
+	Query         string                 `json:"query"`
+	Variables     map[string]interface{} `json:"variables,omitempty"`
+	OperationName string                 `json:"operation_name,omitempty"`
+	Headers       map[string]string      `json:"headers,omitempty"`
+	Timeout       time.Duration          `json:"timeout"`
 }
 
 // Validate валидирует задачу
@@ -140,7 +139,7 @@ func (t *Task) GetHTTPConfig() (*HTTPConfig, error) {
 	if t.Type != string(TaskTypeHTTP) {
 		return nil, ErrInvalidTaskType
 	}
-	
+
 	config := &HTTPConfig{}
 	if method, ok := t.Config["method"].(string); ok {
 		config.Method = method
@@ -162,7 +161,7 @@ func (t *Task) GetHTTPConfig() (*HTTPConfig, error) {
 	if validateSSL, ok := t.Config["validate_ssl"].(bool); ok {
 		config.ValidateSSL = validateSSL
 	}
-	
+
 	return config, nil
 }
 
@@ -171,7 +170,7 @@ func (t *Task) GetTCPConfig() (*TCPConfig, error) {
 	if t.Type != string(TaskTypeTCP) {
 		return nil, ErrInvalidTaskType
 	}
-	
+
 	config := &TCPConfig{}
 	if host, ok := t.Config["host"].(string); ok {
 		config.Host = host
@@ -184,7 +183,7 @@ func (t *Task) GetTCPConfig() (*TCPConfig, error) {
 			config.Timeout = duration
 		}
 	}
-	
+
 	return config, nil
 }
 
@@ -193,7 +192,7 @@ func (t *Task) GetICMPConfig() (*ICMPConfig, error) {
 	if t.Type != string(TaskTypeICMP) {
 		return nil, ErrInvalidTaskType
 	}
-	
+
 	config := &ICMPConfig{}
 	if target, ok := t.Config["target"].(string); ok {
 		config.Target = target
@@ -211,7 +210,7 @@ func (t *Task) GetICMPConfig() (*ICMPConfig, error) {
 			config.Interval = duration
 		}
 	}
-	
+
 	return config, nil
 }
 
@@ -220,7 +219,7 @@ func (t *Task) GetgRPCConfig() (*GPRCConfig, error) {
 	if t.Type != string(TaskTypeGRPC) {
 		return nil, ErrInvalidTaskType
 	}
-	
+
 	config := &GPRCConfig{}
 	if service, ok := t.Config["service"].(string); ok {
 		config.Service = service
@@ -239,7 +238,7 @@ func (t *Task) GetgRPCConfig() (*GPRCConfig, error) {
 			config.Timeout = duration
 		}
 	}
-	
+
 	// Извлечение headers
 	if headers, ok := t.Config["headers"].(map[string]interface{}); ok {
 		config.Headers = make(map[string]string)
@@ -249,7 +248,7 @@ func (t *Task) GetgRPCConfig() (*GPRCConfig, error) {
 			}
 		}
 	}
-	
+
 	// Извлечение metadata
 	if metadata, ok := t.Config["metadata"].(map[string]interface{}); ok {
 		config.Metadata = make(map[string]string)
@@ -259,7 +258,7 @@ func (t *Task) GetgRPCConfig() (*GPRCConfig, error) {
 			}
 		}
 	}
-	
+
 	return config, nil
 }
 
@@ -268,7 +267,7 @@ func (t *Task) GetGraphQLConfig() (*GraphQLConfig, error) {
 	if t.Type != string(TaskTypeGraphQL) {
 		return nil, ErrInvalidTaskType
 	}
-	
+
 	config := &GraphQLConfig{}
 	if url, ok := t.Config["url"].(string); ok {
 		config.URL = url
@@ -284,12 +283,12 @@ func (t *Task) GetGraphQLConfig() (*GraphQLConfig, error) {
 			config.Timeout = duration
 		}
 	}
-	
+
 	// Извлечение variables
 	if variables, ok := t.Config["variables"].(map[string]interface{}); ok {
 		config.Variables = variables
 	}
-	
+
 	// Извлечение headers
 	if headers, ok := t.Config["headers"].(map[string]interface{}); ok {
 		config.Headers = make(map[string]string)
@@ -299,21 +298,25 @@ func (t *Task) GetGraphQLConfig() (*GraphQLConfig, error) {
 			}
 		}
 	}
-	
+
 	return config, nil
 }
 
 // IsSuccess возвращает true если проверка успешна
 func (r *CheckResult) IsSuccess() bool {
-	return r.Success
+	return r.Status == "up"
 }
 
 // GetStatus возвращает статус проверки на основе результата
 func (r *CheckResult) GetStatus() CheckStatus {
-	if r.Success {
+	switch r.Status {
+	case "up":
 		return CheckStatusUp
+	case "down":
+		return CheckStatusDown
+	default:
+		return CheckStatusUnknown
 	}
-	return CheckStatusDown
 }
 
 // Validate валидирует результат проверки
@@ -321,11 +324,8 @@ func (r *CheckResult) Validate() error {
 	if r.CheckID == "" {
 		return ErrInvalidCheckID
 	}
-	if r.ExecutionID == "" {
-		return ErrInvalidExecutionID
-	}
-	if r.CheckedAt.IsZero() {
-		return ErrInvalidCheckedTime
+	if r.Status == "" {
+		return ErrInvalidStatus
 	}
 	return nil
 }
@@ -346,29 +346,28 @@ func NewTask(checkID, target, taskType, executionID string, scheduledTime time.T
 }
 
 // NewCheckResult создает новый результат проверки
-func NewCheckResult(checkID, executionID string, success bool, durationMs int64, statusCode int, error, responseBody string) *CheckResult {
+func NewCheckResult(checkID string, status string, responseTimeMs float64, statusCode *int, responseHeaders map[string]string, responseBody, errorMessage string) *CheckResult {
 	return &CheckResult{
-		CheckID:      checkID,
-		ExecutionID:  executionID,
-		Success:      success,
-		DurationMs:   durationMs,
-		StatusCode:   statusCode,
-		Error:        error,
-		ResponseBody: responseBody,
-		CheckedAt:    time.Now().UTC(),
-		Metadata:     make(map[string]string),
+		CheckID:         checkID,
+		Status:          status,
+		ResponseTimeMs:  responseTimeMs,
+		StatusCode:      statusCode,
+		ResponseHeaders: responseHeaders,
+		ResponseBody:    responseBody,
+		ErrorMessage:    errorMessage,
+		CreatedAt:       time.Now().UTC(),
 	}
 }
 
 // Ошибки валидации
 var (
-	ErrInvalidTaskID         = NewValidationError("task_id", "required")
-	ErrInvalidTarget         = NewValidationError("target", "required")
-	ErrInvalidTaskType       = NewValidationError("task_type", "invalid")
-	ErrInvalidExecutionID    = NewValidationError("execution_id", "required")
-	ErrInvalidScheduledTime  = NewValidationError("scheduled_time", "required")
-	ErrInvalidCheckID        = NewValidationError("check_id", "required")
-	ErrInvalidCheckedTime    = NewValidationError("checked_at", "required")
+	ErrInvalidTaskID        = NewValidationError("task_id", "required")
+	ErrInvalidTarget        = NewValidationError("target", "required")
+	ErrInvalidTaskType      = NewValidationError("task_type", "invalid")
+	ErrInvalidExecutionID   = NewValidationError("execution_id", "required")
+	ErrInvalidScheduledTime = NewValidationError("scheduled_time", "required")
+	ErrInvalidCheckID       = NewValidationError("check_id", "required")
+	ErrInvalidStatus        = NewValidationError("status", "required")
 )
 
 // ValidationError представляет ошибку валидации

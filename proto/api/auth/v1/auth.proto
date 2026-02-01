@@ -69,6 +69,7 @@ message ValidateTokenResponse {
   repeated string permissions = 6;
   int64 expires_at = 7;
   bool is_admin = 8;
+  bool is_verified = 9; // Добавлено
 }
 
 // RefreshTokenRequest содержит refresh токен
@@ -99,7 +100,9 @@ message APIKeyPair {
   string secret = 2;
   string name = 3;
   string tenant_id = 4;
-  int64 expires_at = 5;
+  string key_prefix = 5; // Добавлено
+  map<string, string> permissions = 6; // Добавлено
+  int64 expires_at = 7;
 }
 
 // ValidateAPIKeyRequest содержит данные для валидации API ключа
@@ -113,6 +116,7 @@ message ValidateAPIKeyResponse {
   string tenant_id = 1;
   string key_id = 2;
   bool is_valid = 3;
+  map<string, string> permissions = 4; // Добавлено
 }
 
 // RevokeAPIKeyRequest содержит ID ключа для отзыва

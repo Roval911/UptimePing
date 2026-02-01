@@ -7,13 +7,13 @@ import (
 	httphandler "UptimePingPlatform/services/api-gateway/internal/handler/http"
 )
 
-// AuthAdapter адаптирует GRPCAuthClient к интерфейсу AuthService
+// AuthAdapter адаптирует HTTPAuthClient к интерфейсу AuthService
 type AuthAdapter struct {
-	authClient *client.GRPCAuthClient
+	authClient *client.HTTPAuthClient
 }
 
 // NewAuthAdapter создает новый адаптер
-func NewAuthAdapter(authClient *client.GRPCAuthClient) *AuthAdapter {
+func NewAuthAdapter(authClient *client.HTTPAuthClient) *AuthAdapter {
 	return &AuthAdapter{
 		authClient: authClient,
 	}
@@ -58,9 +58,10 @@ func (a *AuthAdapter) RefreshToken(ctx context.Context, refreshToken string) (*h
 	}, nil
 }
 
-// Logout выполняет выход пользователя через gRPC клиент
+// Logout выполняет выход пользователя через HTTP клиент
 func (a *AuthAdapter) Logout(ctx context.Context, userID, tokenID string) error {
-	return a.authClient.Logout(ctx, userID, tokenID)
+	// HTTP клиент принимает только accessToken, используем tokenID как accessToken
+	return a.authClient.Logout(ctx, tokenID)
 }
 
 // ValidateToken валидирует токен через gRPC клиент
@@ -75,12 +76,7 @@ func (a *AuthAdapter) ValidateToken(ctx context.Context, token string) (*httphan
 		TenantID:    userInfo.TenantID,
 		Email:       userInfo.Email,
 		Roles:       userInfo.Roles,
-		Permissions:  userInfo.Permissions,
-		ExpiresAt:    userInfo.ExpiresAt,
+		Permissions: userInfo.Permissions,
+		ExpiresAt:   userInfo.ExpiresAt,
 	}, nil
-}
-
-// GetUserPermissions получает права пользователя через gRPC клиент
-func (a *AuthAdapter) GetUserPermissions(ctx context.Context, userID string) ([]string, error) {
-	return a.authClient.GetUserPermissions(ctx, userID)
 }

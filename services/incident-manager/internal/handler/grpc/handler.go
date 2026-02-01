@@ -17,11 +17,19 @@ import (
 	incidentv1 "UptimePingPlatform/proto/api/incident/v1"
 )
 
+// Helper функции
+func formatTimePtr(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.Format(time.RFC3339)
+}
+
 // IncidentHandler реализует gRPC handler для управления инцидентами
 type IncidentHandler struct {
 	grpcBase.BaseHandler
-	service  service.IncidentService
-	logger   logger.Logger
+	service   service.IncidentService
+	logger    logger.Logger
 	validator *validation.Validator
 }
 
@@ -39,8 +47,8 @@ func NewIncidentHandler(service service.IncidentService, logger logger.Logger) *
 // CreateIncident создает новый инцидент
 func (h *IncidentHandler) CreateIncident(ctx context.Context, req *incidentv1.CreateIncidentRequest) (*incidentv1.Incident, error) {
 	h.LogOperationStart(ctx, "CreateIncident", map[string]interface{}{
-		"check_id":  req.CheckId,
-		"tenant_id": req.TenantId,
+		"check_id": req.CheckId,
+		"title":    req.Title,
 	})
 
 	// Валидация запроса
@@ -52,9 +60,9 @@ func (h *IncidentHandler) CreateIncident(ctx context.Context, req *incidentv1.Cr
 	// Создаем результат проверки
 	result := &service.CheckResult{
 		CheckID:      req.CheckId,
-		TenantID:     req.TenantId,
-		IsSuccess:    false, // Если создаем инцидент, значит проверка неуспешная
-		ErrorMessage: req.ErrorMessage,
+		TenantID:     "",              // Убираем tenant_id
+		IsSuccess:    false,           // Если создаем инцидент, значит проверка неуспешная
+		ErrorMessage: req.Description, // Используем description как error message
 		Duration:     0,
 		Timestamp:    time.Now(),
 		Metadata:     map[string]interface{}{},
@@ -73,7 +81,7 @@ func (h *IncidentHandler) CreateIncident(ctx context.Context, req *incidentv1.Cr
 	h.LogOperationSuccess(ctx, "CreateIncident", map[string]interface{}{
 		"incident_id": incident.ID,
 		"check_id":    req.CheckId,
-		"tenant_id":   req.TenantId,
+		"title":       req.Title,
 	})
 
 	return pbIncident, nil
@@ -154,19 +162,19 @@ func (h *IncidentHandler) ResolveIncident(ctx context.Context, req *incidentv1.R
 // ListIncidents получает список инцидентов с фильтрацией и пагинацией
 func (h *IncidentHandler) ListIncidents(ctx context.Context, req *incidentv1.ListIncidentsRequest) (*incidentv1.ListIncidentsResponse, error) {
 	h.LogOperationStart(ctx, "ListIncidents", map[string]interface{}{
-		"tenant_id": req.TenantId,
+		"check_id":  req.CheckId,
 		"page_size": req.PageSize,
 	})
 
 	// Валидация запроса
 	if err := h.validateListIncidentsRequest(ctx, req); err != nil {
-		h.LogError(ctx, err, "ListIncidents", req.TenantId)
+		h.LogError(ctx, err, "ListIncidents", req.CheckId)
 		return nil, status.Errorf(codes.InvalidArgument, "validation failed: %v", err)
 	}
 
 	// Создаем фильтр
 	filter := &domain.IncidentFilter{
-		TenantID: &req.TenantId,
+		CheckID: &req.CheckId,
 	}
 
 	// Добавляем фильтры
@@ -190,7 +198,7 @@ func (h *IncidentHandler) ListIncidents(ctx context.Context, req *incidentv1.Lis
 	// Получаем список инцидентов
 	incidents, err := h.service.GetIncidents(ctx, filter)
 	if err != nil {
-		h.LogError(ctx, err, "ListIncidents", req.TenantId)
+		h.LogError(ctx, err, "ListIncidents", req.CheckId)
 		return nil, status.Errorf(codes.Internal, "failed to get incidents: %v", err)
 	}
 
@@ -208,16 +216,16 @@ func (h *IncidentHandler) ListIncidents(ctx context.Context, req *incidentv1.Lis
 	}
 
 	h.LogOperationSuccess(ctx, "ListIncidents", map[string]interface{}{
-		"tenant_id":     req.TenantId,
-		"count":         len(incidents),
-		"page_size":     req.PageSize,
-		"page_token":    req.PageToken,
+		"check_id":        req.CheckId,
+		"count":           len(incidents),
+		"page_size":       req.PageSize,
+		"page_token":      req.PageToken,
 		"next_page_token": nextPageToken,
 	})
 
 	return &incidentv1.ListIncidentsResponse{
-		Incidents:      pbIncidents,
-		NextPageToken:  nextPageToken,
+		Incidents:     pbIncidents,
+		NextPageToken: nextPageToken,
 	}, nil
 }
 
@@ -255,7 +263,7 @@ func (h *IncidentHandler) GetIncident(ctx context.Context, req *incidentv1.GetIn
 	}
 
 	h.LogOperationSuccess(ctx, "GetIncident", map[string]interface{}{
-		"incident_id": incident.ID,
+		"incident_id":   incident.ID,
 		"history_count": len(history),
 	})
 
@@ -271,8 +279,8 @@ func (h *IncidentHandler) GetIncident(ctx context.Context, req *incidentv1.GetIn
 func (h *IncidentHandler) validateCreateIncidentRequest(ctx context.Context, req *incidentv1.CreateIncidentRequest) error {
 	// Валидация обязательных полей
 	if err := h.ValidateRequiredFields(ctx, "CreateIncident", map[string]string{
-		"check_id":  req.CheckId,
-		"tenant_id": req.TenantId,
+		"check_id": req.CheckId,
+		"title":    req.Title,
 	}); err != nil {
 		return err
 	}
@@ -282,20 +290,14 @@ func (h *IncidentHandler) validateCreateIncidentRequest(ctx context.Context, req
 		return err
 	}
 
-	// Валидация tenant_id
-	if err := h.validator.ValidateStringLength(req.TenantId, "tenant_id", 1, 100); err != nil {
+	// Валидация title
+	if err := h.validator.ValidateStringLength(req.Title, "title", 1, 255); err != nil {
 		return err
 	}
 
-	// Валидация severity
-	if req.Severity < incidentv1.IncidentSeverity_INCIDENT_SEVERITY_WARNING ||
-		req.Severity > incidentv1.IncidentSeverity_INCIDENT_SEVERITY_CRITICAL {
-		return status.Errorf(codes.InvalidArgument, "invalid severity value")
-	}
-
-	// Валидация error_message
-	if req.ErrorMessage != "" {
-		if err := h.validator.ValidateStringLength(req.ErrorMessage, "error_message", 1, 1000); err != nil {
+	// Валидация description (опционально)
+	if req.Description != "" {
+		if err := h.validator.ValidateStringLength(req.Description, "description", 0, 1000); err != nil {
 			return err
 		}
 	}
@@ -324,7 +326,7 @@ func (h *IncidentHandler) validateUpdateIncidentRequest(ctx context.Context, req
 	}
 
 	// Валидация severity
-	if req.Severity < incidentv1.IncidentSeverity_INCIDENT_SEVERITY_WARNING ||
+	if req.Severity < incidentv1.IncidentSeverity_INCIDENT_SEVERITY_LOW ||
 		req.Severity > incidentv1.IncidentSeverity_INCIDENT_SEVERITY_CRITICAL {
 		return status.Errorf(codes.InvalidArgument, "invalid severity value")
 	}
@@ -351,9 +353,9 @@ func (h *IncidentHandler) validateResolveIncidentRequest(ctx context.Context, re
 
 // validateListIncidentsRequest валидирует запрос на получение списка инцидентов
 func (h *IncidentHandler) validateListIncidentsRequest(ctx context.Context, req *incidentv1.ListIncidentsRequest) error {
-	// Валидация tenant_id если указан
-	if req.TenantId != "" {
-		if err := h.validator.ValidateStringLength(req.TenantId, "tenant_id", 1, 100); err != nil {
+	// Валидация check_id если указан
+	if req.CheckId != "" {
+		if err := h.validator.ValidateStringLength(req.CheckId, "check_id", 1, 100); err != nil {
 			return err
 		}
 	}
@@ -405,16 +407,16 @@ func (h *IncidentHandler) validateGetIncidentRequest(ctx context.Context, req *i
 // incidentToProto конвертирует доменный инцидент в protobuf
 func (h *IncidentHandler) incidentToProto(incident *domain.Incident) *incidentv1.Incident {
 	return &incidentv1.Incident{
-		Id:           incident.ID,
-		CheckId:      incident.CheckID,
-		TenantId:     incident.TenantID,
-		Status:       h.domainStatusToProto(incident.Status),
-		Severity:     h.domainSeverityToProto(incident.Severity),
-		FirstSeen:    incident.FirstSeen.Format(time.RFC3339),
-		LastSeen:     incident.LastSeen.Format(time.RFC3339),
-		Count:        int32(incident.Count),
-		ErrorMessage: incident.ErrorMessage,
-		ErrorHash:    incident.ErrorHash,
+		Id:          incident.ID,
+		CheckId:     incident.CheckID,
+		Title:       incident.Title,
+		Description: incident.Description,
+		Status:      h.domainStatusToProto(incident.Status),
+		Severity:    h.domainSeverityToProto(incident.Severity),
+		StartedAt:   incident.StartedAt.Format(time.RFC3339),
+		ResolvedAt:  formatTimePtr(incident.ResolvedAt),
+		CreatedAt:   incident.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   incident.UpdatedAt.Format(time.RFC3339),
 	}
 }
 
@@ -464,10 +466,12 @@ func (h *IncidentHandler) protoStatusToDomain(status incidentv1.IncidentStatus) 
 // domainSeverityToProto конвертирует серьезность домена в protobuf
 func (h *IncidentHandler) domainSeverityToProto(severity domain.IncidentSeverity) incidentv1.IncidentSeverity {
 	switch severity {
-	case domain.IncidentSeverityWarning:
-		return incidentv1.IncidentSeverity_INCIDENT_SEVERITY_WARNING
-	case domain.IncidentSeverityError:
-		return incidentv1.IncidentSeverity_INCIDENT_SEVERITY_ERROR
+	case domain.IncidentSeverityLow:
+		return incidentv1.IncidentSeverity_INCIDENT_SEVERITY_LOW
+	case domain.IncidentSeverityMedium:
+		return incidentv1.IncidentSeverity_INCIDENT_SEVERITY_MEDIUM
+	case domain.IncidentSeverityHigh:
+		return incidentv1.IncidentSeverity_INCIDENT_SEVERITY_HIGH
 	case domain.IncidentSeverityCritical:
 		return incidentv1.IncidentSeverity_INCIDENT_SEVERITY_CRITICAL
 	default:
@@ -478,14 +482,16 @@ func (h *IncidentHandler) domainSeverityToProto(severity domain.IncidentSeverity
 // protoSeverityToDomain конвертирует серьезность protobuf в домен
 func (h *IncidentHandler) protoSeverityToDomain(severity incidentv1.IncidentSeverity) domain.IncidentSeverity {
 	switch severity {
-	case incidentv1.IncidentSeverity_INCIDENT_SEVERITY_WARNING:
-		return domain.IncidentSeverityWarning
-	case incidentv1.IncidentSeverity_INCIDENT_SEVERITY_ERROR:
-		return domain.IncidentSeverityError
+	case incidentv1.IncidentSeverity_INCIDENT_SEVERITY_LOW:
+		return domain.IncidentSeverityLow
+	case incidentv1.IncidentSeverity_INCIDENT_SEVERITY_MEDIUM:
+		return domain.IncidentSeverityMedium
+	case incidentv1.IncidentSeverity_INCIDENT_SEVERITY_HIGH:
+		return domain.IncidentSeverityHigh
 	case incidentv1.IncidentSeverity_INCIDENT_SEVERITY_CRITICAL:
 		return domain.IncidentSeverityCritical
 	default:
-		return domain.IncidentSeverityWarning
+		return domain.IncidentSeverityLow
 	}
 }
 

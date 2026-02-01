@@ -33,6 +33,7 @@ var ErrConflict = errors.New(errors.ErrConflict, "user already exists")
 type TokenPair struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
+	TenantID     string `json:"tenant_id"`
 }
 
 // APIKeyPair структура для хранения пары API ключей
@@ -151,7 +152,7 @@ func (s *Service) CreateAPIKey(ctx context.Context, tenantID, name string) (*API
 		SecretHash: secretHash,
 		Name:       name,
 		IsActive:   true,
-		ExpiresAt:  time.Now().UTC().Add(365 * 24 * time.Hour), // Срок действия 1 год
+		ExpiresAt:  func() *time.Time { t := time.Now().UTC().Add(365 * 24 * time.Hour); return &t }(), // Срок действия 1 год
 		CreatedAt:  time.Now().UTC(),
 	}
 
@@ -289,16 +290,7 @@ func (s *Service) Login(ctx context.Context, email, password string) (*TokenPair
 		return nil, fmt.Errorf("failed to generate tokens: %w", err)
 	}
 
-	// Хешируем токены для безопасного хранения
-	accessTokenHash, err := s.tokenHasher.Hash(accessToken)
-	if err != nil {
-		s.log.Error("Failed to hash access token",
-			logger.String("email", email),
-			logger.String("user_id", user.ID),
-			logger.Error(err))
-		return nil, fmt.Errorf("failed to hash access token: %w", err)
-	}
-
+	// Хешируем refresh токен для безопасного хранения
 	refreshTokenHash, err := s.tokenHasher.Hash(refreshToken)
 	if err != nil {
 		s.log.Error("Failed to hash refresh token",
@@ -312,9 +304,8 @@ func (s *Service) Login(ctx context.Context, email, password string) (*TokenPair
 	session := &domain.Session{
 		ID:               uuid.New().String(),
 		UserID:           user.ID,
-		AccessTokenHash:  accessTokenHash,
 		RefreshTokenHash: refreshTokenHash,
-		ExpiresAt:        time.Now().UTC().Add(7 * 24 * time.Hour), // 7 дней
+		ExpiresAt:        func() *time.Time { t := time.Now().UTC().Add(7 * 24 * time.Hour); return &t }(), // 7 дней
 		CreatedAt:        time.Now().UTC(),
 	}
 
@@ -338,6 +329,7 @@ func (s *Service) Login(ctx context.Context, email, password string) (*TokenPair
 	return &TokenPair{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
+		TenantID:     user.TenantID,
 	}, nil
 }
 
@@ -431,12 +423,7 @@ func (s *Service) Register(ctx context.Context, email, password, tenantName stri
 		return nil, fmt.Errorf("failed to generate tokens: %w", err)
 	}
 
-	// Хешируем токены для безопасного хранения
-	accessTokenHash, err := s.tokenHasher.Hash(accessToken)
-	if err != nil {
-		return nil, fmt.Errorf("failed to hash access token: %w", err)
-	}
-
+	// Хешируем refresh токен для безопасного хранения
 	refreshTokenHash, err := s.tokenHasher.Hash(refreshToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash refresh token: %w", err)
@@ -446,9 +433,8 @@ func (s *Service) Register(ctx context.Context, email, password, tenantName stri
 	session := &domain.Session{
 		ID:               uuid.New().String(),
 		UserID:           user.ID,
-		AccessTokenHash:  accessTokenHash,
 		RefreshTokenHash: refreshTokenHash,
-		ExpiresAt:        time.Now().UTC().Add(7 * 24 * time.Hour),
+		ExpiresAt:        func() *time.Time { t := time.Now().UTC().Add(7 * 24 * time.Hour); return &t }(),
 		CreatedAt:        time.Now().UTC(),
 	}
 
@@ -462,6 +448,7 @@ func (s *Service) Register(ctx context.Context, email, password, tenantName stri
 	return &TokenPair{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
+		TenantID:     user.TenantID,
 	}, nil
 }
 
@@ -497,12 +484,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 		return nil, fmt.Errorf("failed to generate new tokens: %w", err)
 	}
 
-	// Хешируем новые токены для безопасного хранения
-	newAccessTokenHash, err := s.tokenHasher.Hash(newAccessToken)
-	if err != nil {
-		return nil, fmt.Errorf("failed to hash new access token: %w", err)
-	}
-
+	// Хешируем новый refresh токен для безопасного хранения
 	newRefreshTokenHash, err := s.tokenHasher.Hash(newRefreshToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash new refresh token: %w", err)
@@ -512,9 +494,8 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 	newSession := &domain.Session{
 		ID:               uuid.New().String(),
 		UserID:           claims.UserID,
-		AccessTokenHash:  newAccessTokenHash,
 		RefreshTokenHash: newRefreshTokenHash,
-		ExpiresAt:        time.Now().UTC().Add(7 * 24 * time.Hour),
+		ExpiresAt:        func() *time.Time { t := time.Now().UTC().Add(7 * 24 * time.Hour); return &t }(),
 		CreatedAt:        time.Now().UTC(),
 	}
 
@@ -528,6 +509,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 	return &TokenPair{
 		AccessToken:  newAccessToken,
 		RefreshToken: newRefreshToken,
+		TenantID:     claims.TenantID,
 	}, nil
 }
 

@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"time"
 
-	"UptimePingPlatform/services/core-service/internal/domain"
-	"UptimePingPlatform/services/core-service/internal/repository"
-	"UptimePingPlatform/services/core-service/internal/service/checker"
 	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/logger"
 	pkg_redis "UptimePingPlatform/pkg/redis"
+	"UptimePingPlatform/services/core-service/internal/domain"
+	"UptimePingPlatform/services/core-service/internal/repository"
+	"UptimePingPlatform/services/core-service/internal/service/checker"
 )
 
 // CheckService предоставляет бизнес-логику для выполнения проверок
@@ -42,14 +42,14 @@ func NewCheckService(
 
 // TaskMessage представляет сообщение из RabbitMQ
 type TaskMessage struct {
-	CheckID      string                 `json:"check_id"`
-	ExecutionID  string                 `json:"execution_id"`
-	Target       string                 `json:"target"`
-	Type         string                 `json:"type"`
-	Config       map[string]interface{} `json:"config"`
-	ScheduledAt  time.Time              `json:"scheduled_at"`
-	TenantID     string                 `json:"tenant_id"`
-	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	CheckID     string                 `json:"check_id"`
+	ExecutionID string                 `json:"execution_id"`
+	Target      string                 `json:"target"`
+	Type        string                 `json:"type"`
+	Config      map[string]interface{} `json:"config"`
+	ScheduledAt time.Time              `json:"scheduled_at"`
+	TenantID    string                 `json:"tenant_id"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // ExecuteCheck выполняет проверку (публичный метод для gRPC)
@@ -86,9 +86,9 @@ func (cs *CheckService) GetCheckStatus(ctx context.Context, checkID string) (*Ch
 	if err == nil && cachedResult != nil {
 		return &CheckStatus{
 			CheckID:        checkID,
-			IsHealthy:      cachedResult.Success,
-			ResponseTimeMs: cachedResult.DurationMs,
-			LastCheckedAt: cachedResult.CheckedAt.Format(time.RFC3339),
+			IsHealthy:      cachedResult.Status == "up",
+			ResponseTimeMs: cachedResult.ResponseTimeMs,
+			LastCheckedAt:  cachedResult.CreatedAt.Format(time.RFC3339),
 		}, nil
 	}
 
@@ -104,9 +104,9 @@ func (cs *CheckService) GetCheckStatus(ctx context.Context, checkID string) (*Ch
 
 	return &CheckStatus{
 		CheckID:        checkID,
-		IsHealthy:      result.Success,
-		ResponseTimeMs: result.DurationMs,
-		LastCheckedAt: result.CheckedAt.Format(time.RFC3339),
+		IsHealthy:      result.Status == "up",
+		ResponseTimeMs: result.ResponseTimeMs,
+		LastCheckedAt:  result.CreatedAt.Format(time.RFC3339),
 	}, nil
 }
 
@@ -127,10 +127,10 @@ func (cs *CheckService) GetCheckHistory(ctx context.Context, checkID string, lim
 
 // CheckStatus представляет статус проверки
 type CheckStatus struct {
-	CheckID        string `json:"check_id"`
-	IsHealthy      bool   `json:"is_healthy"`
-	ResponseTimeMs int64  `json:"response_time_ms"`
-	LastCheckedAt string `json:"last_checked_at"`
+	CheckID        string  `json:"check_id"`
+	IsHealthy      bool    `json:"is_healthy"`
+	ResponseTimeMs float64 `json:"response_time_ms"`
+	LastCheckedAt  string  `json:"last_checked_at"`
 }
 
 // ProcessTask обрабатывает задачу проверки
@@ -186,8 +186,8 @@ func (cs *CheckService) ProcessTask(ctx context.Context, message []byte) error {
 
 	cs.logger.Info("Check executed successfully",
 		logger.String("check_id", task.CheckID),
-		logger.Bool("success", result.Success),
-		logger.Int64("duration_ms", result.DurationMs),
+		logger.Bool("success", result.Status == "up"),
+		logger.Float64("duration_ms", result.ResponseTimeMs),
 	)
 
 	// Сохранение результата в БД
@@ -209,7 +209,7 @@ func (cs *CheckService) ProcessTask(ctx context.Context, message []byte) error {
 	}
 
 	// Если проверка неудачна → отправка в Incident Manager
-	if !result.Success {
+	if result.Status != "up" {
 		if err := cs.sendToIncidentManager(ctx, result, taskMessage.TenantID); err != nil {
 			cs.logger.Error("Failed to send to incident manager",
 				logger.String("check_id", task.CheckID),
@@ -282,12 +282,11 @@ func (cs *CheckService) executeCheck(ctx context.Context, checker checker.Checke
 		return nil, err
 	}
 
-	// Добавление метаданных
-	if result.Metadata == nil {
-		result.Metadata = make(map[string]string)
+	// Добавление метаданных в заголовки
+	if result.ResponseHeaders == nil {
+		result.ResponseHeaders = make(map[string]string)
 	}
-	result.Metadata["processed_at"] = time.Now().UTC().Format(time.RFC3339)
-	result.Metadata["service"] = "core-service"
+	result.ResponseHeaders["processed_at"] = time.Now().UTC().Format(time.RFC3339)
 
 	return result, nil
 }
@@ -364,7 +363,7 @@ func (cs *CheckService) sendToIncidentManager(ctx context.Context, result *domai
 	cs.logger.Info("Sending incident to incident manager",
 		logger.String("check_id", result.CheckID),
 		logger.String("tenant_id", tenantID),
-		logger.String("error", result.Error),
+		logger.String("error", result.ErrorMessage),
 	)
 
 	if cs.incidentManager == nil {

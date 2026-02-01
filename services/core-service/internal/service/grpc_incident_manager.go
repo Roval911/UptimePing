@@ -4,11 +4,13 @@ import (
 	"context"
 	"time"
 
+	"github.com/google/uuid"
+
 	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/logger"
+	incidentv1 "UptimePingPlatform/proto/api/incident/v1"
 	"UptimePingPlatform/services/core-service/internal/client"
 	"UptimePingPlatform/services/core-service/internal/domain"
-	incidentv1 "UptimePingPlatform/proto/api/incident/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -35,20 +37,22 @@ func (g *GRPCIncidentManager) CreateIncident(ctx context.Context, incident *Inci
 	)
 
 	// Создаем CheckResult из Incident для передачи в клиент
+	statusCode := &[]int{incident.StatusCode}[0] // nullable int
+
 	checkResult := &domain.CheckResult{
-		CheckID:     incident.CheckID,
-		ExecutionID: incident.ExecutionID,
-		Success:     false, // Инциденты создаются только для неудачных проверок
-		Error:       incident.Error,
-		StatusCode:  incident.StatusCode,
-		CheckedAt:   incident.CreatedAt,
-		Metadata:    make(map[string]string),
+		ID:              uuid.New().String(),
+		CheckID:         incident.CheckID,
+		Status:          "down", // Инциденты создаются только для неудачных проверок
+		ErrorMessage:    incident.Error,
+		StatusCode:      statusCode,
+		CreatedAt:       incident.CreatedAt,
+		ResponseHeaders: make(map[string]string),
 	}
-	
+
 	// Конвертируем Metadata из map[string]interface{} в map[string]string
 	for k, v := range incident.Metadata {
 		if str, ok := v.(string); ok {
-			checkResult.Metadata[k] = str
+			checkResult.ResponseHeaders[k] = str
 		}
 	}
 
@@ -114,7 +118,7 @@ func (g *GRPCIncidentManager) UpdateIncident(ctx context.Context, incidentID str
 	case IncidentStatusSuppressed:
 		protoStatus = incidentv1.IncidentStatus_INCIDENT_STATUS_ACKNOWLEDGED
 	}
-	
+
 	var protoSeverity incidentv1.IncidentSeverity
 	switch current.Severity {
 	case IncidentSeverityLow:
@@ -126,7 +130,7 @@ func (g *GRPCIncidentManager) UpdateIncident(ctx context.Context, incidentID str
 	case IncidentSeverityCritical:
 		protoSeverity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_CRITICAL
 	}
-	
+
 	updatedIncident, err := g.client.UpdateIncident(ctx, incidentID, protoStatus, protoSeverity)
 	if err != nil {
 		g.logger.Error("Failed to update incident",
@@ -276,13 +280,13 @@ func (g *GRPCIncidentManager) GetActiveIncidents(ctx context.Context, tenantID s
 // convertFromProtoIncident конвертирует protobuf Incident в доменную модель
 func (g *GRPCIncidentManager) convertFromProtoIncident(protoIncident *incidentv1.Incident) *Incident {
 	incident := &Incident{
-		ID:          protoIncident.Id,
-		CheckID:     protoIncident.CheckId,
-		TenantID:    protoIncident.TenantId,
-		Error:       protoIncident.ErrorMessage,
-		CreatedAt:   time.Now(), // Нет временных полей в protobuf
-		UpdatedAt:   time.Now(),
-		Metadata:    make(map[string]interface{}),
+		ID:        protoIncident.Id,
+		CheckID:   protoIncident.CheckId,
+		TenantID:  protoIncident.TenantId,
+		Error:     protoIncident.ErrorMessage,
+		CreatedAt: time.Now(), // Нет временных полей в protobuf
+		UpdatedAt: time.Now(),
+		Metadata:  make(map[string]interface{}),
 	}
 
 	// Конвертация статуса

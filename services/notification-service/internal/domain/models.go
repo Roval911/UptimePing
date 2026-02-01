@@ -4,6 +4,18 @@ import (
 	"time"
 )
 
+// NotificationChannel представляет канал уведомлений
+type NotificationChannel struct {
+	ID        string                 `json:"id" db:"id"`
+	TenantID  string                 `json:"tenant_id" db:"tenant_id"`
+	Name      string                 `json:"name" db:"name"`
+	Type      string                 `json:"type" db:"type"`
+	Config    map[string]interface{} `json:"config" db:"config"`
+	IsActive  bool                   `json:"is_active" db:"is_active"`
+	CreatedAt time.Time              `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time              `json:"updated_at" db:"updated_at"`
+}
+
 // Event представляет событие системы
 type Event struct {
 	ID        string                 `json:"id"`
@@ -20,37 +32,37 @@ type Event struct {
 
 // Notification представляет уведомление
 type Notification struct {
-	ID          string                 `json:"id"`
-	EventID     string                 `json:"event_id"`
-	Type        string                 `json:"type"`
-	Channel     string                 `json:"channel"`
-	Recipient   string                 `json:"recipient"`
-	Subject     string                 `json:"subject"`
-	Body        string                 `json:"body"`
-	TenantID    string                 `json:"tenant_id"`
-	Severity    string                 `json:"severity"`
-	Status      string                 `json:"status"`
-	Data        map[string]interface{} `json:"data"`
-	Metadata    map[string]interface{} `json:"metadata"`
-	CreatedAt   time.Time              `json:"created_at"`
-	SentAt      *time.Time             `json:"sent_at,omitempty"`
-	Error       string                 `json:"error,omitempty"`
-	RetryCount  int                    `json:"retry_count"`
-	MaxRetries  int                    `json:"max_retries"`
+	ID         string                 `json:"id"`
+	EventID    string                 `json:"event_id"`
+	Type       string                 `json:"type"`
+	Channel    string                 `json:"channel"`
+	Recipient  string                 `json:"recipient"`
+	Subject    string                 `json:"subject"`
+	Body       string                 `json:"body"`
+	TenantID   string                 `json:"tenant_id"`
+	Severity   string                 `json:"severity"`
+	Status     string                 `json:"status"`
+	Data       map[string]interface{} `json:"data"`
+	Metadata   map[string]interface{} `json:"metadata"`
+	CreatedAt  time.Time              `json:"created_at"`
+	SentAt     *time.Time             `json:"sent_at,omitempty"`
+	Error      string                 `json:"error,omitempty"`
+	RetryCount int                    `json:"retry_count"`
+	MaxRetries int                    `json:"max_retries"`
 }
 
 // NotificationGroup представляет группу уведомлений
 type NotificationGroup struct {
-	ID           string                    `json:"id"`
-	Type         string                    `json:"type"`
-	Channel      string                    `json:"channel"`
-	Recipient    string                    `json:"recipient"`
-	TenantID     string                    `json:"tenant_id"`
-	Notifications []*Notification          `json:"notifications"`
-	GroupData    map[string]interface{}    `json:"group_data"`
-	Metadata     map[string]interface{}    `json:"metadata"`
-	CreatedAt    time.Time                 `json:"created_at"`
-	ProcessedAt  *time.Time                `json:"processed_at,omitempty"`
+	ID            string                 `json:"id"`
+	Type          string                 `json:"type"`
+	Channel       string                 `json:"channel"`
+	Recipient     string                 `json:"recipient"`
+	TenantID      string                 `json:"tenant_id"`
+	Notifications []*Notification        `json:"notifications"`
+	GroupData     map[string]interface{} `json:"group_data"`
+	Metadata      map[string]interface{} `json:"metadata"`
+	CreatedAt     time.Time              `json:"created_at"`
+	ProcessedAt   *time.Time             `json:"processed_at,omitempty"`
 }
 
 // Статусы уведомлений
@@ -72,19 +84,19 @@ const (
 
 // Типы уведомлений
 const (
-	NotificationTypeIncidentCreated = "incident.created"
-	NotificationTypeIncidentUpdated = "incident.updated"
+	NotificationTypeIncidentCreated  = "incident.created"
+	NotificationTypeIncidentUpdated  = "incident.updated"
 	NotificationTypeIncidentResolved = "incident.resolved"
-	NotificationTypeCheckFailed     = "check.failed"
-	NotificationTypeCheckRecovered  = "check.recovered"
-	NotificationTypeSystemAlert     = "system.alert"
+	NotificationTypeCheckFailed      = "check.failed"
+	NotificationTypeCheckRecovered   = "check.recovered"
+	NotificationTypeSystemAlert      = "system.alert"
 )
 
 // Каналы уведомлений
 const (
-	ChannelEmail = "email"
-	ChannelSlack = "slack"
-	ChannelSMS   = "sms"
+	ChannelEmail   = "email"
+	ChannelSlack   = "slack"
+	ChannelSMS     = "sms"
 	ChannelWebhook = "webhook"
 )
 
@@ -99,8 +111,8 @@ func (e *Event) ShouldGroup() bool {
 	// Группируем только инциденты и проверки
 	switch e.Type {
 	case NotificationTypeIncidentCreated,
-		 NotificationTypeIncidentUpdated,
-		 NotificationTypeCheckFailed:
+		NotificationTypeIncidentUpdated,
+		NotificationTypeCheckFailed:
 		return true
 	default:
 		return false
@@ -159,19 +171,19 @@ func (n *Notification) IsExpired() bool {
 // ToMap преобразует уведомление в map для шаблонов
 func (n *Notification) ToMap() map[string]interface{} {
 	result := map[string]interface{}{
-		"id":           n.ID,
-		"event_id":     n.EventID,
-		"type":         n.Type,
-		"channel":      n.Channel,
-		"recipient":    n.Recipient,
-		"subject":      n.Subject,
-		"body":         n.Body,
-		"tenant_id":    n.TenantID,
-		"severity":     n.Severity,
-		"status":       n.Status,
-		"created_at":   n.CreatedAt,
-		"retry_count":  n.RetryCount,
-		"max_retries":  n.MaxRetries,
+		"id":          n.ID,
+		"event_id":    n.EventID,
+		"type":        n.Type,
+		"channel":     n.Channel,
+		"recipient":   n.Recipient,
+		"subject":     n.Subject,
+		"body":        n.Body,
+		"tenant_id":   n.TenantID,
+		"severity":    n.Severity,
+		"status":      n.Status,
+		"created_at":  n.CreatedAt,
+		"retry_count": n.RetryCount,
+		"max_retries": n.MaxRetries,
 	}
 
 	// Добавляем данные если есть

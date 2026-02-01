@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"UptimePingPlatform/pkg/errors"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/validation"
@@ -113,23 +115,30 @@ func (g *GraphQLChecker) Execute(task *domain.Task) (*domain.CheckResult, error)
 	success := len(graphqlResp.Errors) == 0
 
 	// Формирование результата
-	result := &domain.CheckResult{
-		CheckID:      task.CheckID,
-		ExecutionID:  task.ExecutionID,
-		Success:      success,
-		DurationMs:   duration.Milliseconds(),
-		StatusCode:   resp.StatusCode,
-		ResponseBody: string(body),
-		CheckedAt:    time.Now().UTC(),
-		Metadata:     make(map[string]string),
+	status := "down"
+	if success {
+		status = "up"
 	}
 
-	// Добавление метаданных
-	result.Metadata["content_type"] = resp.Header.Get("Content-Type")
-	result.Metadata["body_size"] = fmt.Sprintf("%d", len(body))
-	result.Metadata["query"] = graphqlConfig.Query
+	statusCode := &[]int{resp.StatusCode}[0] // nullable int
+
+	result := &domain.CheckResult{
+		ID:              uuid.New().String(),
+		CheckID:         task.CheckID,
+		Status:          status,
+		ResponseTimeMs:  float64(duration.Nanoseconds()) / 1000000.0, // Convert to milliseconds as float64
+		StatusCode:      statusCode,
+		ResponseBody:    string(body),
+		ResponseHeaders: make(map[string]string),
+		CreatedAt:       time.Now().UTC(),
+	}
+
+	// Добавление заголовков в метаданные
+	result.ResponseHeaders["content_type"] = resp.Header.Get("Content-Type")
+	result.ResponseHeaders["body_size"] = fmt.Sprintf("%d", len(body))
+	result.ResponseHeaders["query"] = graphqlConfig.Query
 	if graphqlConfig.OperationName != "" {
-		result.Metadata["operation_name"] = graphqlConfig.OperationName
+		result.ResponseHeaders["operation_name"] = graphqlConfig.OperationName
 	}
 
 	if !success {
@@ -137,7 +146,7 @@ func (g *GraphQLChecker) Execute(task *domain.Task) (*domain.CheckResult, error)
 		for _, gqlErr := range graphqlResp.Errors {
 			errorMessages = append(errorMessages, gqlErr.Message)
 		}
-		result.Error = fmt.Sprintf("GraphQL errors: %s", strings.Join(errorMessages, "; "))
+		result.ErrorMessage = fmt.Sprintf("GraphQL errors: %s", strings.Join(errorMessages, "; "))
 	}
 
 	return result, nil
@@ -197,7 +206,7 @@ func (g *GraphQLChecker) ValidateConfig(config map[string]interface{}) error {
 					logger.String("timeout", timeoutStr))
 				return errors.New(errors.ErrValidation, "invalid timeout")
 			}
-			
+
 			// Парсинг duration
 			duration, err := time.ParseDuration(timeoutStr)
 			if err != nil {
@@ -206,7 +215,7 @@ func (g *GraphQLChecker) ValidateConfig(config map[string]interface{}) error {
 					logger.Error(err))
 				return errors.Wrap(err, errors.ErrValidation, "invalid timeout format")
 			}
-			
+
 			// Проверка диапазона (1ms - 5 минут)
 			if duration < time.Millisecond || duration > 5*time.Minute {
 				g.logger.Debug("GraphQL config validation failed: timeout out of range",
@@ -279,16 +288,18 @@ func (g *GraphQLChecker) parseGraphQLResponse(body string) (*GraphQLResponse, er
 
 // createErrorResult создает результат с ошибкой
 func (g *GraphQLChecker) createErrorResult(task *domain.Task, statusCode int, durationMs int64, err error) *domain.CheckResult {
+	statusCodePtr := &[]int{statusCode}[0] // nullable int
+
 	return &domain.CheckResult{
-		CheckID:      task.CheckID,
-		ExecutionID:  task.ExecutionID,
-		Success:      false,
-		DurationMs:   durationMs,
-		StatusCode:   statusCode,
-		Error:        err.Error(),
-		ResponseBody: "",
-		CheckedAt:    time.Now().UTC(),
-		Metadata:     make(map[string]string),
+		ID:              uuid.New().String(),
+		CheckID:         task.CheckID,
+		Status:          "down",
+		ResponseTimeMs:  float64(durationMs),
+		StatusCode:      statusCodePtr,
+		ErrorMessage:    err.Error(),
+		ResponseBody:    "",
+		ResponseHeaders: make(map[string]string),
+		CreatedAt:       time.Now().UTC(),
 	}
 }
 

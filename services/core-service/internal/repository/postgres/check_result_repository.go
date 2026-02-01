@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"UptimePingPlatform/pkg/errors"
@@ -31,42 +32,34 @@ func NewCheckResultRepository(pool *pgxpool.Pool, logger logger.Logger) reposito
 func (r *CheckResultRepository) Save(ctx context.Context, result *domain.CheckResult) error {
 	r.logger.Debug("Saving check result to database",
 		logger.String("check_id", result.CheckID),
-		logger.String("execution_id", result.ExecutionID),
+		logger.String("status", result.Status),
 	)
 
 	query := `
 		INSERT INTO check_results (
-			id, check_id, status, response_time, response_code, 
-			response_body, error_message, location, created_at
+			id, check_id, status, response_time_ms, status_code, 
+			response_headers, response_body, error_message, created_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (id) DO UPDATE SET
 			status = EXCLUDED.status,
-			response_time = EXCLUDED.response_time,
-			response_code = EXCLUDED.response_code,
+			response_time_ms = EXCLUDED.response_time_ms,
+			status_code = EXCLUDED.status_code,
+			response_headers = EXCLUDED.response_headers,
 			response_body = EXCLUDED.response_body,
 			error_message = EXCLUDED.error_message,
-			location = EXCLUDED.location,
 			created_at = EXCLUDED.created_at
 	`
 
-	// Конвертация статуса
-	status := "unknown"
-	if result.Success {
-		status = "up"
-	} else {
-		status = "down"
-	}
-
 	_, err := r.pool.Exec(ctx, query,
-		result.CheckID, // Используем CheckID как ID для простоты
+		result.ID,
 		result.CheckID,
-		status,
-		float64(result.DurationMs)/1000.0, // Конвертация в секунды
+		result.Status,
+		result.ResponseTimeMs,
 		result.StatusCode,
+		result.ResponseHeaders,
 		result.ResponseBody,
-		result.Error,
-		result.CheckID, // location = check_id
-		result.CheckedAt,
+		result.ErrorMessage,
+		result.CreatedAt,
 	)
 
 	if err != nil {
@@ -91,21 +84,21 @@ func (r *CheckResultRepository) GetByID(ctx context.Context, id string) (*domain
 	)
 
 	query := `
-		SELECT id, check_id, status, response_time, response_code, 
-			   response_body, error_message, location, created_at
+		SELECT id, check_id, status, response_time_ms, status_code, 
+			   response_headers, response_body, error_message, created_at
 		FROM check_results 
 		WHERE id = $1
 	`
 
 	var (
-		checkID       string
-		status        string
-		responseTime  float64
-		responseCode  sql.NullInt32
-		responseBody  sql.NullString
-		errorMessage  sql.NullString
-		location      string
-		createdAt     time.Time
+		checkID         string
+		status          string
+		responseTime    float64
+		responseCode    sql.NullInt32
+		responseHeaders sql.NullString
+		responseBody    sql.NullString
+		errorMessage    sql.NullString
+		createdAt       time.Time
 	)
 
 	err := r.pool.QueryRow(ctx, query, id).Scan(
@@ -114,9 +107,9 @@ func (r *CheckResultRepository) GetByID(ctx context.Context, id string) (*domain
 		&status,
 		&responseTime,
 		&responseCode,
+		&responseHeaders,
 		&responseBody,
 		&errorMessage,
-		&location,
 		&createdAt,
 	)
 
@@ -133,15 +126,15 @@ func (r *CheckResultRepository) GetByID(ctx context.Context, id string) (*domain
 
 	// Конвертация в доменную модель
 	result := &domain.CheckResult{
-		CheckID:     checkID,
-		DurationMs:  int64(responseTime * 1000), // Конвертация в миллисекунды
-		CheckedAt:   createdAt,
-		Success:     status == "up",
-		Metadata:    make(map[string]string),
+		ID:             id,
+		CheckID:        checkID,
+		Status:         status,
+		ResponseTimeMs: responseTime,
+		CreatedAt:      createdAt,
 	}
 
 	if responseCode.Valid {
-		result.StatusCode = int(responseCode.Int32)
+		result.StatusCode = &[]int{int(responseCode.Int32)}[0]
 	}
 
 	if responseBody.Valid {
@@ -149,7 +142,16 @@ func (r *CheckResultRepository) GetByID(ctx context.Context, id string) (*domain
 	}
 
 	if errorMessage.Valid {
-		result.Error = errorMessage.String
+		result.ErrorMessage = errorMessage.String
+	}
+
+	if responseHeaders.Valid {
+		// Десериализация JSONB в map[string]string
+		if err := json.Unmarshal([]byte(responseHeaders.String), &result.ResponseHeaders); err != nil {
+			r.logger.Warn("Failed to unmarshal response headers",
+				logger.String("check_id", checkID),
+				logger.Error(err))
+		}
 	}
 
 	return result, nil
@@ -163,8 +165,8 @@ func (r *CheckResultRepository) GetByCheckID(ctx context.Context, checkID string
 	)
 
 	query := `
-		SELECT id, check_id, status, response_time, response_code, 
-			   response_body, error_message, location, created_at
+		SELECT id, check_id, status, response_time_ms, status_code, 
+			   response_headers, response_body, error_message, created_at
 		FROM check_results 
 		WHERE check_id = $1
 		ORDER BY created_at DESC
@@ -184,15 +186,15 @@ func (r *CheckResultRepository) GetByCheckID(ctx context.Context, checkID string
 	var results []*domain.CheckResult
 	for rows.Next() {
 		var (
-			id            string
-			checkID       string
-			status        string
-			responseTime  float64
-			responseCode  sql.NullInt32
-			responseBody  sql.NullString
-			errorMessage  sql.NullString
-			location      string
-			createdAt     time.Time
+			id              string
+			checkID         string
+			status          string
+			responseTime    float64
+			responseCode    sql.NullInt32
+			responseBody    sql.NullString
+			errorMessage    sql.NullString
+			responseHeaders sql.NullString
+			createdAt       time.Time
 		)
 
 		if err := rows.Scan(
@@ -201,9 +203,9 @@ func (r *CheckResultRepository) GetByCheckID(ctx context.Context, checkID string
 			&status,
 			&responseTime,
 			&responseCode,
+			&responseHeaders,
 			&responseBody,
 			&errorMessage,
-			&location,
 			&createdAt,
 		); err != nil {
 			r.logger.Error("Failed to scan check result row",
@@ -213,15 +215,16 @@ func (r *CheckResultRepository) GetByCheckID(ctx context.Context, checkID string
 		}
 
 		result := &domain.CheckResult{
-			CheckID:     checkID,
-			DurationMs:  int64(responseTime * 1000),
-			CheckedAt:   createdAt,
-			Success:     status == "up",
-			Metadata:    make(map[string]string),
+			ID:              id,
+			CheckID:         checkID,
+			Status:          status,
+			ResponseTimeMs:  responseTime,
+			CreatedAt:       createdAt,
+			ResponseHeaders: make(map[string]string),
 		}
 
 		if responseCode.Valid {
-			result.StatusCode = int(responseCode.Int32)
+			result.StatusCode = &[]int{int(responseCode.Int32)}[0]
 		}
 
 		if responseBody.Valid {
@@ -229,7 +232,16 @@ func (r *CheckResultRepository) GetByCheckID(ctx context.Context, checkID string
 		}
 
 		if errorMessage.Valid {
-			result.Error = errorMessage.String
+			result.ErrorMessage = errorMessage.String
+		}
+
+		if responseHeaders.Valid {
+			// Десериализация JSONB в map[string]string
+			if err := json.Unmarshal([]byte(responseHeaders.String), &result.ResponseHeaders); err != nil {
+				r.logger.Warn("Failed to unmarshal response headers",
+					logger.String("check_id", checkID),
+					logger.Error(err))
+			}
 		}
 
 		results = append(results, result)
@@ -255,14 +267,14 @@ func (r *CheckResultRepository) GetLatestByCheckID(ctx context.Context, checkID 
 // GetByTimeRange получает результаты за период времени
 func (r *CheckResultRepository) GetByTimeRange(ctx context.Context, startTime, endTime time.Time, limit int) ([]*domain.CheckResult, error) {
 	r.logger.Debug("Getting check results by time range",
-			logger.String("start_time", startTime.String()),
-			logger.String("end_time", endTime.String()),
-			logger.Int("limit", limit),
-		)
+		logger.String("start_time", startTime.String()),
+		logger.String("end_time", endTime.String()),
+		logger.Int("limit", limit),
+	)
 
 	query := `
-		SELECT id, check_id, status, response_time, response_code, 
-			   response_body, error_message, location, created_at
+		SELECT id, check_id, status, response_time_ms, status_code, 
+			   response_headers, response_body, error_message, created_at
 		FROM check_results 
 		WHERE created_at BETWEEN $1 AND $2
 		ORDER BY created_at DESC
@@ -281,15 +293,15 @@ func (r *CheckResultRepository) GetByTimeRange(ctx context.Context, startTime, e
 	var results []*domain.CheckResult
 	for rows.Next() {
 		var (
-			id            string
-			checkID       string
-			status        string
-			responseTime  float64
-			responseCode  sql.NullInt32
-			responseBody  sql.NullString
-			errorMessage  sql.NullString
-			location      string
-			createdAt     time.Time
+			id              string
+			checkID         string
+			status          string
+			responseTime    float64
+			responseCode    sql.NullInt32
+			responseBody    sql.NullString
+			errorMessage    sql.NullString
+			responseHeaders sql.NullString
+			createdAt       time.Time
 		)
 
 		if err := rows.Scan(
@@ -298,9 +310,9 @@ func (r *CheckResultRepository) GetByTimeRange(ctx context.Context, startTime, e
 			&status,
 			&responseTime,
 			&responseCode,
+			&responseHeaders,
 			&responseBody,
 			&errorMessage,
-			&location,
 			&createdAt,
 		); err != nil {
 			r.logger.Error("Failed to scan check result row",
@@ -310,15 +322,16 @@ func (r *CheckResultRepository) GetByTimeRange(ctx context.Context, startTime, e
 		}
 
 		result := &domain.CheckResult{
-			CheckID:     checkID,
-			DurationMs:  int64(responseTime * 1000),
-			CheckedAt:   createdAt,
-			Success:     status == "up",
-			Metadata:    make(map[string]string),
+			ID:              id,
+			CheckID:         checkID,
+			Status:          status,
+			ResponseTimeMs:  responseTime,
+			CreatedAt:       createdAt,
+			ResponseHeaders: make(map[string]string),
 		}
 
 		if responseCode.Valid {
-			result.StatusCode = int(responseCode.Int32)
+			result.StatusCode = &[]int{int(responseCode.Int32)}[0]
 		}
 
 		if responseBody.Valid {
@@ -326,7 +339,16 @@ func (r *CheckResultRepository) GetByTimeRange(ctx context.Context, startTime, e
 		}
 
 		if errorMessage.Valid {
-			result.Error = errorMessage.String
+			result.ErrorMessage = errorMessage.String
+		}
+
+		if responseHeaders.Valid {
+			// Десериализация JSONB в map[string]string
+			if err := json.Unmarshal([]byte(responseHeaders.String), &result.ResponseHeaders); err != nil {
+				r.logger.Warn("Failed to unmarshal response headers",
+					logger.String("check_id", checkID),
+					logger.Error(err))
+			}
 		}
 
 		results = append(results, result)
@@ -338,14 +360,14 @@ func (r *CheckResultRepository) GetByTimeRange(ctx context.Context, startTime, e
 // GetFailedChecks получает все неудачные проверки за период
 func (r *CheckResultRepository) GetFailedChecks(ctx context.Context, startTime, endTime time.Time, limit int) ([]*domain.CheckResult, error) {
 	r.logger.Debug("Getting failed check results",
-			logger.String("start_time", startTime.String()),
-			logger.String("end_time", endTime.String()),
-			logger.Int("limit", limit),
-		)
+		logger.String("start_time", startTime.String()),
+		logger.String("end_time", endTime.String()),
+		logger.Int("limit", limit),
+	)
 
 	query := `
-		SELECT id, check_id, status, response_time, response_code, 
-			   response_body, error_message, location, created_at
+		SELECT id, check_id, status, response_time_ms, status_code, 
+			   response_headers, response_body, error_message, created_at
 		FROM check_results 
 		WHERE created_at BETWEEN $1 AND $2 AND status = 'down'
 		ORDER BY created_at DESC
@@ -364,15 +386,15 @@ func (r *CheckResultRepository) GetFailedChecks(ctx context.Context, startTime, 
 	var results []*domain.CheckResult
 	for rows.Next() {
 		var (
-			id            string
-			checkID       string
-			status        string
-			responseTime  float64
-			responseCode  sql.NullInt32
-			responseBody  sql.NullString
-			errorMessage  sql.NullString
-			location      string
-			createdAt     time.Time
+			id              string
+			checkID         string
+			status          string
+			responseTime    float64
+			responseCode    sql.NullInt32
+			responseBody    sql.NullString
+			errorMessage    sql.NullString
+			responseHeaders sql.NullString
+			createdAt       time.Time
 		)
 
 		if err := rows.Scan(
@@ -381,9 +403,9 @@ func (r *CheckResultRepository) GetFailedChecks(ctx context.Context, startTime, 
 			&status,
 			&responseTime,
 			&responseCode,
+			&responseHeaders,
 			&responseBody,
 			&errorMessage,
-			&location,
 			&createdAt,
 		); err != nil {
 			r.logger.Error("Failed to scan check result row",
@@ -393,15 +415,16 @@ func (r *CheckResultRepository) GetFailedChecks(ctx context.Context, startTime, 
 		}
 
 		result := &domain.CheckResult{
-			CheckID:     checkID,
-			DurationMs:  int64(responseTime * 1000),
-			CheckedAt:   createdAt,
-			Success:     false, // Всегда false для failed checks
-			Metadata:    make(map[string]string),
+			ID:              id,
+			CheckID:         checkID,
+			Status:          "down",
+			ResponseTimeMs:  responseTime,
+			CreatedAt:       createdAt,
+			ResponseHeaders: make(map[string]string),
 		}
 
 		if responseCode.Valid {
-			result.StatusCode = int(responseCode.Int32)
+			result.StatusCode = &[]int{int(responseCode.Int32)}[0]
 		}
 
 		if responseBody.Valid {
@@ -409,7 +432,16 @@ func (r *CheckResultRepository) GetFailedChecks(ctx context.Context, startTime, 
 		}
 
 		if errorMessage.Valid {
-			result.Error = errorMessage.String
+			result.ErrorMessage = errorMessage.String
+		}
+
+		if responseHeaders.Valid {
+			// Десериализация JSONB в map[string]string
+			if err := json.Unmarshal([]byte(responseHeaders.String), &result.ResponseHeaders); err != nil {
+				r.logger.Warn("Failed to unmarshal response headers",
+					logger.String("check_id", checkID),
+					logger.Error(err))
+			}
 		}
 
 		results = append(results, result)
@@ -461,11 +493,11 @@ func (r *CheckResultRepository) GetStats(ctx context.Context, startTime, endTime
 	`
 
 	var (
-		totalChecks       int64
-		successfulChecks  int64
-		failedChecks      int64
-		unknownChecks     int64
-		avgResponseTime   sql.NullFloat64
+		totalChecks      int64
+		successfulChecks int64
+		failedChecks     int64
+		unknownChecks    int64
+		avgResponseTime  sql.NullFloat64
 	)
 
 	err := r.pool.QueryRow(ctx, query, startTime, endTime).Scan(
@@ -484,10 +516,10 @@ func (r *CheckResultRepository) GetStats(ctx context.Context, startTime, endTime
 	}
 
 	stats := &repository.ResultStats{
-		TotalChecks:       totalChecks,
-		SuccessfulChecks:  successfulChecks,
-		FailedChecks:      failedChecks,
-		UnknownChecks:     unknownChecks,
+		TotalChecks:      totalChecks,
+		SuccessfulChecks: successfulChecks,
+		FailedChecks:     failedChecks,
+		UnknownChecks:    unknownChecks,
 	}
 
 	if avgResponseTime.Valid {

@@ -71,10 +71,9 @@ func (h *CoreHandler) ExecuteCheck(ctx context.Context, req *corev1.ExecuteCheck
 	protoResult := h.convertCheckResultToProto(result)
 
 	h.LogOperationSuccess(ctx, "ExecuteCheck", map[string]interface{}{
-		"check_id":     req.CheckId,
-		"execution_id": result.ExecutionID,
-		"success":      result.Success,
-		"duration_ms":  result.DurationMs,
+		"check_id":    req.CheckId,
+		"success":     result.Status == "up",
+		"duration_ms": result.ResponseTimeMs,
 	})
 
 	return protoResult, nil
@@ -110,12 +109,12 @@ func (h *CoreHandler) GetCheckStatus(ctx context.Context, req *corev1.GetCheckSt
 		CheckId:        req.CheckId,
 		IsHealthy:      checkStatus.IsHealthy,
 		ResponseTimeMs: int32(checkStatus.ResponseTimeMs),
-		LastCheckedAt: checkStatus.LastCheckedAt,
+		LastCheckedAt:  checkStatus.LastCheckedAt,
 	}
 
 	h.LogOperationSuccess(ctx, "GetCheckStatus", map[string]interface{}{
-		"check_id":        req.CheckId,
-		"is_healthy":      checkStatus.IsHealthy,
+		"check_id":         req.CheckId,
+		"is_healthy":       checkStatus.IsHealthy,
 		"response_time_ms": checkStatus.ResponseTimeMs,
 	})
 
@@ -196,15 +195,19 @@ func (h *CoreHandler) convertCheckResultToProto(result *domain.CheckResult) *cor
 		return nil
 	}
 
+	statusCode := int32(0)
+	if result.StatusCode != nil {
+		statusCode = int32(*result.StatusCode)
+	}
+
 	return &corev1.CheckResult{
 		CheckId:      result.CheckID,
-		ExecutionId:  result.ExecutionID,
-		Success:      result.Success,
-		DurationMs:   int32(result.DurationMs),
-		StatusCode:   int32(result.StatusCode),
-		Error:        result.Error,
+		Success:      result.Status == "up",
+		DurationMs:   int32(result.ResponseTimeMs),
+		StatusCode:   statusCode,
+		Error:        result.ErrorMessage,
 		ResponseBody: result.ResponseBody,
-		CheckedAt:    result.CheckedAt.Format(time.RFC3339),
+		CheckedAt:    result.CreatedAt.Format(time.RFC3339),
 	}
 }
 

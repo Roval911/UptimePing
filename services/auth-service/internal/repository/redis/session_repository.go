@@ -30,10 +30,13 @@ func (r *SessionRepository) Create(ctx context.Context, session *domain.Session)
 	}
 
 	// Устанавливаем TTL как разницу между ExpiresAt и текущим временем
-	ttl := time.Until(session.ExpiresAt)
+	var ttl time.Duration
+	if session.ExpiresAt != nil {
+		ttl = time.Until(*session.ExpiresAt)
+	}
 
-	// Используем хэш публичного токена как ключ
-	key := fmt.Sprintf("session:access:%s", session.AccessTokenHash)
+	// Используем ID сессии как ключ
+	key := fmt.Sprintf("session:%s", session.ID)
 
 	// Сохраняем сессию в Redis
 	err = r.client.Set(ctx, key, sessionData, ttl).Err()

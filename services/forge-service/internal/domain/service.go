@@ -2,13 +2,24 @@ package domain
 
 import "time"
 
+// ProtoTemplate представляет шаблон прототипа
+type ProtoTemplate struct {
+	ID          string    `json:"id" db:"id"`
+	Name        string    `json:"name" db:"name"`
+	Content     string    `json:"content" db:"content"`
+	Version     string    `json:"version" db:"version"`
+	Description string    `json:"description" db:"description"`
+	CreatedAt   time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
+}
+
 // Service представляет gRPC сервис
 type Service struct {
-	Name    string    `json:"name"`
-	Package string    `json:"package"`
-	Host    string    `json:"host"`
-	Port    int       `json:"port"`
-	Methods []Method  `json:"methods"`
+	Name    string   `json:"name"`
+	Package string   `json:"package"`
+	Host    string   `json:"host"`
+	Port    int      `json:"port"`
+	Methods []Method `json:"methods"`
 }
 
 // Method представляет метод gRPC сервиса
@@ -20,9 +31,9 @@ type Method struct {
 
 // Message представляет сообщение protobuf
 type Message struct {
-	Name    string                 `json:"name"`
-	Package string                 `json:"package"`
-	Fields  []Field                `json:"fields"`
+	Name    string  `json:"name"`
+	Package string  `json:"package"`
+	Fields  []Field `json:"fields"`
 }
 
 // Field представляет поле сообщения
@@ -34,8 +45,8 @@ type Field struct {
 
 // Enum представляет enum protobuf
 type Enum struct {
-	Name    string     `json:"name"`
-	Package string     `json:"package"`
+	Name    string      `json:"name"`
+	Package string      `json:"package"`
 	Values  []EnumValue `json:"values"`
 }
 
@@ -51,31 +62,31 @@ type TaskType string
 const (
 	TaskTypeHTTP    TaskType = "http"
 	TaskTypeHTTPS   TaskType = "https"
-	TaskTypeTCP    TaskType = "tcp"
-	TaskTypeICMP   TaskType = "icmp"
-	TaskTypeGRPC   TaskType = "grpc"
+	TaskTypeTCP     TaskType = "tcp"
+	TaskTypeICMP    TaskType = "icmp"
+	TaskTypeGRPC    TaskType = "grpc"
 	TaskTypeGraphQL TaskType = "graphql"
 )
 
 // Task представляет задачу проверки
 type Task struct {
-	CheckID    string                 `json:"check_id"`
-	Target     string                 `json:"target"`
-	Type       TaskType               `json:"type"`
+	CheckID     string                 `json:"check_id"`
+	Target      string                 `json:"target"`
+	Type        TaskType               `json:"type"`
 	ExecutionID string                 `json:"execution_id"`
-	CreatedAt  time.Time              `json:"created_at"`
-	Config     map[string]interface{} `json:"config"`
+	CreatedAt   time.Time              `json:"created_at"`
+	Config      map[string]interface{} `json:"config"`
 }
 
 // CheckResult представляет результат проверки
 type CheckResult struct {
 	CheckID      string            `json:"check_id"`
-	ExecutionID   string            `json:"execution_id"`
+	ExecutionID  string            `json:"execution_id"`
 	Type         TaskType          `json:"type"`
 	Target       string            `json:"target"`
 	Success      bool              `json:"success"`
 	StatusCode   int               `json:"status_code"`
-	ResponseTime  int64             `json:"response_time"`
+	ResponseTime int64             `json:"response_time"`
 	Error        string            `json:"error,omitempty"`
 	CheckedAt    time.Time         `json:"checked_at"`
 	Metadata     map[string]string `json:"metadata"`
@@ -97,12 +108,12 @@ func NewTask(checkID, target string, taskType TaskType, executionID string, crea
 func NewCheckResult(checkID, executionID string, taskType TaskType, target string, success bool, statusCode int, responseTime int64) *CheckResult {
 	return &CheckResult{
 		CheckID:      checkID,
-		ExecutionID:   executionID,
+		ExecutionID:  executionID,
 		Type:         taskType,
 		Target:       target,
 		Success:      success,
 		StatusCode:   statusCode,
-		ResponseTime:  responseTime,
+		ResponseTime: responseTime,
 		CheckedAt:    time.Now().UTC(),
 		Metadata:     make(map[string]string),
 	}

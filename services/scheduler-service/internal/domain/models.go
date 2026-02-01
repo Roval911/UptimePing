@@ -176,52 +176,45 @@ func (c *Check) Validate() error {
 
 // Schedule представляет расписание выполнения проверки
 type Schedule struct {
-	ID             string     `json:"id" db:"id"`
-	CheckID        string     `json:"check_id" db:"check_id"`
-	CronExpression string     `json:"cron_expression" db:"cron_expression"`
-	NextRun        *time.Time `json:"next_run" db:"next_run"`
-	LastRun        *time.Time `json:"last_run" db:"last_run"`
-	IsActive       bool       `json:"is_active" db:"is_active"`
-	Priority       Priority   `json:"priority" db:"priority"`
-	Timezone       string     `json:"timezone" db:"timezone"`
-	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at" db:"updated_at"`
+	ID        string     `json:"id" db:"id"`
+	CheckID   string     `json:"check_id" db:"check_id"`
+	NextRunAt *time.Time `json:"next_run_at" db:"next_run_at"`
+	LastRunAt *time.Time `json:"last_run_at" db:"last_run_at"`
+	Status    string     `json:"status" db:"status"`
+	CreatedAt time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at" db:"updated_at"`
 }
 
 // IsActive проверяет, активно ли расписание
 func (s *Schedule) IsScheduleActive() bool {
-	return s.IsActive
+	return s.Status == "pending"
 }
 
 // ShouldRun проверяет, пора ли выполнять проверку по расписанию
 func (s *Schedule) ShouldRun() bool {
-	if !s.IsActive {
+	if s.Status != "pending" {
 		return false
 	}
 
-	if s.NextRun == nil {
+	if s.NextRunAt == nil {
 		return false
 	}
 
-	return time.Now().After(*s.NextRun)
+	return time.Now().After(*s.NextRunAt)
 }
 
-// UpdateNextRun обновляет время следующего запуска на основе cron выражения
+// UpdateNextRun обновляет время следующего запуска
 func (s *Schedule) UpdateNextRun() error {
-	if s.CronExpression == "" {
-		return fmt.Errorf("cron expression is required")
-	}
-
+	// Простое обновление на основе интервала проверки
+	// В реальной реализации здесь может быть сложная логика расписаний
 	now := time.Now()
-	s.LastRun = &now
+	s.LastRunAt = &now
+	s.UpdatedAt = now
 
-	// Вычисляем следующее время запуска
-	nextRun, err := calculateNextRunTime(s.CronExpression, now)
-	if err != nil {
-		return fmt.Errorf("failed to calculate next run time: %w", err)
-	}
+	// Устанавливаем следующий запуск через 1 минуту (заглушка)
+	nextRun := now.Add(1 * time.Minute)
+	s.NextRunAt = &nextRun
 
-	s.NextRun = &nextRun
 	return nil
 }
 
@@ -233,18 +226,16 @@ func (s *Schedule) Validate() error {
 	if s.CheckID == "" {
 		return fmt.Errorf("check id is required")
 	}
-	if s.CronExpression == "" {
-		return fmt.Errorf("cron expression is required")
-	}
 
-	// Валидация cron выражения
-	if err := validateCronExpression(s.CronExpression); err != nil {
-		return fmt.Errorf("invalid cron expression: %w", err)
+	// Валидация статуса
+	validStatuses := map[string]bool{
+		"pending":   true,
+		"running":   true,
+		"completed": true,
+		"failed":    true,
 	}
-
-	// Валидация приоритета
-	if s.Priority < PriorityLow || s.Priority > PriorityCritical {
-		return fmt.Errorf("priority must be between %d and %d", PriorityLow, PriorityCritical)
+	if !validStatuses[s.Status] {
+		return fmt.Errorf("invalid status: %s", s.Status)
 	}
 
 	return nil
@@ -254,14 +245,6 @@ func (s *Schedule) Validate() error {
 type CheckWithSchedule struct {
 	Check    Check     `json:"check"`
 	Schedule *Schedule `json:"schedule,omitempty"`
-}
-
-// GetEffectivePriority возвращает эффективный приоритет (из расписания или из проверки)
-func (cws *CheckWithSchedule) GetEffectivePriority() Priority {
-	if cws.Schedule != nil {
-		return cws.Schedule.Priority
-	}
-	return PriorityNormal // По умолчанию для новой структуры
 }
 
 // ShouldRun проверяет, пора ли выполнять проверку
@@ -277,7 +260,7 @@ func (cws *CheckWithSchedule) ShouldRun() bool {
 
 // UpdateNextRun обновляет время следующего запуска
 func (cws *CheckWithSchedule) UpdateNextRun() error {
-	if cws.Schedule != nil && cws.Schedule.IsScheduleActive() {
+	if cws.Schedule != nil {
 		return cws.Schedule.UpdateNextRun()
 	}
 

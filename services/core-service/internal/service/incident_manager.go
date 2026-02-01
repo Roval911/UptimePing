@@ -5,27 +5,27 @@ import (
 	"fmt"
 	"time"
 
-	"UptimePingPlatform/services/core-service/internal/domain"
 	incidentv1 "UptimePingPlatform/proto/api/incident/v1"
+	"UptimePingPlatform/services/core-service/internal/domain"
 )
 
 // IncidentManager определяет интерфейс для работы с инцидентами
 type IncidentManager interface {
 	// CreateIncident создает новый инцидент
 	CreateIncident(ctx context.Context, incident *Incident) (*Incident, error)
-	
+
 	// UpdateIncident обновляет существующий инцидент
 	UpdateIncident(ctx context.Context, incidentID string, updates *IncidentUpdates) (*Incident, error)
-	
+
 	// ResolveIncident закрывает инцидент
 	ResolveIncident(ctx context.Context, incidentID string) error
-	
+
 	// GetIncident получает инцидент по ID
 	GetIncident(ctx context.Context, incidentID string) (*Incident, error)
-	
+
 	// ListIncidents получает список инцидентов
 	ListIncidents(ctx context.Context, filters *IncidentFilters) ([]*Incident, error)
-	
+
 	// GetActiveIncidents получает активные инциденты
 	GetActiveIncidents(ctx context.Context, tenantID string) ([]*Incident, error)
 }
@@ -52,9 +52,9 @@ type Incident struct {
 type IncidentStatus string
 
 const (
-	IncidentStatusOpen     IncidentStatus = "open"
-	IncidentStatusClosed   IncidentStatus = "closed"
-	IncidentStatusResolved IncidentStatus = "resolved"
+	IncidentStatusOpen       IncidentStatus = "open"
+	IncidentStatusClosed     IncidentStatus = "closed"
+	IncidentStatusResolved   IncidentStatus = "resolved"
 	IncidentStatusSuppressed IncidentStatus = "suppressed"
 )
 
@@ -70,22 +70,22 @@ const (
 
 // IncidentUpdates обновления инцидента
 type IncidentUpdates struct {
-	Status     *IncidentStatus   `json:"status,omitempty"`
-	Severity   *IncidentSeverity `json:"severity,omitempty"`
-	Title      *string           `json:"title,omitempty"`
-	Descripton *string           `json:"description,omitempty"`
+	Status     *IncidentStatus        `json:"status,omitempty"`
+	Severity   *IncidentSeverity      `json:"severity,omitempty"`
+	Title      *string                `json:"title,omitempty"`
+	Descripton *string                `json:"description,omitempty"`
 	Metadata   map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // IncidentFilters фильтры для списка инцидентов
 type IncidentFilters struct {
-	TenantID   string            `json:"tenant_id,omitempty"`
-	Status     IncidentStatus    `json:"status,omitempty"`
-	Severity   IncidentSeverity  `json:"severity,omitempty"`
-	StartTime  *time.Time        `json:"start_time,omitempty"`
-	EndTime    *time.Time        `json:"end_time,omitempty"`
-	Limit      int               `json:"limit,omitempty"`
-	Offset     int               `json:"offset,omitempty"`
+	TenantID  string           `json:"tenant_id,omitempty"`
+	Status    IncidentStatus   `json:"status,omitempty"`
+	Severity  IncidentSeverity `json:"severity,omitempty"`
+	StartTime *time.Time       `json:"start_time,omitempty"`
+	EndTime   *time.Time       `json:"end_time,omitempty"`
+	Limit     int              `json:"limit,omitempty"`
+	Offset    int              `json:"offset,omitempty"`
 }
 
 // ConvertToProtoIncident конвертирует внутренний Incident в protobuf
@@ -95,7 +95,7 @@ func (i *Incident) ConvertToProtoIncident() *incidentv1.Incident {
 		CheckId:  i.CheckID,
 		TenantId: i.TenantID,
 	}
-	
+
 	// Конвертация статуса
 	switch i.Status {
 	case IncidentStatusOpen:
@@ -107,7 +107,7 @@ func (i *Incident) ConvertToProtoIncident() *incidentv1.Incident {
 	case IncidentStatusSuppressed:
 		protoIncident.Status = incidentv1.IncidentStatus_INCIDENT_STATUS_ACKNOWLEDGED
 	}
-	
+
 	// Конвертация серьезности
 	switch i.Severity {
 	case IncidentSeverityLow:
@@ -119,7 +119,7 @@ func (i *Incident) ConvertToProtoIncident() *incidentv1.Incident {
 	case IncidentSeverityCritical:
 		protoIncident.Severity = incidentv1.IncidentSeverity_INCIDENT_SEVERITY_CRITICAL
 	}
-	
+
 	return protoIncident
 }
 
@@ -127,29 +127,33 @@ func (i *Incident) ConvertToProtoIncident() *incidentv1.Incident {
 func CreateIncidentFromCheckResult(result *domain.CheckResult, tenantID string) *Incident {
 	status := IncidentStatusOpen
 	severity := IncidentSeverityMedium
-	
+
 	// Определяем серьезность на основе типа ошибки
-	if result.StatusCode >= 500 {
+	if result.StatusCode != nil && *result.StatusCode >= 500 {
 		severity = IncidentSeverityHigh
-	} else if result.StatusCode >= 400 {
+	} else if result.StatusCode != nil && *result.StatusCode >= 400 {
 		severity = IncidentSeverityMedium
-	} else if result.StatusCode == 0 {
+	} else if result.StatusCode != nil && *result.StatusCode == 0 {
 		severity = IncidentSeverityCritical // Connection refused, timeout, etc.
 	}
-	
+
 	title := fmt.Sprintf("Check failed: %s", result.CheckID)
-	description := fmt.Sprintf("Check %s failed with status %d", result.CheckID, result.StatusCode)
-	
-	if result.Error != "" {
-		description += fmt.Sprintf(": %s", result.Error)
+	statusCode := 0
+	if result.StatusCode != nil {
+		statusCode = *result.StatusCode
 	}
-	
-	// Конвертируем Metadata из map[string]string в map[string]interface{}
+	description := fmt.Sprintf("Check %s failed with status %d", result.CheckID, statusCode)
+
+	if result.ErrorMessage != "" {
+		description += fmt.Sprintf(": %s", result.ErrorMessage)
+	}
+
+	// Конвертируем ResponseHeaders из map[string]string в map[string]interface{}
 	metadata := make(map[string]interface{})
-	for k, v := range result.Metadata {
+	for k, v := range result.ResponseHeaders {
 		metadata[k] = v
 	}
-	
+
 	return &Incident{
 		CheckID:     result.CheckID,
 		TenantID:    tenantID,
@@ -157,10 +161,10 @@ func CreateIncidentFromCheckResult(result *domain.CheckResult, tenantID string) 
 		Description: description,
 		Status:      status,
 		Severity:    severity,
-		Error:       result.Error,
-		StatusCode:  result.StatusCode,
+		Error:       result.ErrorMessage,
+		StatusCode:  statusCode,
 		Metadata:    metadata,
-		CreatedAt:   result.CheckedAt,
-		UpdatedAt:   result.CheckedAt,
+		CreatedAt:   result.CreatedAt,
+		UpdatedAt:   result.CreatedAt,
 	}
 }

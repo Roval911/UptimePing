@@ -28,14 +28,14 @@ service IncidentService {
 message Incident {
   string id = 1;
   string check_id = 2;
-  string tenant_id = 3;
-  IncidentStatus status = 4;
-  IncidentSeverity severity = 5;
-  string first_seen = 6;
-  string last_seen = 7;
-  int32 count = 8;
-  string error_message = 9;
-  string error_hash = 10;
+  string title = 3;
+  string description = 4;
+  IncidentStatus status = 5;
+  IncidentSeverity severity = 6;
+  string started_at = 7;
+  string resolved_at = 8;
+  string created_at = 9;
+  string updated_at = 10;
 }
 
 // IncidentStatus определяет статус инцидента
@@ -49,17 +49,18 @@ enum IncidentStatus {
 // IncidentSeverity определяет серьезность инцидента
 enum IncidentSeverity {
   INCIDENT_SEVERITY_UNSPECIFIED = 0;
-  INCIDENT_SEVERITY_WARNING = 1;
-  INCIDENT_SEVERITY_ERROR = 2;
-  INCIDENT_SEVERITY_CRITICAL = 3;
+  INCIDENT_SEVERITY_LOW = 1;
+  INCIDENT_SEVERITY_MEDIUM = 2;
+  INCIDENT_SEVERITY_HIGH = 3;
+  INCIDENT_SEVERITY_CRITICAL = 4;
 }
 
 // CreateIncidentRequest содержит данные для создания инцидента
 message CreateIncidentRequest {
   string check_id = 1;
-  string tenant_id = 2;
-  IncidentSeverity severity = 3;
-  string error_message = 4;
+  string title = 2;
+  string description = 3;
+  IncidentSeverity severity = 4;
 }
 
 // UpdateIncidentRequest содержит данные для обновления инцидента
@@ -81,7 +82,7 @@ message ResolveIncidentResponse {
 
 // ListIncidentsRequest содержит параметры фильтрации и пагинации
 message ListIncidentsRequest {
-  string tenant_id = 1;
+  string check_id = 1;
   IncidentStatus status = 2;
   IncidentSeverity severity = 3;
   int32 page_size = 4;

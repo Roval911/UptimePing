@@ -6,31 +6,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/rabbitmq"
 	"UptimePingPlatform/services/incident-manager/internal/domain"
 )
-
-// IncidentEvent представляет событие инцидента
-type IncidentEvent struct {
-	EventType    string                 `json:"event_type"`    // incident.opened, incident.updated, incident.resolved, incident.grouped
-	Timestamp   time.Time              `json:"timestamp"`    // Время события
-	Service     string                 `json:"service"`      // incident-manager
-	IncidentID  string                 `json:"incident_id"`  // ID инцидента
-	CheckID     string                 `json:"check_id"`     // ID проверки
-	TenantID    string                 `json:"tenant_id"`    // ID тенанта
-	Status      domain.IncidentStatus  `json:"status"`       // Статус инцидента
-	Severity    domain.IncidentSeverity `json:"severity"`     // Уровень серьезности
-	Count       int                    `json:"count"`        // Количество повторений
-	Duration    int64                  `json:"duration"`     // Длительность в миллисекундах
-	ErrorMessage string                `json:"error_message,omitempty"` // Сообщение об ошибке
-	ErrorHash   string                 `json:"error_hash,omitempty"`   // Хеш ошибки
-	FirstSeen   time.Time              `json:"first_seen"`   // Время первого появления
-	LastSeen    time.Time              `json:"last_seen"`    // Время последнего появления
-	Metadata    map[string]interface{} `json:"metadata,omitempty"` // Дополнительные метаданные
-}
 
 // IncidentProducer публикует события инцидентов в RabbitMQ
 type IncidentProducer struct {
@@ -81,13 +63,13 @@ func (p *IncidentProducer) setupChannel() error {
 // setupExchange создает exchange для событий инцидентов
 func (p *IncidentProducer) setupExchange() error {
 	err := p.channel.ExchangeDeclare(
-		p.config.Exchange,   // имя exchange
-		"topic",             // тип exchange
-		true,                // durable
-		false,               // auto-delete
-		false,               // internal
-		false,               // no-wait
-		nil,                 // arguments
+		p.config.Exchange, // имя exchange
+		"topic",           // тип exchange
+		true,              // durable
+		false,             // auto-delete
+		false,             // internal
+		false,             // no-wait
+		nil,               // arguments
 	)
 	if err != nil {
 		return fmt.Errorf("failed to declare exchange: %w", err)
@@ -103,22 +85,17 @@ func (p *IncidentProducer) PublishIncidentEvent(ctx context.Context, eventType s
 	}
 
 	// Создаем событие
-	event := &IncidentEvent{
-		EventType:    eventType,
-		Timestamp:   time.Now(),
-		Service:     "incident-manager",
+	event := &domain.IncidentEvent{
+		ID:          generateEventID(),
 		IncidentID:  incident.ID,
-		CheckID:     incident.CheckID,
-		TenantID:    incident.TenantID,
-		Status:      incident.Status,
-		Severity:    incident.Severity,
-		Count:       incident.Count,
-		Duration:    calculateDuration(result),
-		ErrorMessage: incident.ErrorMessage,
-		ErrorHash:   incident.ErrorHash,
-		FirstSeen:   incident.FirstSeen,
-		LastSeen:    incident.LastSeen,
-		Metadata:    incident.Metadata,
+		EventType:   eventType,
+		OldStatus:   "", // Будет заполнено ниже
+		NewStatus:   incident.Status,
+		OldSeverity: "", // Будет заполнено ниже
+		NewSeverity: incident.Severity,
+		Message:     fmt.Sprintf("Incident %s", eventType),
+		Metadata:    make(map[string]interface{}),
+		CreatedAt:   time.Now(),
 	}
 
 	// Добавляем специфичные для типа события поля
@@ -127,21 +104,16 @@ func (p *IncidentProducer) PublishIncidentEvent(ctx context.Context, eventType s
 		// Для открытия инцидента все поля уже заполнены
 	case "incident.updated":
 		// Для обновления добавляем информацию об изменениях
-		if incident.Metadata != nil {
-			if escalationHistory, ok := incident.Metadata["escalation_history"]; ok {
-				event.Metadata["escalation_history"] = escalationHistory
-			}
-		}
+		event.Metadata["update_reason"] = "status_or_severity_changed"
 	case "incident.resolved":
 		// Для закрытия добавляем длительность инцидента
-		event.Metadata["incident_duration"] = incident.GetDuration().String()
+		if incident.ResolvedAt != nil {
+			duration := incident.ResolvedAt.Sub(incident.StartedAt)
+			event.Metadata["incident_duration"] = duration.String()
+		}
 	case "incident.grouped":
 		// Для группировки добавляем информацию о сгруппированных ошибках
-		if incident.Metadata != nil {
-			if groupedErrors, ok := incident.Metadata["grouped_errors"]; ok {
-				event.Metadata["grouped_errors"] = groupedErrors
-			}
-		}
+		event.Metadata["grouped_errors_count"] = "multiple"
 	}
 
 	// Сериализуем событие в JSON
@@ -155,28 +127,26 @@ func (p *IncidentProducer) PublishIncidentEvent(ctx context.Context, eventType s
 	}
 
 	// Определяем routing key
-	routingKey := fmt.Sprintf("incident.%s.%s.%s", 
-		eventType, 
-		incident.TenantID, 
+	routingKey := fmt.Sprintf("incident.%s.%s",
+		eventType,
 		incident.Severity)
 
 	// Публикуем событие
 	err = p.channel.Publish(
 		p.config.Exchange, // exchange
-		routingKey,       // routing key
-		false,            // mandatory
-		false,            // immediate
+		routingKey,        // routing key
+		false,             // mandatory
+		false,             // immediate
 		amqp.Publishing{
 			ContentType: "application/json",
 			Headers: amqp.Table{
-				"event_type":    eventType,
-				"incident_id":   incident.ID,
-				"check_id":       incident.CheckID,
-				"tenant_id":      incident.TenantID,
-				"severity":       string(incident.Severity),
-				"status":         string(incident.Status),
-				"service":        "incident-manager",
-				"timestamp":      time.Now().Unix(),
+				"event_type":  eventType,
+				"incident_id": incident.ID,
+				"check_id":    incident.CheckID,
+				"severity":    string(incident.Severity),
+				"status":      string(incident.Status),
+				"service":     "incident-manager",
+				"timestamp":   time.Now().Unix(),
 			},
 			Timestamp: time.Now(),
 		},
@@ -255,4 +225,9 @@ func (p *IncidentProducer) Close() error {
 // IsConnected проверяет состояние подключения
 func (p *IncidentProducer) IsConnected() bool {
 	return p.conn != nil && p.conn.Channel() != nil && !p.conn.Channel().IsClosed() && p.channel != nil && !p.channel.IsClosed()
+}
+
+// generateEventID генерирует уникальный ID для события
+func generateEventID() string {
+	return fmt.Sprintf("event_%s", uuid.New().String())
 }
