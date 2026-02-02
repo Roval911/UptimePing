@@ -97,7 +97,12 @@ func (c *SchedulerClient) UnscheduleCheck(ctx context.Context, req *schedulerv1.
 	return c.client.UnscheduleCheck(ctx, req)
 }
 
-// GetSchedule получает расписание проверки
+// UpdateSchedule обновляет расписание проверки
+func (c *SchedulerClient) UpdateSchedule(ctx context.Context, req *schedulerv1.UpdateScheduleRequest) (*schedulerv1.Schedule, error) {
+	return c.client.UpdateSchedule(ctx, req)
+}
+
+// GetSchedule получает расписание по ID
 func (c *SchedulerClient) GetSchedule(ctx context.Context, req *schedulerv1.GetScheduleRequest) (*schedulerv1.Schedule, error) {
 	return c.client.GetSchedule(ctx, req)
 }

@@ -22,6 +22,7 @@ type SchedulerRepository interface {
 
 	// Методы для работы с расписаниями
 	Create(ctx context.Context, schedule *domain.Schedule) (*domain.Schedule, error)
+	Update(ctx context.Context, schedule *domain.Schedule) error
 	DeleteByCheckID(ctx context.Context, checkID string) error
 	GetByCheckID(ctx context.Context, checkID string) (*domain.Schedule, error)
 	List(ctx context.Context, pageSize int, pageToken string, filter string) ([]*domain.Schedule, error)

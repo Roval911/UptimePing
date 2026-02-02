@@ -19,6 +19,7 @@ service SchedulerService {
   rpc ScheduleCheck(ScheduleCheckRequest) returns (Schedule) {}
   rpc UnscheduleCheck(UnscheduleCheckRequest) returns (UnscheduleCheckResponse) {}
   rpc GetSchedule(GetScheduleRequest) returns (Schedule) {}
+  rpc UpdateSchedule(UpdateScheduleRequest) returns (Schedule) {}
   rpc ListSchedules(ListSchedulesRequest) returns (ListSchedulesResponse) {}
   
   // Health check
@@ -48,6 +49,12 @@ message UnscheduleCheckRequest {
 // UnscheduleCheckResponse подтверждает отмену планирования
 message UnscheduleCheckResponse {
   bool success = 1;
+}
+
+// UpdateScheduleRequest содержит данные для обновления расписания
+message UpdateScheduleRequest {
+  string check_id = 1;
+  string cron_expression = 2;
 }
 
 // GetScheduleRequest содержит ID проверки

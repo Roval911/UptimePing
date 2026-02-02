@@ -52,6 +52,7 @@ func (m *Manager) GenerateToken(userID, tenantID string, isAdmin bool) (string, 
 	// Права по умолчанию для всех пользователей
 	defaultPermissions := []string{
 		"checks:read", "checks:write", "checks:delete",
+		"schedules:read", "schedules:write", "schedules:delete",
 		"incidents:read", "incidents:write", "incidents:resolve",
 		"config:read", "config:write",
 		"metrics:read",
@@ -80,6 +81,7 @@ func (m *Manager) GenerateAccessToken(userID, tenantID string, isAdmin bool) (st
 	// Права по умолчанию для всех пользователей
 	defaultPermissions := []string{
 		"checks:read", "checks:write", "checks:delete",
+		"schedules:read", "schedules:write", "schedules:delete",
 		"incidents:read", "incidents:write", "incidents:resolve",
 		"config:read", "config:write",
 		"metrics:read",

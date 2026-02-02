@@ -181,13 +181,14 @@ type ScheduledCheck struct {
 // Create создает новое расписание
 func (r *SchedulerRepository) Create(ctx context.Context, schedule *domain.Schedule) (*domain.Schedule, error) {
 	query := `
-		INSERT INTO schedules (check_id, next_run_at, last_run_at, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO schedules (check_id, cron_expression, next_run_at, last_run_at, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id, next_run_at, last_run_at, status`
 
 	now := time.Now()
 	err := r.pool.QueryRow(ctx, query,
 		schedule.CheckID,
+		schedule.CronExpression,
 		schedule.NextRunAt,
 		schedule.LastRunAt,
 		schedule.Status,
@@ -202,6 +203,31 @@ func (r *SchedulerRepository) Create(ctx context.Context, schedule *domain.Sched
 	schedule.CreatedAt = now
 	schedule.UpdatedAt = now
 	return schedule, nil
+}
+
+// Update обновляет расписание
+func (r *SchedulerRepository) Update(ctx context.Context, schedule *domain.Schedule) error {
+	query := `
+		UPDATE schedules 
+		SET cron_expression = $2, next_run_at = $3, last_run_at = $4, status = $5, updated_at = $6
+		WHERE check_id = $1`
+
+	now := time.Now()
+	_, err := r.pool.Exec(ctx, query,
+		schedule.CheckID,
+		schedule.CronExpression,
+		schedule.NextRunAt,
+		schedule.LastRunAt,
+		schedule.Status,
+		now,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to update schedule: %w", err)
+	}
+
+	schedule.UpdatedAt = now
+	return nil
 }
 
 // DeleteByCheckID удаляет расписание по ID проверки

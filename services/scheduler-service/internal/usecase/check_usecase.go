@@ -168,6 +168,177 @@ func (uc *CheckUseCase) ListChecks(ctx context.Context, tenantID string, pageSiz
 	return checks, nil
 }
 
+// ListSchedules возвращает список расписаний для tenant
+func (uc *CheckUseCase) ListSchedules(ctx context.Context, tenantID string, pageSize int, pageToken string) ([]*domain.Schedule, error) {
+	// Получаем все проверки для tenant
+	checks, err := uc.checkRepo.List(ctx, tenantID, pageSize, pageToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list checks for schedules: %w", err)
+	}
+
+	// Получаем расписания для каждой проверки
+	var schedules []*domain.Schedule
+	for _, check := range checks {
+		schedule, err := uc.schedulerRepo.GetByCheckID(ctx, check.ID)
+		if err != nil {
+			// Если расписание не найдено, пропускаем
+			continue
+		}
+		schedules = append(schedules, schedule)
+	}
+
+	return schedules, nil
+}
+
+// CreateSchedule создает новое расписание для проверки
+func (uc *CheckUseCase) CreateSchedule(ctx context.Context, checkID, cronExpression string) (*domain.Schedule, error) {
+	// Валидация UUID
+	if err := validateUUID(checkID); err != nil {
+		return nil, fmt.Errorf("invalid check ID: %w", err)
+	}
+
+	// Валидация cron выражения
+	if err := validateCronExpression(cronExpression); err != nil {
+		return nil, fmt.Errorf("invalid cron expression: %w", err)
+	}
+
+	// Проверяем существование проверки
+	_, err := uc.checkRepo.GetByID(ctx, checkID)
+	if err != nil {
+		return nil, fmt.Errorf("check not found: %w", err)
+	}
+
+	// Рассчитываем следующее время выполнения
+	nextRunAt, err := calculateNextRun(cronExpression)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate next run: %w", err)
+	}
+
+	// Создаем расписание
+	schedule := &domain.Schedule{
+		ID:             uuid.New().String(),
+		CheckID:        checkID,
+		CronExpression: cronExpression,
+		NextRunAt:      &nextRunAt,
+		LastRunAt:      nil,
+		Status:         "active",
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+
+	// Сохраняем в репозиторий
+	createdSchedule, err := uc.schedulerRepo.Create(ctx, schedule)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create schedule: %w", err)
+	}
+
+	uc.logger.Info("Schedule created",
+		logger.String("schedule_id", createdSchedule.ID),
+		logger.String("check_id", checkID),
+		logger.String("cron_expression", cronExpression),
+		logger.String("next_run_at", createdSchedule.NextRunAt.Format(time.RFC3339)))
+
+	return createdSchedule, nil
+}
+
+// GetScheduleByCheckID получает расписание по ID проверки
+func (uc *CheckUseCase) GetScheduleByCheckID(ctx context.Context, checkID string) (*domain.Schedule, error) {
+	// Валидация UUID
+	if err := validateUUID(checkID); err != nil {
+		return nil, fmt.Errorf("invalid check ID: %w", err)
+	}
+
+	schedule, err := uc.schedulerRepo.GetByCheckID(ctx, checkID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get schedule: %w", err)
+	}
+
+	return schedule, nil
+}
+
+// UpdateSchedule обновляет расписание
+func (uc *CheckUseCase) UpdateSchedule(ctx context.Context, checkID, cronExpression string) (*domain.Schedule, error) {
+	// Валидация UUID
+	if err := validateUUID(checkID); err != nil {
+		return nil, fmt.Errorf("invalid check ID: %w", err)
+	}
+
+	// Валидация cron выражения
+	if err := validateCronExpression(cronExpression); err != nil {
+		return nil, fmt.Errorf("invalid cron expression: %w", err)
+	}
+
+	// Получаем существующее расписание
+	schedule, err := uc.schedulerRepo.GetByCheckID(ctx, checkID)
+	if err != nil {
+		return nil, fmt.Errorf("schedule not found: %w", err)
+	}
+
+	// Рассчитываем новое время выполнения
+	nextRunAt, err := calculateNextRun(cronExpression)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate next run: %w", err)
+	}
+
+	// Обновляем расписание
+	schedule.NextRunAt = &nextRunAt
+	schedule.UpdatedAt = time.Now()
+
+	if err := uc.schedulerRepo.Update(ctx, schedule); err != nil {
+		return nil, fmt.Errorf("failed to update schedule: %w", err)
+	}
+
+	uc.logger.Info("Schedule updated",
+		logger.String("schedule_id", schedule.ID),
+		logger.String("check_id", checkID),
+		logger.String("cron_expression", cronExpression),
+		logger.String("next_run_at", nextRunAt.Format(time.RFC3339)))
+
+	return schedule, nil
+}
+
+// DeleteSchedule удаляет расписание
+func (uc *CheckUseCase) DeleteSchedule(ctx context.Context, checkID string) error {
+	// Валидация UUID
+	if err := validateUUID(checkID); err != nil {
+		return fmt.Errorf("invalid check ID: %w", err)
+	}
+
+	// Удаляем расписание
+	if err := uc.schedulerRepo.DeleteByCheckID(ctx, checkID); err != nil {
+		return fmt.Errorf("failed to delete schedule: %w", err)
+	}
+
+	uc.logger.Info("Schedule deleted",
+		logger.String("check_id", checkID))
+
+	return nil
+}
+
+// validateUUID валидирует UUID формат
+func validateUUID(id string) error {
+	if len(id) != 36 {
+		return fmt.Errorf("invalid UUID format")
+	}
+	return nil
+}
+
+// validateCronExpression валидирует cron выражение
+func validateCronExpression(expr string) error {
+	if expr == "" {
+		return fmt.Errorf("cron expression cannot be empty")
+	}
+	// TODO: реализовать полную валидацию cron выражения
+	return nil
+}
+
+// calculateNextRun рассчитывает следующее время выполнения
+func calculateNextRun(cronExpression string) (time.Time, error) {
+	// TODO: реализовать парсинг cron выражения
+	// Пока используем простую логику - через 5 минут
+	return time.Now().Add(5 * time.Minute), nil
+}
+
 // GetActiveChecks возвращает список активных проверок
 func (uc *CheckUseCase) GetActiveChecks(ctx context.Context) ([]*domain.Check, error) {
 	checks, err := uc.checkRepo.GetActiveChecks(ctx)

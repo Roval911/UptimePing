@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -324,22 +325,217 @@ func (h *HandlerFixed) ListChecks(ctx context.Context, req *schedulerv1.ListChec
 
 // ScheduleCheck планирует выполнение проверки
 func (h *HandlerFixed) ScheduleCheck(ctx context.Context, req *schedulerv1.ScheduleCheckRequest) (*schedulerv1.Schedule, error) {
-	return nil, status.Errorf(codes.Unimplemented, "ScheduleCheck not implemented yet")
+	h.LogOperationStart(ctx, "ScheduleCheck", map[string]interface{}{
+		"check_id":        req.CheckId,
+		"cron_expression": req.CronExpression,
+	})
+
+	// Валидация обязательных полей
+	if err := h.ValidateRequiredFields(ctx, "ScheduleCheck", map[string]string{
+		"check_id":        req.CheckId,
+		"cron_expression": req.CronExpression,
+	}); err != nil {
+		return nil, h.LogError(ctx, err, "ScheduleCheck", "validation failed")
+	}
+
+	// Валидация UUID
+	if err := h.validator.ValidateUUID(req.CheckId, "check_id"); err != nil {
+		return nil, h.LogError(ctx, err, "ScheduleCheck", "invalid check ID format")
+	}
+
+	// Валидация cron выражения
+	if err := h.validator.ValidateCronExpression(req.CronExpression); err != nil {
+		return nil, h.LogError(ctx, err, "ScheduleCheck", "invalid cron expression")
+	}
+
+	// Создаем расписание через use case
+	schedule, err := h.checkUseCase.CreateSchedule(ctx, req.CheckId, req.CronExpression)
+	if err != nil {
+		return nil, h.LogError(ctx, err, "ScheduleCheck", "failed to create schedule")
+	}
+
+	response := &schedulerv1.Schedule{
+		CheckId:        schedule.CheckID,
+		CronExpression: req.CronExpression,
+		NextRun:        schedule.NextRunAt.Format(time.RFC3339),
+	}
+
+	h.LogOperationSuccess(ctx, "ScheduleCheck", map[string]interface{}{
+		"schedule_id": schedule.ID,
+		"check_id":    req.CheckId,
+	})
+
+	return response, nil
 }
 
 // UnscheduleCheck отменяет планирование проверки
 func (h *HandlerFixed) UnscheduleCheck(ctx context.Context, req *schedulerv1.UnscheduleCheckRequest) (*schedulerv1.UnscheduleCheckResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "UnscheduleCheck not implemented yet")
+	h.LogOperationStart(ctx, "UnscheduleCheck", map[string]interface{}{
+		"check_id": req.CheckId,
+	})
+
+	// Валидация обязательных полей
+	if err := h.ValidateRequiredFields(ctx, "UnscheduleCheck", map[string]string{
+		"check_id": req.CheckId,
+	}); err != nil {
+		return nil, h.LogError(ctx, err, "UnscheduleCheck", "validation failed")
+	}
+
+	// Валидация UUID
+	if err := h.validator.ValidateUUID(req.CheckId, "check_id"); err != nil {
+		return nil, h.LogError(ctx, err, "UnscheduleCheck", "invalid check ID format")
+	}
+
+	// Удаляем расписание через use case
+	err := h.checkUseCase.DeleteSchedule(ctx, req.CheckId)
+	if err != nil {
+		return nil, h.LogError(ctx, err, "UnscheduleCheck", "failed to delete schedule")
+	}
+
+	response := &schedulerv1.UnscheduleCheckResponse{
+		Success: true,
+	}
+
+	h.LogOperationSuccess(ctx, "UnscheduleCheck", map[string]interface{}{
+		"check_id": req.CheckId,
+	})
+
+	return response, nil
 }
 
 // GetSchedule возвращает информацию о расписании проверки
 func (h *HandlerFixed) GetSchedule(ctx context.Context, req *schedulerv1.GetScheduleRequest) (*schedulerv1.Schedule, error) {
-	return nil, status.Errorf(codes.Unimplemented, "GetSchedule not implemented yet")
+	h.LogOperationStart(ctx, "GetSchedule", map[string]interface{}{
+		"check_id": req.CheckId,
+	})
+
+	// Валидация обязательных полей
+	if err := h.ValidateRequiredFields(ctx, "GetSchedule", map[string]string{
+		"check_id": req.CheckId,
+	}); err != nil {
+		return nil, h.LogError(ctx, err, "GetSchedule", "validation failed")
+	}
+
+	// Валидация UUID
+	if err := h.validator.ValidateUUID(req.CheckId, "check_id"); err != nil {
+		return nil, h.LogError(ctx, err, "GetSchedule", "invalid check ID format")
+	}
+
+	// Получаем расписание через use case
+	schedule, err := h.checkUseCase.GetScheduleByCheckID(ctx, req.CheckId)
+	if err != nil {
+		return nil, h.LogError(ctx, err, "GetSchedule", "failed to get schedule")
+	}
+
+	response := &schedulerv1.Schedule{
+		CheckId:        schedule.CheckID,
+		CronExpression: schedule.CronExpression,
+		NextRun:        schedule.NextRunAt.Format(time.RFC3339),
+	}
+
+	h.LogOperationSuccess(ctx, "GetSchedule", map[string]interface{}{
+		"schedule_id": schedule.ID,
+		"check_id":    req.CheckId,
+	})
+
+	return response, nil
+}
+
+// UpdateSchedule обновляет расписание проверки
+func (h *HandlerFixed) UpdateSchedule(ctx context.Context, req *schedulerv1.UpdateScheduleRequest) (*schedulerv1.Schedule, error) {
+	h.LogOperationStart(ctx, "UpdateSchedule", map[string]interface{}{
+		"check_id":        req.CheckId,
+		"cron_expression": req.CronExpression,
+	})
+
+	// Валидация обязательных полей
+	if err := h.ValidateRequiredFields(ctx, "UpdateSchedule", map[string]string{
+		"check_id":        req.CheckId,
+		"cron_expression": req.CronExpression,
+	}); err != nil {
+		return nil, h.LogError(ctx, err, "UpdateSchedule", "validation failed")
+	}
+
+	// Валидация UUID
+	if err := h.validator.ValidateUUID(req.CheckId, "check_id"); err != nil {
+		return nil, h.LogError(ctx, err, "UpdateSchedule", "invalid check ID format")
+	}
+
+	// Валидация cron выражения
+	if err := h.validator.ValidateCronExpression(req.CronExpression); err != nil {
+		return nil, h.LogError(ctx, err, "UpdateSchedule", "invalid cron expression")
+	}
+
+	// Обновляем расписание через use case
+	schedule, err := h.checkUseCase.UpdateSchedule(ctx, req.CheckId, req.CronExpression)
+	if err != nil {
+		return nil, h.LogError(ctx, err, "UpdateSchedule", "failed to update schedule")
+	}
+
+	response := &schedulerv1.Schedule{
+		CheckId:        schedule.CheckID,
+		CronExpression: schedule.CronExpression,
+		NextRun:        schedule.NextRunAt.Format(time.RFC3339),
+	}
+
+	h.LogOperationSuccess(ctx, "UpdateSchedule", map[string]interface{}{
+		"schedule_id": schedule.ID,
+		"check_id":    req.CheckId,
+	})
+
+	return response, nil
 }
 
 // ListSchedules возвращает список расписаний с пагинацией
 func (h *HandlerFixed) ListSchedules(ctx context.Context, req *schedulerv1.ListSchedulesRequest) (*schedulerv1.ListSchedulesResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "ListSchedules not implemented yet")
+	h.LogOperationStart(ctx, "ListSchedules", map[string]interface{}{
+		"filter":     req.Filter,
+		"page_size":  req.PageSize,
+		"page_token": req.PageToken,
+	})
+
+	// Извлекаем tenant_id из фильтра
+	tenantID := ""
+	if req.Filter != "" {
+		// Парсим фильтр формата "tenant_id:xxx"
+		parts := strings.Split(req.Filter, ":")
+		if len(parts) == 2 && parts[0] == "tenant_id" {
+			tenantID = parts[1]
+		}
+	}
+
+	if tenantID == "" {
+		return nil, h.LogError(ctx, fmt.Errorf("tenant_id is required"), "ListSchedules", "validation failed")
+	}
+
+	// Получаем расписания через use case
+	schedules, err := h.checkUseCase.ListSchedules(ctx, tenantID, int(req.PageSize), fmt.Sprintf("%d", req.PageToken))
+	if err != nil {
+		return nil, h.LogError(ctx, err, "ListSchedules", "failed to list schedules")
+	}
+
+	// Конвертируем в protobuf
+	var protoSchedules []*schedulerv1.Schedule
+	for _, schedule := range schedules {
+		protoSchedule := &schedulerv1.Schedule{
+			CheckId:        schedule.CheckID,
+			CronExpression: "", // TODO: добавить в доменную модель
+			NextRun:        schedule.NextRunAt.Format(time.RFC3339),
+		}
+		protoSchedules = append(protoSchedules, protoSchedule)
+	}
+
+	response := &schedulerv1.ListSchedulesResponse{
+		Schedules:     protoSchedules,
+		NextPageToken: 0, // TODO: реализовать пагинацию
+	}
+
+	h.LogOperationSuccess(ctx, "ListSchedules", map[string]interface{}{
+		"schedules_count": len(protoSchedules),
+		"tenant_id":       tenantID,
+	})
+
+	return response, nil
 }
 
 // HealthCheck проверяет состояние сервиса

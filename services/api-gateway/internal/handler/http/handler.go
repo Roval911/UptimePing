@@ -92,6 +92,19 @@ func (h *Handler) setupRoutes() {
 			logger.String("path", r.URL.Path),
 			logger.String("full_url", r.URL.String()))
 
+		// Получаем информацию о пользователе из контекста
+		userDataCtx, ok := r.Context().Value("user").(map[string]interface{})
+		if !ok {
+			h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
+			return
+		}
+
+		tenantID, ok := userDataCtx["tenant_id"].(string)
+		if !ok {
+			h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant_id not found"), http.StatusUnauthorized)
+			return
+		}
+
 		switch r.Method {
 		case http.MethodGet:
 			h.logger.Info("Handling GET /api/v1/checks (list) with checks:read permission")
@@ -103,7 +116,7 @@ func (h *Handler) setupRoutes() {
 			h.logger.Info("Handling POST /api/v1/checks (create) with checks:write permission")
 			// POST /api/v1/checks - требует checks:write
 			middleware.PermissionMiddleware([]string{"checks:write"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				h.handleSchedulerChecks(w, r)
+				h.handleCreateCheck(w, r, tenantID)
 			})).ServeHTTP(w, r)
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -160,7 +173,7 @@ func (h *Handler) setupRoutes() {
 			json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
 		}
 	}))
-	h.mux.Handle("/api/v1/checks/{id}", checkByIDHandler).Methods(http.MethodGet, http.MethodDelete)
+	h.mux.Handle("/api/v1/checks/{id}", checkByIDHandler).Methods(http.MethodGet, http.MethodDelete, http.MethodPut)
 
 	// НОВЫЕ РОУТЫ БЕЗ КОНФЛИКТОВ:
 
@@ -251,9 +264,38 @@ func (h *Handler) setupRoutes() {
 	h.mux.HandleFunc("/api/v1/scheduler/health", h.handleSchedulerHealthProxy)
 	h.mux.HandleFunc("/api/v1/core/health", h.handleCoreHealthProxy)
 
-	// Расписания проверок
-	h.mux.HandleFunc("/api/v1/schedules", h.handleProtected(h.handleScheduleProxy))
-	h.mux.HandleFunc("/api/v1/schedules/", h.handleProtected(h.handleScheduleProxy))
+	// Расписания проверок - используем mux.Handle для правильного паттерн-матчинга
+	schedulesHandler := h.handleProtected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.logger.Info("DEBUG: Route /api/v1/schedules matched!",
+			logger.String("method", r.Method),
+			logger.String("path", r.URL.Path),
+			logger.String("full_url", r.URL.String()))
+
+		switch r.Method {
+		case http.MethodGet:
+			h.logger.Info("Handling GET /api/v1/schedules (list)")
+			h.handleScheduleProxy(w, r)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		}
+	}))
+	h.mux.Handle("/api/v1/schedules", schedulesHandler).Methods(http.MethodGet)
+
+	// Расписания проверок с ID
+	scheduleByIDHandler := h.handleProtected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		checkID := vars["id"]
+
+		h.logger.Info("DEBUG: Route /api/v1/schedules/{id} matched!",
+			logger.String("method", r.Method),
+			logger.String("path", r.URL.Path),
+			logger.String("check_id", checkID))
+
+		// Вызываем handleScheduleProxy с правильным контекстом
+		h.handleScheduleProxy(w, r)
+	}))
+	h.mux.Handle("/api/v1/schedules/{id}", scheduleByIDHandler).Methods(http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodGet)
 
 	// Core Service операции
 	h.mux.HandleFunc("/api/v1/core", h.handleProtected(h.handleCoreProxy))
@@ -311,8 +353,27 @@ func (h *Handler) handleProtected(next http.HandlerFunc) http.HandlerFunc {
 			logger.String("path", r.URL.Path),
 			logger.String("full_url", r.URL.String()))
 
+		// Извлекаем токен из Authorization header
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			h.logger.Error("Authorization header missing")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"code":    "403",
+				"error":   "true",
+				"message": "authorization header missing",
+			})
+			return
+		}
+
+		// Извлекаем токен из "Bearer <token>"
+		token := authHeader
+		if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+			token = authHeader[7:]
+		}
+
 		// Проверяем аутентификацию
-		userInfo, err := h.authService.ValidateToken(r.Context(), r.Header.Get("Authorization"))
+		userInfo, err := h.authService.ValidateToken(r.Context(), token)
 		if err != nil {
 			h.logger.Error("Authentication failed",
 				logger.Error(err),
@@ -329,6 +390,7 @@ func (h *Handler) handleProtected(next http.HandlerFunc) http.HandlerFunc {
 
 		// Добавляем информацию о пользователе в контекст
 		ctx := context.WithValue(r.Context(), "user", userInfo)
+		ctx = context.WithValue(ctx, "user_info", userInfo)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
 }
@@ -465,6 +527,19 @@ func (h *Handler) getRequiredPermissions(r *http.Request) []string {
 			return []string{"checks:delete"}
 		default:
 			return []string{"checks:read"}
+		}
+	case strings.HasPrefix(path, "/api/v1/schedules"):
+		switch method {
+		case http.MethodGet:
+			return []string{"schedules:read"}
+		case http.MethodPost:
+			return []string{"schedules:write"}
+		case http.MethodPut:
+			return []string{"schedules:write"}
+		case http.MethodDelete:
+			return []string{"schedules:delete"}
+		default:
+			return []string{"schedules:read"}
 		}
 	case strings.HasPrefix(path, "/api/v1/incidents"):
 		switch method {
@@ -964,6 +1039,18 @@ func extractCheckIDFromPath(path string) string {
 	return ""
 }
 
+// extractScheduleIDFromPath извлекает ID расписания из URL пути
+func extractScheduleIDFromPath(path string) string {
+	// Пример: /api/v1/schedules/12345 -> 12345
+	parts := strings.Split(path, "/")
+	for i, part := range parts {
+		if part == "schedules" && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
 // handleListHandles обрабатывает получение списка проверок
 func (h *Handler) handleListChecks(w http.ResponseWriter, r *http.Request, tenantID string) {
 	req := &schedulerv1.ListChecksRequest{
@@ -993,7 +1080,7 @@ func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request, tena
 	}
 
 	// Устанавливаем tenant_id из контекста
-	// createReq.TenantId = tenantID
+	createReq.TenantId = tenantID
 
 	check, err := h.schedulerClient.CreateCheck(r.Context(), &createReq)
 	if err != nil {
@@ -1211,13 +1298,27 @@ func (h *Handler) handleScheduleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Извлекаем ID проверки из URL пути
-	checkID := extractCheckIDFromPath(r.URL.Path)
+	// Извлекаем ID проверки из URL пути с помощью mux.Vars
+	vars := mux.Vars(r)
+	checkID := vars["id"]
+
+	// Отладочный лог
+	h.logger.Info("Schedule proxy debug",
+		logger.String("path", r.URL.Path),
+		logger.String("method", r.Method),
+		logger.String("checkID", checkID),
+		logger.String("tenantID", userInfo.TenantID))
 
 	switch r.Method {
 	case http.MethodPost:
 		if checkID != "" {
 			h.handleScheduleCheck(w, r, userInfo.TenantID, checkID)
+		} else {
+			h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "check ID required"), http.StatusBadRequest)
+		}
+	case http.MethodPut:
+		if checkID != "" {
+			h.handleUpdateSchedule(w, r, userInfo.TenantID, checkID)
 		} else {
 			h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "check ID required"), http.StatusBadRequest)
 		}
@@ -1271,6 +1372,43 @@ func (h *Handler) handleScheduleCheck(w http.ResponseWriter, r *http.Request, te
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":  true,
 		"message":  "Check scheduled",
+		"schedule": schedule,
+	})
+}
+
+// handleUpdateSchedule обрабатывает обновление расписания проверки
+func (h *Handler) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, tenantID, checkID string) {
+	// Валидация UUID
+	if err := h.validator.ValidateUUID(checkID, "check_id"); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid check ID format"), http.StatusBadRequest)
+		return
+	}
+
+	var req schedulerv1.UpdateScheduleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
+		return
+	}
+
+	req.CheckId = checkID
+
+	// Валидация cron выражения
+	if err := h.validator.ValidateCronExpression(req.CronExpression); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid cron expression"), http.StatusBadRequest)
+		return
+	}
+
+	schedule, err := h.schedulerClient.UpdateSchedule(r.Context(), &req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"message":  "Schedule updated",
 		"schedule": schedule,
 	})
 }
