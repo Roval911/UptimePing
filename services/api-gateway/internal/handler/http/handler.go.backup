@@ -8,6 +8,7 @@ import (
 	notificationv1 "UptimePingPlatform/proto/api/notification/v1"
 	schedulerv1 "UptimePingPlatform/proto/api/scheduler/v1"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,27 +84,44 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // setupRoutes настраивает маршруты для приложения
 func (h *Handler) setupRoutes() {
-	// Scheduler роуты для всех операций с проверками
+	// Health check роуты
+	h.mux.HandleFunc("/health", h.healthHandler.HealthCheck)
+	h.mux.HandleFunc("/ready", h.healthHandler.ReadyCheck)
+	h.mux.HandleFunc("/live", h.healthHandler.LiveCheck)
 
-	// Роут для /api/v1/checks (без слэша) - список проверок
-	checksHandler := middleware.AuthMiddleware(h.authService, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h.logger.Info("DEBUG: Route /api/v1/checks matched!",
-			logger.String("method", r.Method),
-			logger.String("path", r.URL.Path),
-			logger.String("full_url", r.URL.String()))
+	// САМЫЙ ПРОСТОЙ ENDPOINT ДЛЯ ТЕСТИРОВАНИЯ
+	h.mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("pong"))
+	})
+}
+
+// handleProtected оборачивает обработчик, требующий аутентификации
 
 		switch r.Method {
 		case http.MethodGet:
 			h.logger.Info("Handling GET /api/v1/checks (list) with checks:read permission")
 			// GET /api/v1/checks - требует checks:read
 			middleware.PermissionMiddleware([]string{"checks:read"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				h.handleSchedulerChecks(w, r)
+				// Получаем tenant_id из контекста
+				tenantID, ok := r.Context().Value("tenant_id").(string)
+				if !ok {
+					h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant_id not found in context"), http.StatusUnauthorized)
+					return
+				}
+				h.handleSchedulerChecks(w, r, tenantID)
 			})).ServeHTTP(w, r)
 		case http.MethodPost:
 			h.logger.Info("Handling POST /api/v1/checks (create) with checks:write permission")
 			// POST /api/v1/checks - требует checks:write
 			middleware.PermissionMiddleware([]string{"checks:write"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				h.handleSchedulerChecks(w, r)
+				// Получаем tenant_id из контекста
+				tenantID, ok := r.Context().Value("tenant_id").(string)
+				if !ok {
+					h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant_id not found in context"), http.StatusUnauthorized)
+					return
+				}
+				h.handleSchedulerChecks(w, r, tenantID)
 			})).ServeHTTP(w, r)
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -153,14 +171,20 @@ func (h *Handler) setupRoutes() {
 			h.logger.Info("Handling DELETE /api/v1/checks/{id} with checks:write permission")
 			// DELETE /api/v1/checks/{id} - требует checks:write
 			middleware.PermissionMiddleware([]string{"checks:write"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				h.handleSchedulerChecks(w, r)
+				// Получаем tenant_id из контекста
+				tenantID, ok := r.Context().Value("tenant_id").(string)
+				if !ok {
+					h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant_id not found in context"), http.StatusUnauthorized)
+					return
+				}
+				h.handleDeleteCheck(w, r, tenantID, checkID)
 			})).ServeHTTP(w, r)
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
 		}
 	}))
-	h.mux.Handle("/api/v1/checks/{id}", checkByIDHandler).Methods(http.MethodGet, http.MethodDelete)
+	h.mux.Handle("/api/v1/checks/{id}", checkByIDHandler).Methods(http.MethodGet, http.MethodPut, http.MethodDelete)
 
 	// НОВЫЕ РОУТЫ БЕЗ КОНФЛИКТОВ:
 
@@ -254,6 +278,23 @@ func (h *Handler) setupRoutes() {
 	// Расписания проверок
 	h.mux.HandleFunc("/api/v1/schedules", h.handleProtected(h.handleScheduleProxy))
 	h.mux.HandleFunc("/api/v1/schedules/", h.handleProtected(h.handleScheduleProxy))
+	
+	// САМЫЙ ПРОСТОЙ ENDPOINT ДЛЯ ТЕСТИРОВАНИЯ
+	h.mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("pong"))
+	})
+	
+	// Простой тестовый endpoint без аутентификации
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "Simple test works",
+			"timestamp": time.Now().Unix(),
+		})
+	})
+	h.mux.Handle("/api/v1/test-simple", middleware.AuthMiddleware(h.authService, h.logger)(testHandler))
 
 	// Core Service операции
 	h.mux.HandleFunc("/api/v1/core", h.handleProtected(h.handleCoreProxy))
@@ -306,17 +347,25 @@ func (h *Handler) setupRoutes() {
 // handleProtected оборачивает обработчик, требующий аутентификации
 func (h *Handler) handleProtected(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		h.logger.Info("DEBUG: handleProtected called",
+		h.logger.Info("DEBUG: handleProtected START",
 			logger.String("method", r.Method),
 			logger.String("path", r.URL.Path),
-			logger.String("full_url", r.URL.String()))
-
-		// Проверяем аутентификацию
-		userInfo, err := h.authService.ValidateToken(r.Context(), r.Header.Get("Authorization"))
+			logger.String("remote_addr", r.RemoteAddr),
+			logger.String("user_agent", r.UserAgent()))
+		
+	// Проверяем аутентификацию с timeout
+		h.logger.Info("DEBUG: Starting authentication")
+		
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		
+		h.logger.Info("DEBUG: Calling ValidateToken with timeout")
+		userInfo, err := h.authService.ValidateToken(ctx, r.Header.Get("Authorization"))
 		if err != nil {
-			h.logger.Error("Authentication failed",
+			h.logger.Error("DEBUG: Authentication failed",
 				logger.Error(err),
-				logger.String("path", r.URL.Path))
+				logger.String("path", r.URL.Path),
+				logger.String("auth_header", r.Header.Get("Authorization")))
 
 			w.WriteHeader(http.StatusForbidden)
 			json.NewEncoder(w).Encode(map[string]string{
@@ -327,9 +376,17 @@ func (h *Handler) handleProtected(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		h.logger.Info("DEBUG: Authentication successful",
+			logger.String("user_id", userInfo.UserID),
+			logger.String("tenant_id", userInfo.TenantID))
+
 		// Добавляем информацию о пользователе в контекст
-		ctx := context.WithValue(r.Context(), "user", userInfo)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		userCtx := context.WithValue(r.Context(), "user", userInfo)
+		
+		h.logger.Info("DEBUG: Calling next handler")
+		next.ServeHTTP(w, r.WithContext(userCtx))
+		
+		h.logger.Info("DEBUG: handleProtected END")
 	}
 }
 
@@ -373,6 +430,30 @@ func (h *Handler) authenticateWithJWT(token string) (*UserInfo, error) {
 		return nil, pkgErrors.New(pkgErrors.ErrUnauthorized, "invalid jwt format")
 	}
 
+	// Извлекаем tenant_id из JWT payload напрямую
+	payload := parts[1]
+	decodedPayload, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		return nil, pkgErrors.Wrap(err, pkgErrors.ErrUnauthorized, "failed to decode jwt payload")
+	}
+	
+	var claims struct {
+		TenantID string `json:"tenant_id"`
+		UserID   string `json:"user_id"`
+		Email    string `json:"email"`
+		IsAdmin  bool   `json:"is_admin"`
+		ExpiresAt int64  `json:"exp"`
+	}
+	
+	if err := json.Unmarshal(decodedPayload, &claims); err != nil {
+		return nil, pkgErrors.Wrap(err, pkgErrors.ErrUnauthorized, "failed to parse jwt claims")
+	}
+
+	// Проверяем срок действия токена
+	if time.Now().Unix() > claims.ExpiresAt {
+		return nil, pkgErrors.New(pkgErrors.ErrUnauthorized, "token expired")
+	}
+
 	// Вызываем Auth Service для валидации токена
 	ctx := context.Background()
 	userInfo, err := h.authService.ValidateToken(ctx, token)
@@ -380,9 +461,12 @@ func (h *Handler) authenticateWithJWT(token string) (*UserInfo, error) {
 		return nil, pkgErrors.Wrap(err, pkgErrors.ErrUnauthorized, "token validation failed")
 	}
 
-	// Проверяем срок действия токена
-	if time.Now().Unix() > userInfo.ExpiresAt {
-		return nil, pkgErrors.New(pkgErrors.ErrUnauthorized, "token expired")
+	// Используем tenant_id из JWT токена (приоритет)
+	if claims.TenantID != "" {
+		userInfo.TenantID = claims.TenantID
+	} else if userInfo.TenantID != "" {
+		// Иначе используем из ответа Auth Service
+		// Ничего не делаем, используем tenant_id от Auth Service
 	}
 
 	return userInfo, nil
@@ -674,11 +758,6 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 // handleRegister обрабатывает запросы на регистрацию
 func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
-	h.logger.Info("handleRegister called",
-		logger.String("method", r.Method),
-		logger.String("path", r.URL.Path),
-		logger.String("full_url", r.URL.String()))
-	
 	if r.Method != http.MethodPost {
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
 		return
@@ -1061,32 +1140,60 @@ func (h *Handler) handleGetCheck(w http.ResponseWriter, r *http.Request, tenantI
 
 // handleUpdateCheck обрабатывает обновление проверки
 func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request, tenantID, checkID string) {
+	h.logger.Info("=== handleUpdateCheck called ===",
+		logger.String("check_id", checkID),
+		logger.String("tenant_id", tenantID))
+
 	// Валидация UUID
 	if err := h.validator.ValidateUUID(checkID, "check_id"); err != nil {
+		h.logger.Error("UUID validation failed", logger.Error(err))
 		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid check ID format"), http.StatusBadRequest)
 		return
 	}
 
 	var updateReq schedulerv1.UpdateCheckRequest
 	if err := json.NewDecoder(r.Body).Decode(&updateReq); err != nil {
+		h.logger.Error("Failed to decode request body", logger.Error(err))
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
 		return
 	}
 
+	// Устанавливаем обязательные поля
 	updateReq.CheckId = checkID
+	if updateReq.Type == "" {
+		updateReq.Type = "http"
+	}
+	if updateReq.Interval == 0 {
+		updateReq.Interval = 60
+	}
+	if updateReq.Timeout == 0 {
+		updateReq.Timeout = 30
+	}
 
-	h.logger.Info("Updating check", 
+	h.logger.Info("Calling Scheduler Service UpdateCheck",
 		logger.String("check_id", checkID),
-		logger.String("tenant_id", tenantID))
+		logger.Any("update_request", updateReq))
 
-	check, err := h.schedulerClient.UpdateCheck(r.Context(), &updateReq)
+	// Устанавливаем контекст с таймаутом
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	check, err := h.schedulerClient.UpdateCheck(ctx, &updateReq)
 	if err != nil {
+		h.logger.Error("Scheduler Service UpdateCheck failed", logger.Error(err))
 		h.handleError(w, err)
 		return
 	}
 
+	h.logger.Info("Scheduler Service UpdateCheck succeeded",
+		logger.String("check_id", checkID),
+		logger.String("check_tenant_id", check.TenantId))
+
 	// Проверяем, что проверка принадлежит тенанту
 	if check.TenantId != tenantID {
+		h.logger.Error("Tenant ID mismatch",
+			logger.String("request_tenant_id", tenantID),
+			logger.String("check_tenant_id", check.TenantId))
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrForbidden, "access denied"), http.StatusForbidden)
 		return
 	}
@@ -1204,6 +1311,10 @@ func (h *Handler) handleDeleteCheck(w http.ResponseWriter, r *http.Request, tena
 
 // handleScheduleProxy обрабатывает запросы к расписаниям проверок
 func (h *Handler) handleScheduleProxy(w http.ResponseWriter, r *http.Request) {
+	h.logger.Info("handleScheduleProxy called",
+		logger.String("method", r.Method),
+		logger.String("path", r.URL.Path))
+
 	// Получаем информацию о пользователе из контекста
 	userInfo, ok := r.Context().Value("user_info").(*UserInfo)
 	if !ok {
@@ -1213,6 +1324,9 @@ func (h *Handler) handleScheduleProxy(w http.ResponseWriter, r *http.Request) {
 
 	// Извлекаем ID проверки из URL пути
 	checkID := extractCheckIDFromPath(r.URL.Path)
+	h.logger.Info("Extracted checkID",
+		logger.String("checkID", checkID),
+		logger.String("path", r.URL.Path))
 
 	switch r.Method {
 	case http.MethodPost:
@@ -1329,16 +1443,50 @@ func (h *Handler) handleGetSchedule(w http.ResponseWriter, r *http.Request, tena
 
 // handleListSchedules обрабатывает получение списка расписаний
 func (h *Handler) handleListSchedules(w http.ResponseWriter, r *http.Request, tenantID string) {
+	// Проверяем, что schedulerClient доступен
+	if h.schedulerClient == nil {
+		h.logger.Error("Scheduler client is not available")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Scheduler service is not available",
+		})
+		return
+	}
+
+	h.logger.Info("handleListSchedules started",
+		logger.String("tenant_id", tenantID),
+		logger.String("method", r.Method),
+		logger.String("path", r.URL.Path))
+
 	req := &schedulerv1.ListSchedulesRequest{
+		PageSize: 100, // Устанавливаем размер страницы
 		// Используем фильтр для tenant_id, так как прямое поле не поддерживается
 		Filter: fmt.Sprintf("tenant_id:%s", tenantID),
 	}
 
-	resp, err := h.schedulerClient.ListSchedules(r.Context(), req)
+	h.logger.Info("Calling ListSchedules gRPC method",
+		logger.Int("page_size", int(req.PageSize)),
+		logger.String("filter", req.Filter))
+
+	h.logger.Info("Calling ListSchedules gRPC method")
+	
+	// Добавляем timeout для предотвращения зависания
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	
+	resp, err := h.schedulerClient.ListSchedules(ctx, req)
 	if err != nil {
+		h.logger.Error("ListSchedules gRPC call failed",
+			logger.Error(err),
+			logger.String("tenant_id", tenantID))
 		h.handleError(w, err)
 		return
 	}
+
+	h.logger.Info("ListSchedules gRPC call succeeded",
+		logger.Int("schedules_count", len(resp.Schedules)),
+		logger.String("tenant_id", tenantID))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -2078,7 +2226,7 @@ func (h *Handler) handleSchedulerHealthProxy(w http.ResponseWriter, r *http.Requ
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	// Формируем URL для Scheduler Service
-	schedulerURL := "http://scheduler-service:50052/health"
+	schedulerURL := "http://172.20.0.2:51052/health"
 
 	// Создаем новый запрос
 	req, err := http.NewRequestWithContext(r.Context(), "GET", schedulerURL, nil)
@@ -2176,16 +2324,12 @@ func (h *Handler) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSchedulerChecks обрабатывает запросы для проверок
-func (h *Handler) handleSchedulerChecks(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleSchedulerChecks(w http.ResponseWriter, r *http.Request, tenantID string) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if r.Method == http.MethodGet {
 		// GET запрос - получение списка проверок через Scheduler Service
 		h.logger.Info("Getting checks list via Scheduler Service")
-
-		// Получаем tenant_id из контекста
-		userInfo := r.Context().Value("user").(map[string]interface{})
-		tenantID, _ := userInfo["tenant_id"].(string)
 
 		// Создаем запрос для получения списка проверок
 		req := &schedulerv1.ListChecksRequest{
@@ -2246,23 +2390,10 @@ func (h *Handler) handleSchedulerChecks(w http.ResponseWriter, r *http.Request) 
 			Target:   target,
 			Interval: int32(createReq.Interval),
 			Timeout:  int32(createReq.Timeout),
+			TenantId: tenantID, // Используем tenant_id из параметра
 		}
 
-		// Получаем tenant_id из контекста (из токена)
-		if userInfo := r.Context().Value("user"); userInfo != nil {
-			if userMap, ok := userInfo.(map[string]interface{}); ok {
-				if tenantID, ok := userMap["tenant_id"].(string); ok {
-					req.TenantId = tenantID
-					h.logger.Info("tenant_id extracted from context", logger.String("tenant_id", tenantID))
-				} else {
-					h.logger.Warn("tenant_id not found in user context", logger.Any("user_context", userMap))
-				}
-			} else {
-				h.logger.Warn("user context is not map[string]interface{}", logger.Any("user_info", userInfo))
-			}
-		} else {
-			h.logger.Warn("user context is nil")
-		}
+		h.logger.Info("Creating check with tenant_id", logger.String("tenant_id", tenantID))
 
 		response, err := h.schedulerClient.CreateCheck(r.Context(), req)
 		if err != nil {

@@ -126,6 +126,7 @@ func main() {
 		response := map[string]string{
 			"access_token":  accessToken,
 			"refresh_token": refreshToken,
+			"tenant_id":     "aa8931e2-44cc-4d07-b077-958e6dc4a4ac", // Используем тот же tenant_id
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -169,6 +170,7 @@ func main() {
 		response := map[string]string{
 			"access_token":  accessToken,
 			"refresh_token": refreshToken,
+			"tenant_id":     tenantID,
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -220,6 +222,7 @@ func main() {
 		response := map[string]string{
 			"access_token":  accessToken,
 			"refresh_token": newRefreshToken,
+			"tenant_id":     tenantID,
 		}
 
 		w.Header().Set("Content-Type", "application/json")

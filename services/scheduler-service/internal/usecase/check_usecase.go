@@ -90,8 +90,15 @@ func (uc *CheckUseCase) CreateCheck(ctx context.Context, tenantID string, check 
 
 // UpdateCheck обновляет существующую проверку
 func (uc *CheckUseCase) UpdateCheck(ctx context.Context, checkID string, check *domain.Check) error {
-	// Устанавливаем ID для обновляемой проверки
+	// Получаем существующую проверку для сохранения tenant_id
+	existingCheck, err := uc.checkRepo.GetByID(ctx, checkID)
+	if err != nil {
+		return fmt.Errorf("failed to get existing check: %w", err)
+	}
+
+	// Устанавливаем ID и tenant_id для обновляемой проверки
 	check.ID = checkID
+	check.TenantID = existingCheck.TenantID // Сохраняем существующий tenant_id
 
 	// Валидация конфигурации проверки
 	if err := uc.validateCheckConfigForUpdate(check); err != nil {

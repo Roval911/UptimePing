@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"time"
@@ -141,14 +142,26 @@ func (c *HTTPAuthClient) Register(ctx context.Context, email, password, tenantNa
 		return nil, fmt.Errorf("сервер вернул статус: %d", resp.StatusCode)
 	}
 
+	// Читаем тело ответа для логирования
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.logger.Error("ошибка чтения тела ответа", logger.Error(err))
+		return nil, fmt.Errorf("ошибка чтения ответа: %w", err)
+	}
+
+	c.logger.Info("получен ответ от auth-service",
+		logger.String("response_body", string(bodyBytes)))
+
 	// Парсим ответ
 	var tokenPair TokenPair
-	if err := json.NewDecoder(resp.Body).Decode(&tokenPair); err != nil {
+	if err := json.Unmarshal(bodyBytes, &tokenPair); err != nil {
 		c.logger.Error("ошибка декодирования ответа", logger.Error(err))
 		return nil, fmt.Errorf("ошибка декодирования ответа: %w", err)
 	}
 
-	c.logger.Info("пользователь успешно зарегистрирован через HTTP")
+	c.logger.Info("пользователь успешно зарегистрирован через HTTP",
+		logger.String("tenant_id", tokenPair.TenantID),
+		logger.String("access_token_length", fmt.Sprintf("%d", len(tokenPair.AccessToken))))
 
 	return &tokenPair, nil
 }
