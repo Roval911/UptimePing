@@ -1,10 +1,10 @@
 package http
 
 import (
-	"net/http"
-	"github.com/gorilla/mux"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/api-gateway/internal/middleware"
+	"github.com/gorilla/mux"
+	"net/http"
 )
 
 // TestHandler - простой тестовый handler

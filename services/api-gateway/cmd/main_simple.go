@@ -24,9 +24,9 @@ func main() {
 
 	// Initialize logger
 	appLogger, err := logger.NewLogger(logger.Config{
-		Level:      cfg.Logger.Level,
-		Format:     cfg.Logger.Format,
-		Service:    "api-gateway",
+		Level:       cfg.Logger.Level,
+		Format:      cfg.Logger.Format,
+		Service:     "api-gateway",
 		Environment: cfg.Environment,
 	})
 	if err != nil {

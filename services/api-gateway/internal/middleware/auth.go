@@ -50,7 +50,7 @@ func AuthMiddleware(authClient client.AuthHTTPClientInterface, log logger.Logger
 			log.Debug("Checking auth header",
 				logger.String("auth_header", authHeader),
 				logger.Int("auth_header_length", len(authHeader)))
-			
+
 			if isBearerToken(authHeader) {
 				// Обработка Bearer токена (JWT)
 				log.Debug("Processing Bearer token authentication")

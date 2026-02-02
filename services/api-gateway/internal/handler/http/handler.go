@@ -678,7 +678,7 @@ func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 		logger.String("method", r.Method),
 		logger.String("path", r.URL.Path),
 		logger.String("full_url", r.URL.String()))
-	
+
 	if r.Method != http.MethodPost {
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
 		return
@@ -1075,7 +1075,7 @@ func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request, tena
 
 	updateReq.CheckId = checkID
 
-	h.logger.Info("Updating check", 
+	h.logger.Info("Updating check",
 		logger.String("check_id", checkID),
 		logger.String("tenant_id", tenantID))
 
