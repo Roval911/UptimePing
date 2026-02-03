@@ -85,7 +85,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) setupRoutes() {
 	// Scheduler роуты для всех операций с проверками
 
-	// Роут для /api/v1/checks (без слэша) - список проверок
+	// Простые маршруты для операций с проверками по ID
+	getCheckHandler := h.handleProtected(http.HandlerFunc(h.handleGetCheckByIDCompatible))
+	putCheckHandler := h.handleProtected(http.HandlerFunc(h.handleUpdateCheckByID))
+	deleteCheckHandler := h.handleProtected(http.HandlerFunc(h.handleDeleteCheckByIDCompatible))
+	
+	h.mux.Handle("/api/v1/checks/{id}", getCheckHandler).Methods(http.MethodGet)
+	h.mux.Handle("/api/v1/check_upd/{id}", putCheckHandler).Methods(http.MethodPut)
+	h.mux.Handle("/api/v1/check_del/{id}", deleteCheckHandler).Methods(http.MethodDelete)
+
+	// Роут для /api/v1/checks - операции с проверками (должен идти после {id})
 	checksHandler := middleware.AuthMiddleware(h.authService, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.logger.Info("DEBUG: Route /api/v1/checks matched!",
 			logger.String("method", r.Method),
@@ -124,121 +133,6 @@ func (h *Handler) setupRoutes() {
 		}
 	}))
 	h.mux.Handle("/api/v1/checks", checksHandler).Methods(http.MethodGet, http.MethodPost)
-
-	// Роут для /api/v1/checks/{id} - операции с конкретными проверками
-	checkByIDHandler := middleware.AuthMiddleware(h.authService, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		checkID := vars["id"]
-
-		h.logger.Info("DEBUG: Route /api/v1/checks/{id} matched!",
-			logger.String("method", r.Method),
-			logger.String("path", r.URL.Path),
-			logger.String("check_id", checkID),
-			logger.String("full_url", r.URL.String()))
-
-		switch r.Method {
-		case http.MethodGet:
-			h.logger.Info("Handling GET /api/v1/checks/{id} with checks:read permission")
-			// GET /api/v1/checks/{id} - требует checks:read
-			middleware.PermissionMiddleware([]string{"checks:read"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				h.handleSchedulerCheckByID(w, r)
-			})).ServeHTTP(w, r)
-		case http.MethodPut:
-			h.logger.Info("Handling PUT /api/v1/checks/{id} with checks:write permission")
-			// PUT /api/v1/checks/{id} - требует checks:write
-			middleware.PermissionMiddleware([]string{"checks:write"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// Получаем userInfo из контекста
-				userDataCtx, ok := r.Context().Value("user").(map[string]interface{})
-				if !ok {
-					h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
-					return
-				}
-
-				tenantID, ok := userDataCtx["tenant_id"].(string)
-				if !ok {
-					h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant_id not found"), http.StatusUnauthorized)
-					return
-				}
-
-				h.handleUpdateCheck(w, r, tenantID, checkID)
-			})).ServeHTTP(w, r)
-		case http.MethodDelete:
-			h.logger.Info("Handling DELETE /api/v1/checks/{id} with checks:write permission")
-			// DELETE /api/v1/checks/{id} - требует checks:write
-			middleware.PermissionMiddleware([]string{"checks:write"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				h.handleSchedulerChecks(w, r)
-			})).ServeHTTP(w, r)
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
-		}
-	}))
-	h.mux.Handle("/api/v1/checks/{id}", checkByIDHandler).Methods(http.MethodGet, http.MethodDelete, http.MethodPut)
-
-	// НОВЫЕ РОУТЫ БЕЗ КОНФЛИКТОВ:
-
-	// GET /api/v1/check_get/{id} - получить проверку по ID
-	getCheckByIDHandler := middleware.AuthMiddleware(h.authService, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		checkID := vars["id"]
-
-		h.logger.Info("Handling GET /api/v1/check_get/{id} with checks:read permission",
-			logger.String("check_id", checkID))
-
-		h.handleGetCheckByID(w, r, checkID)
-	}))
-	h.mux.Handle("/api/v1/check_get/{id}", getCheckByIDHandler).Methods(http.MethodGet)
-
-	// PUT /api/v1/check_upd/{id} - обновить проверку по ID
-	updateCheckByIDHandler := middleware.AuthMiddleware(h.authService, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		checkID := vars["id"]
-
-		h.logger.Info("DEBUG: Handler called",
-			logger.String("path", r.URL.Path),
-			logger.String("method", r.Method))
-
-		// Получаем userInfo из контекста
-		userDataCtx, ok := r.Context().Value("user").(map[string]interface{})
-		if !ok {
-			h.logger.Error("DEBUG: user info not found in context",
-				logger.String("path", r.URL.Path),
-				logger.Any("context_keys", r.Context()))
-			h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
-			return
-		}
-
-		h.logger.Info("DEBUG: user info found",
-			logger.String("user_id", userDataCtx["user_id"].(string)),
-			logger.String("tenant_id", userDataCtx["tenant_id"].(string)))
-
-		tenantID, ok := userDataCtx["tenant_id"].(string)
-		if !ok {
-			h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant_id not found"), http.StatusUnauthorized)
-			return
-		}
-
-		h.logger.Info("=== handleUpdateCheck called via NEW ROUTE ===",
-			logger.String("check_id", checkID),
-			logger.String("tenant_id", tenantID),
-			logger.String("method", r.Method),
-			logger.String("path", r.URL.Path))
-
-		h.handleUpdateCheck(w, r, tenantID, checkID)
-	}))
-	h.mux.Handle("/api/v1/check_upd/{id}", updateCheckByIDHandler).Methods(http.MethodPut)
-
-	// DELETE /api/v1/check_del/{id} - удалить проверку по ID
-	deleteCheckByIDHandler := middleware.AuthMiddleware(h.authService, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		checkID := vars["id"]
-
-		h.logger.Info("Handling DELETE /api/v1/check_del/{id} with checks:write permission",
-			logger.String("check_id", checkID))
-
-		h.handleDeleteCheckByID(w, r, checkID)
-	}))
-	h.mux.Handle("/api/v1/check_del/{id}", deleteCheckByIDHandler).Methods(http.MethodDelete)
 
 	// Публичные роуты
 	h.mux.HandleFunc("/api/v1/auth/login", h.handleLogin)
@@ -1146,6 +1040,29 @@ func (h *Handler) handleGetCheck(w http.ResponseWriter, r *http.Request, tenantI
 	})
 }
 
+// handleUpdateCheckByID обрабатывает обновление проверки по ID для handleProtected
+func (h *Handler) handleUpdateCheckByID(w http.ResponseWriter, r *http.Request) {
+	// Извлекаем checkID из URL
+	vars := mux.Vars(r)
+	checkID := vars["id"]
+	
+	// Получаем информацию о пользователе из контекста
+	userDataCtx, ok := r.Context().Value("user").(map[string]interface{})
+	if !ok {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
+		return
+	}
+
+	tenantID, ok := userDataCtx["tenant_id"].(string)
+	if !ok {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant_id not found"), http.StatusUnauthorized)
+		return
+	}
+	
+	// Вызываем основную функцию
+	h.handleUpdateCheck(w, r, tenantID, checkID)
+}
+
 // handleUpdateCheck обрабатывает обновление проверки
 func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request, tenantID, checkID string) {
 	// Валидация UUID
@@ -1187,6 +1104,16 @@ func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request, tena
 	})
 }
 
+// handleGetCheckByIDCompatible обрабатывает получение проверки по ID для handleProtected
+func (h *Handler) handleGetCheckByIDCompatible(w http.ResponseWriter, r *http.Request) {
+	// Извлекаем checkID из URL
+	vars := mux.Vars(r)
+	checkID := vars["id"]
+	
+	// Вызываем основную функцию
+	h.handleGetCheckByID(w, r, checkID)
+}
+
 // handleGetCheckByID обрабатывает получение проверки по ID
 func (h *Handler) handleGetCheckByID(w http.ResponseWriter, r *http.Request, checkID string) {
 	h.logger.Info("=== handleGetCheckByID called ===",
@@ -1221,6 +1148,16 @@ func (h *Handler) handleGetCheckByID(w http.ResponseWriter, r *http.Request, che
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(check)
+}
+
+// handleDeleteCheckByIDCompatible обрабатывает удаление проверки по ID для handleProtected
+func (h *Handler) handleDeleteCheckByIDCompatible(w http.ResponseWriter, r *http.Request) {
+	// Извлекаем checkID из URL
+	vars := mux.Vars(r)
+	checkID := vars["id"]
+	
+	// Вызываем основную функцию
+	h.handleDeleteCheckByID(w, r, checkID)
 }
 
 // handleDeleteCheckByID обрабатывает удаление проверки по ID
