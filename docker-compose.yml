@@ -258,11 +258,12 @@ services:
     container_name: uptimeping-core-service
     ports:
       - "50054:50054"
+      - "51054:51054"
     environment:
       - ENVIRONMENT=dev
       - LOG_LEVEL=info
       - SERVER_HOST=0.0.0.0
-      - SERVER_PORT=50054
+      - HTTP_SERVER_PORT=51054
       - RABBITMQ_URL=amqp://uptimeping:uptimeping123@rabbitmq:5672/
       - REDIS_ADDR=redis:6379
       - WORKER_POOL_SIZE=10

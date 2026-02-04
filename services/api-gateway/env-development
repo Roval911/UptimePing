@@ -97,7 +97,7 @@ METRICS_ENABLE_SYSTEM=true
 # =============================================================================
 
 # Auth Service
-AUTH_SERVICE_ADDR=localhost:50051
+AUTH_SERVICE_ADDR=http://auth-service:51051
 
 # Scheduler Service  
 SCHEDULER_SERVICE_ADDR=localhost:50053

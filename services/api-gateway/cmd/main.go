@@ -80,7 +80,7 @@ func main() {
 	// Create Auth Service HTTP client
 	authServiceAddr := os.Getenv("AUTH_SERVICE_ADDR")
 	if authServiceAddr == "" {
-		authServiceAddr = "http://localhost:51051"
+		authServiceAddr = "http://auth-service:51051"
 	}
 	httpAuthClient, err := client.NewHTTPAuthClient(authServiceAddr, 10*time.Second, appLogger)
 	if err != nil {
@@ -97,6 +97,7 @@ func main() {
 	var incidentClient *client.IncidentClient
 	var notificationClient *client.NotificationClient
 	var forgeClient *client.GRPCForgeClient
+	var configClient *client.ConfigClient
 
 	// Try to connect to services, but don't fail if they're not available
 	if schedulerClient, err = client.NewSchedulerClient("scheduler-service:50052", 10*time.Second, appLogger); err != nil {
@@ -119,24 +120,38 @@ func main() {
 	}
 
 	// Create Config Service client
-	configClient, err := client.NewConfigClient(2*time.Second, appLogger)
-	if err != nil {
+	if configClient, err = client.NewConfigClient(2*time.Second, appLogger); err != nil {
 		appLogger.Warn("Config Service client creation failed, continuing without it", logger.Error(err))
 	}
 
 	// Create HTTP handler
-	httpHandlerInstance := httpHandler.NewHandler(
-		authAdapter,
-		healthChecker,
-		schedulerClient,
-		coreClient,
-		metricsClient,
-		incidentClient,
-		notificationClient,
-		configClient,
-		forgeClient,
-		appLogger,
-	)
+	appLogger.Info("About to create HTTP handler")
+
+	var httpHandlerInstance http.Handler
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				appLogger.Error("PANIC during HTTP handler creation",
+					logger.Any("panic", r))
+				log.Fatalf("HTTP handler creation failed: %v", r)
+			}
+		}()
+
+		httpHandlerInstance = httpHandler.NewHandler(
+			authAdapter,
+			healthChecker,
+			schedulerClient,
+			coreClient,
+			metricsClient,
+			incidentClient,
+			notificationClient,
+			configClient,
+			forgeClient,
+			appLogger,
+		)
+	}()
+
+	appLogger.Info("HTTP handler created successfully")
 
 	// Start HTTP server with middleware
 	httpServer := &http.Server{

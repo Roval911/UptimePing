@@ -402,7 +402,8 @@ func (c *HTTPAuthClient) Logout(ctx context.Context, accessToken string) error {
 	defer resp.Body.Close()
 
 	// Проверяем статус ответа
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+	// Для logout 401 (Invalid token) считается нормальным ответом - токен просто невалидный
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusUnauthorized {
 		c.logger.Error("неверный статус ответа", logger.Int("status", resp.StatusCode))
 		return fmt.Errorf("сервер вернул статус: %d", resp.StatusCode)
 	}

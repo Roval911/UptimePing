@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -53,14 +54,23 @@ func main() {
 	}
 
 	// Start HTTP server for metrics and health
+	httpPort := 51054 // Default HTTP port
+	if envPort := os.Getenv("HTTP_SERVER_PORT"); envPort != "" {
+		if port, err := strconv.Atoi(envPort); err == nil {
+			httpPort = port
+		}
+	}
+
+	appLogger.Info(fmt.Sprintf("HTTP_SERVER_PORT env var: %s, using port: %d", os.Getenv("HTTP_SERVER_PORT"), httpPort))
+
 	httpServer := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
+		Addr:    fmt.Sprintf(":%d", httpPort),
 		Handler: setupHTTPHandler(metricsHandler, healthChecker, appLogger),
 	}
 
 	// Start server
 	go func() {
-		appLogger.Info(fmt.Sprintf("Starting HTTP server on port %d", cfg.Server.Port))
+		appLogger.Info(fmt.Sprintf("Starting HTTP server on port %d", httpPort))
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			appLogger.Error("HTTP server failed", logger.Error(err))
 		}
@@ -85,21 +95,21 @@ func main() {
 
 func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthChecker, appLogger logger.Logger) http.Handler {
 	mux := http.NewServeMux()
-	
+
 	// Metrics endpoint
 	mux.Handle("/metrics", metricsHandler)
-	
+
 	// Health endpoints
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"healthy","service":"core-service"}`))
 	})
-	
+
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ready","service":"core-service"}`))
 	})
-	
+
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"live","service":"core-service"}`))
@@ -120,6 +130,6 @@ func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthCh
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"message":"Core Service - Check History endpoint","status":"ok"}`))
 	})
-	
+
 	return mux
 }

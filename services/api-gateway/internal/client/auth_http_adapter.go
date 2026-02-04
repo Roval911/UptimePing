@@ -123,11 +123,16 @@ func (a *AuthHTTPAdapter) ValidateToken(ctx context.Context, accessToken string)
 	defer resp.Body.Close()
 
 	// Проверяем статус ответа
+	if resp.StatusCode == http.StatusUnauthorized {
+		// 401 - нормальный ответ для невалидного токена
+		return nil, nil
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("невалидный токен, статус: %d", resp.StatusCode)
 	}
 
-	// Парсим ответ
+	// Парсим ответ только для успешных статусов
 	var userInfo UserInfo
 	if err := json.NewDecoder(resp.Body).Decode(&userInfo); err != nil {
 		return nil, fmt.Errorf("ошибка декодирования ответа: %w", err)
@@ -222,7 +227,8 @@ func (a *AuthHTTPAdapter) Logout(ctx context.Context, accessToken string) error 
 	defer resp.Body.Close()
 
 	// Проверяем статус ответа
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+	// Для logout 401 (Invalid token) считается нормальным ответом - токен просто невалидный
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusUnauthorized {
 		return fmt.Errorf("ошибка выхода, статус: %d", resp.StatusCode)
 	}
 

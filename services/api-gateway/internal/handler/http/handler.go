@@ -72,12 +72,20 @@ func NewHandler(authService client.AuthHTTPClientInterface, healthHandler Health
 		validator:          validation.NewValidator(),
 	}
 
+	h.logger.Info("DEBUG: About to setup routes")
 	h.setupRoutes()
+	h.logger.Info("DEBUG: Routes setup completed")
 	return h
 }
 
 // ServeHTTP реализует интерфейс http.Handler
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// DEBUG: логируем все запросы
+	h.logger.Info("DEBUG: Incoming request",
+		logger.String("method", r.Method),
+		logger.String("path", r.URL.Path),
+		logger.String("full_url", r.URL.String()))
+
 	h.mux.ServeHTTP(w, r)
 }
 
@@ -89,7 +97,7 @@ func (h *Handler) setupRoutes() {
 	getCheckHandler := h.handleProtected(http.HandlerFunc(h.handleGetCheckByIDCompatible))
 	putCheckHandler := h.handleProtected(http.HandlerFunc(h.handleUpdateCheckByID))
 	deleteCheckHandler := h.handleProtected(http.HandlerFunc(h.handleDeleteCheckByIDCompatible))
-	
+
 	h.mux.Handle("/api/v1/checks/{id}", getCheckHandler).Methods(http.MethodGet)
 	h.mux.Handle("/api/v1/check_upd/{id}", putCheckHandler).Methods(http.MethodPut)
 	h.mux.Handle("/api/v1/check_del/{id}", deleteCheckHandler).Methods(http.MethodDelete)
@@ -148,15 +156,32 @@ func (h *Handler) setupRoutes() {
 	configHandler := middleware.PermissionMiddleware([]string{"config:read"}, h.logger)(http.HandlerFunc(h.handleConfig))
 	h.mux.HandleFunc("/api/v1/config", configHandler.ServeHTTP).Methods(http.MethodGet)
 
+	// Auth Service health endpoints (для тестирования) - ВАЖНО: регистрируем ПЕРЕД другими роутами
+	h.logger.Info("DEBUG: Registering /api/v1/auth/health route")
+	h.mux.Handle("/api/v1/auth/health", http.HandlerFunc(h.handleAuthHealthProxy))
+	h.mux.Handle("/api/v1/scheduler/health", http.HandlerFunc(h.handleSchedulerHealthProxy))
+	h.mux.Handle("/api/v1/core/health", http.HandlerFunc(h.handleCoreHealthProxy))
+
 	// Health check роуты
 	h.mux.HandleFunc("/health", h.healthHandler.HealthCheck)
 	h.mux.HandleFunc("/ready", h.healthHandler.ReadyCheck)
 	h.mux.HandleFunc("/live", h.healthHandler.LiveCheck)
 
-	// Auth Service health endpoints (для тестирования)
-	h.mux.HandleFunc("/api/v1/auth/health", h.handleAuthHealthProxy)
-	h.mux.HandleFunc("/api/v1/scheduler/health", h.handleSchedulerHealthProxy)
-	h.mux.HandleFunc("/api/v1/core/health", h.handleCoreHealthProxy)
+	// TEST: простой тестовый роут
+	h.logger.Info("DEBUG: Registering /api/v1/test-debug route")
+	h.mux.HandleFunc("/api/v1/test-debug", func(w http.ResponseWriter, r *http.Request) {
+		h.logger.Info("DEBUG: Test route called!")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Test OK"))
+	})
+
+	// TEST: корневой тестовый роут
+	h.logger.Info("DEBUG: Registering /test-simple route")
+	h.mux.HandleFunc("/test-simple", func(w http.ResponseWriter, r *http.Request) {
+		h.logger.Info("DEBUG: Simple test route called!")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Simple Test OK"))
+	})
 
 	// Расписания проверок - используем mux.Handle для правильного паттерн-матчинга
 	schedulesHandler := h.handleProtected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -924,9 +949,10 @@ func (h *Handler) handleChecksProxy(w http.ResponseWriter, r *http.Request) {
 // extractCheckIDFromPath извлекает ID проверки из URL пути
 func extractCheckIDFromPath(path string) string {
 	// Пример: /api/v1/checks/12345 -> 12345
+	// Пример: /api/v1/core/12345 -> 12345
 	parts := strings.Split(path, "/")
 	for i, part := range parts {
-		if part == "checks" && i+1 < len(parts) {
+		if (part == "checks" || part == "core") && i+1 < len(parts) {
 			return parts[i+1]
 		}
 	}
@@ -1045,7 +1071,7 @@ func (h *Handler) handleUpdateCheckByID(w http.ResponseWriter, r *http.Request) 
 	// Извлекаем checkID из URL
 	vars := mux.Vars(r)
 	checkID := vars["id"]
-	
+
 	// Получаем информацию о пользователе из контекста
 	userDataCtx, ok := r.Context().Value("user").(map[string]interface{})
 	if !ok {
@@ -1058,7 +1084,7 @@ func (h *Handler) handleUpdateCheckByID(w http.ResponseWriter, r *http.Request) 
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant_id not found"), http.StatusUnauthorized)
 		return
 	}
-	
+
 	// Вызываем основную функцию
 	h.handleUpdateCheck(w, r, tenantID, checkID)
 }
@@ -1109,7 +1135,7 @@ func (h *Handler) handleGetCheckByIDCompatible(w http.ResponseWriter, r *http.Re
 	// Извлекаем checkID из URL
 	vars := mux.Vars(r)
 	checkID := vars["id"]
-	
+
 	// Вызываем основную функцию
 	h.handleGetCheckByID(w, r, checkID)
 }
@@ -1155,7 +1181,7 @@ func (h *Handler) handleDeleteCheckByIDCompatible(w http.ResponseWriter, r *http
 	// Извлекаем checkID из URL
 	vars := mux.Vars(r)
 	checkID := vars["id"]
-	
+
 	// Вызываем основную функцию
 	h.handleDeleteCheckByID(w, r, checkID)
 }
@@ -2112,8 +2138,11 @@ func (h *Handler) handleAuthHealthProxy(w http.ResponseWriter, r *http.Request) 
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	// Формируем URL для Auth Service HTTP health endpoint
-	// Auth Service работает на gRPC, но имеет HTTP health endpoint на том же порту
-	authURL := "http://auth-service:50051/health"
+	// Auth Service работает на gRPC (50051), но имеет HTTP health endpoint на порту 51051
+	authURL := "http://auth-service:51051/health"
+
+	// DEBUG: логируем URL для отладки
+	h.logger.Info("DEBUG: Auth health URL", logger.String("url", authURL))
 
 	// Создаем новый запрос
 	req, err := http.NewRequestWithContext(r.Context(), "GET", authURL, nil)
@@ -2193,8 +2222,8 @@ func (h *Handler) handleCoreHealthProxy(w http.ResponseWriter, r *http.Request) 
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	// Формируем URL для Core Service HTTP health endpoint
-	// Core Service работает на gRPC, но имеет HTTP health endpoint на том же порту
-	coreURL := "http://core-service:50054/health"
+	// Core Service работает на gRPC, но имеет HTTP health endpoint на порту 51054
+	coreURL := "http://core-service:51054/health"
 
 	// Создаем новый запрос
 	req, err := http.NewRequestWithContext(r.Context(), "GET", coreURL, nil)
