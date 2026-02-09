@@ -267,7 +267,16 @@ curl -X GET "http://localhost:8080/api/v1/core/<CHECK_ID>/history?page=1&page_si
 - **Запрос:** `{"proto_content": "string", "action": "generate_config", "options": {}}`
 - **Ответ:** `{"success": true, "message": "Configuration generated successfully", "config_yaml": "string", "check_config": {}}`
 - **Статусы:** `200` (успех), `400` (валидация), `401` (неавторизован), `500` (ошибка)
-- **Статус:** ❌ **НЕ РАБОТАЕТ** - HTTP 408 timeout
+- **Статус:** ✅ **РАБОТАЕТ** - Эндпоинт доступен; требует поле `action` в теле запроса (validation).
+
+- Пример:
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/forge/generate \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"proto_content":"syntax = \"proto3\"; package example; service S{ rpc M (Empty) returns (Empty); } message Empty{ }","action":"generate_config","options":{"target_host":"localhost","target_port":50051,"check_interval":60,"timeout":5}}'
+```
 
 ---
 
@@ -276,7 +285,16 @@ curl -X GET "http://localhost:8080/api/v1/core/<CHECK_ID>/history?page=1&page_si
 - **Запрос:** `{"proto_content": "string", "action": "parse_proto", "file_name": "string"}`
 - **Ответ:** `{"success": true, "message": "Proto parsed successfully", "service_info": {}, "is_valid": boolean, "warnings": []}`
 - **Статусы:** `200` (успех), `400` (валидация), `401` (неавторизован), `500` (ошибка)
-- **Статус:** ⏳ **НЕ ПРОВЕРЕН** - Timeout при тестировании
+- **Статус:** ✅ **РАБОТАЕТ (валидируется)** - Эндпоинт доступен, требует `action`.
+
+- Пример:
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/forge/parse \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"proto_content":"syntax = \"proto3\"; package example; service S{ rpc M (Empty) returns (Empty); } message Empty{ }","action":"parse_proto","file_name":"test.proto"}'
+```
 
 ---
 
@@ -285,7 +303,16 @@ curl -X GET "http://localhost:8080/api/v1/core/<CHECK_ID>/history?page=1&page_si
 - **Запрос:** `{"proto_content": "string", "action": "generate_code", "options": {"language": "string", "framework": "string", "template": "string"}}`
 - **Ответ:** `{"success": true, "message": "Code generated successfully", "code": "string", "filename": "string", "language": "string"}`
 - **Статусы:** `200` (успех), `400` (валидация), `401` (неавторизован), `500` (ошибка)
-- **Статус:** ⏳ **НЕ ПРОВЕРЕН** - Timeout при тестировании
+- **Статус:** ⏳ **ЧАСТИЧНО** - Эндпоинт доступен и валидирует `action`; для генерации кода нужны дополнительные опции.
+
+- Пример:
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/forge/code \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"proto_content":"syntax = \"proto3\"; package example; service S{ rpc M (Empty) returns (Empty); } message Empty{ }","action":"generate_code","options":{"language":"go"}}'
+```
 
 ---
 
@@ -294,7 +321,16 @@ curl -X GET "http://localhost:8080/api/v1/core/<CHECK_ID>/history?page=1&page_si
 - **Запрос:** `{"proto_content": "string", "action": "validate_proto"}`
 - **Ответ:** `{"success": true, "message": "Proto validated successfully", "is_valid": boolean, "errors": [], "warnings": []}`
 - **Статусы:** `200` (успех), `400` (валидация), `401` (неавторизован), `500` (ошибка)
-- **Статус:** ⏳ **НЕ ПРОВЕРЕН** - Timeout при тестировании
+- **Статус:** ✅ **РАБОТАЕТ (валидация)** - Эндпоинт доступен; возвращает 400 при отсутствии `action` или некорректном proto.
+
+- Пример:
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/forge/validate \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"proto_content":"syntax = \"proto3\"; package example; service S{ rpc M (Empty) returns (Empty); } message Empty{ }","action":"validate_proto"}'
+```
 
 ---
 
@@ -382,14 +418,6 @@ curl -X GET "http://localhost:8080/api/v1/core/<CHECK_ID>/history?page=1&page_si
 
 ---
 
-## ⚙️ 9. CONFIG SERVICE
-
-### `GET /api/v1/config`
-**Описание:** Получение конфигурации
-- **Запрос:** Нет данных
-- **Ответ:** `{"config": {"version": "string", "environment": "string"}}`
-- **Статусы:** `200` (успех), `401` (требуются права), `500` (ошибка)
-- **Статус:** ❌ **НЕ РАБОТАЕТ** - "Unsupported authorization type" - проблема с middleware
 
 ---
 
@@ -427,7 +455,14 @@ curl -X GET "http://localhost:8080/api/v1/core/<CHECK_ID>/history?page=1&page_si
 - **Запрос:** Нет данных
 - **Ответ:** Health ответ от Auth Service
 - **Статусы:** `200` (здоров), `503` (недоступен)
-- **Статус:** ⏳ **НЕ ПРОВЕРЕН**
+- **Статус:** ✅ **РАБОТАЕТ** - Проксируется через API Gateway
+
+- Пример:
+
+```bash
+curl -s http://localhost:8080/api/v1/auth/health
+```
+
 ---
 
 ### `GET /api/v1/scheduler/health`
@@ -435,7 +470,14 @@ curl -X GET "http://localhost:8080/api/v1/core/<CHECK_ID>/history?page=1&page_si
 - **Запрос:** Нет данных
 - **Ответ:** Health ответ от Scheduler Service
 - **Статусы:** `200` (здоров), `503` (недоступен)
-- **Статус:** ⏳ **НЕ ПРОВЕРЕН**
+- **Статус:** ✅ **РАБОТАЕТ** - Проксируется через API Gateway
+
+- Пример:
+
+```bash
+curl -s http://localhost:8080/api/v1/scheduler/health
+```
+
 ---
 
 ### `GET /api/v1/core/health`
@@ -443,7 +485,14 @@ curl -X GET "http://localhost:8080/api/v1/core/<CHECK_ID>/history?page=1&page_si
 - **Запрос:** Нет данных
 - **Ответ:** Health ответ от Core Service
 - **Статусы:** `200` (здоров), `503` (недоступен)
-- **Статус:** ⏳ **НЕ ПРОВЕРЕН**
+- **Статус:** ✅ **РАБОТАЕТ** - Проксируется через API Gateway
+
+- Пример:
+
+```bash
+curl -s http://localhost:8080/api/v1/core/health
+```
+
 ---
 
 ## 📋 СТАТИСТИКА

@@ -15,6 +15,12 @@ import (
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
 	pkg_redis "UptimePingPlatform/pkg/redis"
+	"net"
+	"google.golang.org/grpc"
+	forgev1 "UptimePingPlatform/proto/api/forge/v1"
+	grpcHandler "UptimePingPlatform/services/forge-service/internal/handler/grpc"
+	"UptimePingPlatform/services/forge-service/internal/service"
+	"encoding/json"
 )
 
 func main() {
@@ -52,15 +58,44 @@ func main() {
 		defer redisClient.Close()
 	}
 
-	// Start HTTP server for metrics and health
-	httpServer := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler: setupHTTPHandler(metricsHandler, healthChecker, appLogger),
+	// Start gRPC server for Forge Service
+	grpcPort := cfg.GRPC.Port
+	if grpcPort == 0 {
+		grpcPort = 50052
+	}
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", grpcPort))
+	if err != nil {
+		appLogger.Error("Failed to listen for gRPC", logger.Error(err))
+		log.Fatalf("Failed to listen: %v", err)
 	}
 
-	// Start server
+	// Initialize forge service components (parser, code generator, validator)
+	protoParser := service.NewProtoParser(cfg.Forge.ProtoDir)
+	// codeGenerator/validator can be nil for now
+	forgeSvc := service.NewForgeService(appLogger, protoParser, nil, nil)
+	grpcHandler := grpcHandler.NewForgeHandler(forgeSvc, appLogger)
+
+	grpcServer := grpc.NewServer()
+	forgev1.RegisterForgeServiceServer(grpcServer, grpcHandler)
+
+	// Start gRPC server
 	go func() {
-		appLogger.Info(fmt.Sprintf("Starting HTTP server on port %d", cfg.Server.Port))
+		appLogger.Info(fmt.Sprintf("Starting gRPC server on port %d", grpcPort))
+		if err := grpcServer.Serve(lis); err != nil && err != grpc.ErrServerStopped {
+			appLogger.Error("gRPC server failed", logger.Error(err))
+		}
+	}()
+
+	// Start HTTP server for metrics and health (on separate HTTP/metrics port)
+	httpAddr := fmt.Sprintf(":%d", cfg.Server.Port)
+	httpServer := &http.Server{
+		Addr:    httpAddr,
+		Handler: setupHTTPHandler(metricsHandler, healthChecker, appLogger, forgeSvc),
+	}
+
+	// Start HTTP server
+	go func() {
+		appLogger.Info(fmt.Sprintf("Starting HTTP server on port %s", httpAddr))
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			appLogger.Error("HTTP server failed", logger.Error(err))
 		}
@@ -83,7 +118,7 @@ func main() {
 	appLogger.Info("Server stopped")
 }
 
-func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthChecker, appLogger logger.Logger) http.Handler {
+func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthChecker, appLogger logger.Logger, forgeSvc service.ForgeService) http.Handler {
 	mux := http.NewServeMux()
 	
 	// Metrics endpoint
@@ -119,6 +154,98 @@ func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthCh
 	mux.HandleFunc("/api/v1/forge/deploy", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"message":"Forge Service - Deploy endpoint","status":"ok"}`))
+	})
+	// Compatibility endpoints for programmatic access
+	mux.HandleFunc("/api/v1/forge/generate_config", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var payload struct {
+			ProtoContent string                 `json:"proto_content"`
+			Options      map[string]interface{} `json:"options"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			appLogger.Error("Failed to decode generate_config request", logger.Error(err))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Invalid JSON"})
+			return
+		}
+		var opts *service.ConfigOptions
+		if payload.Options != nil {
+			opts = &service.ConfigOptions{}
+			if v, ok := payload.Options["target_host"].(string); ok {
+				opts.TargetHost = v
+			}
+			if v, ok := payload.Options["target_port"].(float64); ok {
+				opts.TargetPort = int(v)
+			}
+			if v, ok := payload.Options["check_interval"].(float64); ok {
+				opts.CheckInterval = int(v)
+			}
+			if v, ok := payload.Options["timeout"].(float64); ok {
+				opts.Timeout = int(v)
+			}
+			if v, ok := payload.Options["tenant_id"].(string); ok {
+				opts.TenantID = v
+			}
+		}
+		configYaml, checkConfig, err := forgeSvc.GenerateConfig(r.Context(), payload.ProtoContent, opts)
+		if err != nil {
+			appLogger.Error("GenerateConfig failed", logger.Error(err))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": fmt.Sprintf("Generation failed: %s", err.Error())})
+			return
+		}
+		resp := map[string]interface{}{
+			"success":     true,
+			"config_yaml": configYaml,
+			"check_config": map[string]interface{}{
+				"name":     checkConfig.Name,
+				"type":     checkConfig.Type,
+				"target":   checkConfig.Target,
+				"interval": checkConfig.Interval,
+				"timeout":  checkConfig.Timeout,
+				"config":   checkConfig.Config,
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+	mux.HandleFunc("/api/v1/forge/parse", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var payload struct {
+			ProtoContent string `json:"proto_content"`
+			FileName     string `json:"file_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			appLogger.Error("Failed to decode parse request", logger.Error(err))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Invalid JSON"})
+			return
+		}
+		serviceInfo, isValid, warnings, err := forgeSvc.ParseProto(r.Context(), payload.ProtoContent, payload.FileName)
+		if err != nil {
+			appLogger.Error("ParseProto failed", logger.Error(err))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": fmt.Sprintf("Parse failed: %s", err.Error())})
+			return
+		}
+		resp := map[string]interface{}{
+			"success":      true,
+			"service_info": serviceInfo,
+			"is_valid":     isValid,
+			"warnings":     warnings,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
 	})
 	
 	return mux

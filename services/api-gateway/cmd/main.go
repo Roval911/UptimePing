@@ -115,7 +115,11 @@ func main() {
 	if notificationClient, err = client.NewNotificationClient("notification-service:50057", 2*time.Second, appLogger); err != nil {
 		appLogger.Warn("Notification Service client creation failed, continuing without it", logger.Error(err))
 	}
-	if forgeClient, err = client.NewGRPCForgeClient("forge-service:50053", 2*time.Second, appLogger); err != nil {
+	forgeAddr := os.Getenv("FORGE_SERVICE_ADDR")
+	if forgeAddr == "" {
+		forgeAddr = "forge-service:50052"
+	}
+	if forgeClient, err = client.NewGRPCForgeClient(forgeAddr, 2*time.Second, appLogger); err != nil {
 		appLogger.Warn("Forge Service client creation failed, continuing without it", logger.Error(err))
 	}
 

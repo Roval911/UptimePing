@@ -70,6 +70,9 @@ func (h *HTTPHandler) RegisterRoutes(mux *http.ServeMux) {
 	
 	// CLI API маршруты (v1)
 	apiMux.HandleFunc("/api/v1/forge/generate", h.handleGenerate)
+	// Compatibility HTTP API for programmatic access (wraps service methods)
+	apiMux.HandleFunc("/api/v1/forge/generate_config", h.handleGenerateConfigAPI)
+	apiMux.HandleFunc("/api/v1/forge/parse", h.handleParseProtoAPI)
 	
 	// Применяем middleware аутентификации к API
 	mux.Handle("/api/", h.authMiddleware(apiMux))
@@ -722,6 +725,101 @@ func (h *HTTPHandler) handleGenerate(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// handleGenerateConfigAPI handles HTTP requests to generate config from proto (compat for API Gateway)
+func (h *HTTPHandler) handleGenerateConfigAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var payload struct {
+		ProtoContent string                 `json:"proto_content"`
+		Options      map[string]interface{} `json:"options"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		h.logger.Error("Failed to decode generate_config request", logger.Error(err))
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Convert options
+	var opts *service.ConfigOptions
+	if payload.Options != nil {
+		opts = &service.ConfigOptions{}
+		if v, ok := payload.Options["target_host"].(string); ok {
+			opts.TargetHost = v
+		}
+		if v, ok := payload.Options["target_port"].(float64); ok {
+			opts.TargetPort = int(v)
+		}
+		if v, ok := payload.Options["check_interval"].(float64); ok {
+			opts.CheckInterval = int(v)
+		}
+		if v, ok := payload.Options["timeout"].(float64); ok {
+			opts.Timeout = int(v)
+		}
+		if v, ok := payload.Options["tenant_id"].(string); ok {
+			opts.TenantID = v
+		}
+	}
+
+	configYaml, checkConfig, err := h.forgeService.GenerateConfig(r.Context(), payload.ProtoContent, opts)
+	if err != nil {
+		h.logger.Error("GenerateConfig failed", logger.Error(err))
+		http.Error(w, fmt.Sprintf("Generation failed: %s", err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	resp := map[string]interface{}{
+		"success":     true,
+		"config_yaml": configYaml,
+		"check_config": map[string]interface{}{
+			"name":     checkConfig.Name,
+			"type":     checkConfig.Type,
+			"target":   checkConfig.Target,
+			"interval": checkConfig.Interval,
+			"timeout":  checkConfig.Timeout,
+			"config":   checkConfig.Config,
+		},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleParseProtoAPI handles HTTP requests to parse proto content (compat for API Gateway)
+func (h *HTTPHandler) handleParseProtoAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var payload struct {
+		ProtoContent string `json:"proto_content"`
+		FileName     string `json:"file_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		h.logger.Error("Failed to decode parse request", logger.Error(err))
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	serviceInfo, isValid, warnings, err := h.forgeService.ParseProto(r.Context(), payload.ProtoContent, payload.FileName)
+	if err != nil {
+		h.logger.Error("ParseProto failed", logger.Error(err))
+		http.Error(w, fmt.Sprintf("Parse failed: %s", err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	resp := map[string]interface{}{
+		"success":     true,
+		"service_info": serviceInfo,
+		"is_valid":    isValid,
+		"warnings":    warnings,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // handleValidate обрабатывает запрос на валидацию
