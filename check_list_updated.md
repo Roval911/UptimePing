@@ -59,12 +59,28 @@
 - **Статусы:** `201` (создан), `400` (валидация), `401` (неавторизован), `500` (ошибка)
 - **Статус:** ✅ **РАБОТАЕТ** - Возвращает 201 Created с полной информацией о созданной проверке
 
+- Пример:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/checks \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"ci-check","type":"http","target":"https://example.com","interval":60,"timeout":5}'
+```
+
 ### `GET /api/v1/checks`
 **Описание:** Получение списка проверок
 - **Запрос:** Query параметры (`page`, `page_size`)
 - **Ответ:** `{"checks": [{"id": "string", "tenant_id": "string", "name": "string", "type": "string", "target": "string", "interval": "number", "timeout": "number", "status": "string", "priority": "number", "created_at": "string", "updated_at": "string"}]}`
 - **Статусы:** `200` (успех), `401` (неавторизован), `500` (ошибка)
 - **Статус:** ✅ **РАБОТАЕТ** - Возвращает список проверок с полной информацией
+
+- Пример:
+
+```bash
+curl -X GET "http://localhost:8080/api/v1/checks?page=1&page_size=20" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
 ---
 
 ### `GET /api/v1/checks/{id}`
@@ -73,6 +89,13 @@
 - **Ответ:** `{"id": "string", "tenant_id": "string", "name": "string", "type": "string", "target": "string", "interval": "number", "timeout": "number", "status": "string", "priority": "number", "created_at": "string", "updated_at": "string"}`
 - **Статусы:** `200` (успех), `400` (невалидный ID), `401` (неавторизован), `403` (доступ запрещен), `404` (не найден), `500` (ошибка)
 - **Статус:** ✅ **РАБОТАЕТ** - Возвращает 200 OK с полной информацией о конкретной проверке
+
+- Пример:
+
+```bash
+curl -X GET "http://localhost:8080/api/v1/checks/<CHECK_ID>" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
 ---
 
 ### `PUT /api/v1/check_upd/{id}`
@@ -81,6 +104,15 @@
 - **Ответ:** `{"success": true, "message": "Check updated", "check": {}}`
 - **Статусы:** `200` (успех), `400` (валидация), `401` (неавторизован), `403` (доступ запрещен), `404` (не найден), `500` (ошибка)
 - **Статус:** ✅ **РАБОТАЕТ** - Обновление работает через `/api/v1/check_upd/{id}` с сохранением tenant_id
+
+- Пример:
+
+```bash
+curl -X PUT "http://localhost:8080/api/v1/check_upd/<CHECK_ID>" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"updated-name","timeout":10}'
+```
 ---
 
 ### `DELETE /api/v1/check_del/{id}`
@@ -89,6 +121,13 @@
 - **Ответ:** `{"success": true, "message": "Check deleted"}`
 - **Статусы:** `200` (успех), `400` (невалидный ID), `401` (неавторизован), `403` (доступ запрещен), `404` (не найден), `500` (ошибка)
 - **Статус:** ✅ **РАБОТАЕТ** - Возвращает 200 OK с подтверждением удаления
+
+- Пример:
+
+```bash
+curl -X DELETE "http://localhost:8080/api/v1/check_del/<CHECK_ID>" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
 ---
 
 ## 📅 3. РАСПИСАНИЯ (SCHEDULES)
@@ -98,7 +137,14 @@
 - **Запрос:** Query параметры (`page`, `page_size`)
 - **Ответ:** `{"success": true, "schedules": [], "total": "number"}`
 - **Статусы:** `200` (успех), `401` (неавторизован), `500` (ошибка)
-- **Статус:** ✅ **РАБОТАЕТ** - Возвращает пустой список расписаний, что корректно
+- **Статус:** ✅ **РАБОТАЕТ** - Возвращает список расписаний (пустой при отсутствии)
+
+- Пример:
+
+```bash
+curl -X GET "http://localhost:8080/api/v1/schedules?page=1&page_size=20" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
 
 ---
 
@@ -109,6 +155,15 @@
 - **Статусы:** `201` (создано), `400` (валидация), `401` (неавторизован), `500` (ошибка)
 - **Статус:** ✅ **РАБОТАЕТ** - Возвращает 201 Created с созданным расписанием
 
+- Пример:
+
+```bash
+curl -X POST "http://localhost:8080/api/v1/schedules/<CHECK_ID>" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"cron_expression":"*/5 * * * *"}'
+```
+
 ---
 
 ### `GET /api/v1/schedules/{id}`
@@ -118,6 +173,13 @@
 - **Статусы:** `200` (успех), `404` (не найден), `401` (неавторизован), `500` (ошибка)
 - **Статус:** ✅ **РАБОТАЕТ** - Возвращает 200 OK с информацией о расписании
 
+- Пример:
+
+```bash
+curl -X GET "http://localhost:8080/api/v1/schedules/<CHECK_ID>" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
+
 ---
 
 ### `PUT /api/v1/schedules/{id}`
@@ -125,7 +187,7 @@
 - **Запрос:** ID расписания в URL, `{"cron_expression": "string"}`
 - **Ответ:** `{"success": true, "message": "Schedule updated", "schedule": {}}`
 - **Статусы:** `200` (успех), `400` (валидация), `404` (не найден), `401` (неавторизован), `500` (ошибка)
-- **Статус:** ⏳ **НЕ ПРОВЕРЕН** - Эндпоинт работает, валидация cron работает
+- **Статус:** ⏳ **НЕ ПРОВЕРЕН** - Эндпоинт доступен, не проверяли обновление в e2e
 
 ---
 
@@ -134,7 +196,16 @@
 - **Запрос:** ID расписания в URL
 - **Ответ:** `{"success": true, "message": "Check unscheduled"}`
 - **Статусы:** `200` (успех), `404` (не найден), `401` (неавторизован), `500` (ошибка)
-- **Статус:** ⏳ **НЕ ПРОВЕРЕН** - Эндпоинт работает, успешно удаляет
+- **Статус:** ✅ **РАБОТАЕТ** - Удаление расписания успешно
+
+- Пример:
+
+```bash
+curl -X DELETE "http://localhost:8080/api/v1/schedules/<CHECK_ID>" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
 
 ---
 

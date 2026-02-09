@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -2181,18 +2182,48 @@ func (h *Handler) handleSchedulerHealthProxy(w http.ResponseWriter, r *http.Requ
 	// Создаем HTTP клиент
 	client := &http.Client{Timeout: 5 * time.Second}
 
-	// Формируем URL для Scheduler Service
-	schedulerURL := "http://scheduler-service:50052/health"
-
-	// Создаем новый запрос
-	req, err := http.NewRequestWithContext(r.Context(), "GET", schedulerURL, nil)
-	if err != nil {
-		h.writeError(w, err, http.StatusInternalServerError)
-		return
+	// Попытка: сначала взять адрес из окружения (например "scheduler-service:50052")
+	addr := os.Getenv("SCHEDULER_SERVICE_ADDR")
+	if addr == "" {
+		addr = "scheduler-service:50052"
 	}
 
-	// Отправляем запрос
-	resp, err := client.Do(req)
+	// Парсим host:port и пробуем health endpoint на порту +1000 (как у других сервисов)
+	host := addr
+	port := 0
+	if parts := strings.Split(addr, ":"); len(parts) >= 2 {
+		host = strings.Join(parts[:len(parts)-1], ":")
+		if p, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
+			port = p
+		}
+	}
+
+	tryURLs := []string{}
+	if port != 0 {
+		tryURLs = append(tryURLs, fmt.Sprintf("http://%s:%d/health", host, port+1000)) // preferred HTTP health port
+		tryURLs = append(tryURLs, fmt.Sprintf("http://%s:%d/health", host, port))      // fallback to same port
+	} else {
+		tryURLs = append(tryURLs, fmt.Sprintf("http://%s/health", host))
+	}
+
+	var resp *http.Response
+	var err error
+	for _, u := range tryURLs {
+		req, reqErr := http.NewRequestWithContext(r.Context(), "GET", u, nil)
+		if reqErr != nil {
+			err = reqErr
+			continue
+		}
+
+		resp, err = client.Do(req)
+		if err != nil {
+			// пробуем следующий URL
+			continue
+		}
+		// Успешно получили ответ — выходим из цикла
+		break
+	}
+
 	if err != nil {
 		h.writeError(w, err, http.StatusBadGateway)
 		return
