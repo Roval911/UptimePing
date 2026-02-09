@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,6 +17,11 @@ import (
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
 	pkg_redis "UptimePingPlatform/pkg/redis"
+	corev1 "UptimePingPlatform/proto/api/core/v1"
+	grpcHandler "UptimePingPlatform/services/core-service/internal/handler/grpc"
+	coreservice "UptimePingPlatform/services/core-service/internal/service"
+	"UptimePingPlatform/services/core-service/internal/service/checker"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -67,6 +73,33 @@ func main() {
 		Addr:    fmt.Sprintf(":%d", httpPort),
 		Handler: setupHTTPHandler(metricsHandler, healthChecker, appLogger),
 	}
+
+	// Initialize checker factory and check service (repository/redis/incidentManager can be nil)
+	checkerFactory := checker.NewDefaultCheckerFactory(appLogger, checker.NewDefaultHTTPClient(30*time.Second))
+	checkService := coreservice.NewCheckService(appLogger, checkerFactory, nil, nil, nil)
+
+	// Start gRPC server for Core Service
+	grpcPort := cfg.Server.Port
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", grpcPort))
+	if err != nil {
+		appLogger.Error("Failed to listen for gRPC", logger.Error(err))
+		log.Fatalf("Failed to listen: %v", err)
+	}
+
+	grpcServer := grpc.NewServer()
+	appLogger.Info(fmt.Sprintf("Registering Core gRPC handler on port %d", grpcPort))
+	coreHandler := grpcHandler.NewCoreHandler(checkService, appLogger)
+	corev1.RegisterCoreServiceServer(grpcServer, coreHandler)
+
+	// Start gRPC server
+	go func() {
+		appLogger.Info(fmt.Sprintf("Starting gRPC server on port %d", grpcPort))
+		if err := grpcServer.Serve(lis); err != nil {
+			appLogger.Error("gRPC server failed", logger.Error(err))
+		}
+	}()
+	// Wait briefly to ensure gRPC server starts
+	time.Sleep(1 * time.Second)
 
 	// Start server
 	go func() {

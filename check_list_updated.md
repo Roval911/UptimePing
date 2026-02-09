@@ -212,11 +212,19 @@ curl -X DELETE "http://localhost:8080/api/v1/schedules/<CHECK_ID>" \
 ## ⚡ 4. CORE SERVICE ОПЕРАЦИИ
 
 ### `POST /api/v1/core`
-**Описание:** Выполнение проверки
+**Описание:** Выполнение проверки (выполняется Core Service через gRPC)
 - **Запрос:** ID проверки в URL
 - **Ответ:** `{"success": boolean, "execution_id": "string", "duration_ms": "number", "status_code": "number", "error": "string", "checked_at": "string"}`
 - **Статусы:** `200` (успех), `400` (невалидный ID), `401` (неавторизован), `500` (ошибка)
-- **Статус:** ⏳ **НЕ ПРОВЕРЕН**
+- **Статус:** ✅ **РАБОТАЕТ** - Core выполняет проверку, использует Scheduler для получения target/type
+
+- Пример:
+
+```bash
+curl -X POST "http://localhost:8080/api/v1/core/<CHECK_ID>" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json"
+```
 
 ---
 
@@ -225,7 +233,14 @@ curl -X DELETE "http://localhost:8080/api/v1/schedules/<CHECK_ID>" \
 - **Запрос:** ID проверки в URL
 - **Ответ:** `{"check_id": "string", "is_healthy": boolean, "response_time_ms": "number", "last_checked_at": "string"}`
 - **Статусы:** `200` (успех), `400` (невалидный ID), `401` (неавторизован), `500` (ошибка)
-- **Статус:** ⏳ **НЕ ПРОВЕРЕН**
+- **Статус:** ✅ **РАБОТАЕТ** - Возвращает последний статус (fallback `unknown` при отсутствии данных)
+
+- Пример:
+
+```bash
+curl -X GET "http://localhost:8080/api/v1/core/<CHECK_ID>/status" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
 
 ---
 
@@ -234,7 +249,14 @@ curl -X DELETE "http://localhost:8080/api/v1/schedules/<CHECK_ID>" \
 - **Запрос:** ID проверки в URL, query параметры (`page`, `page_size`)
 - **Ответ:** `{"executions": [], "page": "number", "page_size": "number", "total": "number"}`
 - **Статусы:** `200` (успех), `400` (невалидный ID), `401` (неавторизован), `500` (ошибка)
-- **Статус:** ⏳ **НЕ ПРОВЕРЕН**
+- **Статус:** ✅ **РАБОТАЕТ** - Возвращает историю выполнения (если есть), иначе пустой набор
+
+- Пример:
+
+```bash
+curl -X GET "http://localhost:8080/api/v1/core/<CHECK_ID>/history?page=1&page_size=10" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
 
 ---
 

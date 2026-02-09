@@ -218,8 +218,8 @@ func (h *Handler) setupRoutes() {
 	h.mux.Handle("/api/v1/schedules/{id}", scheduleByIDHandler).Methods(http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodGet)
 
 	// Core Service операции
-	h.mux.HandleFunc("/api/v1/core", h.handleProtected(h.handleCoreProxy))
-	h.mux.HandleFunc("/api/v1/core/", h.handleProtected(h.handleCoreProxy))
+	// Используем PathPrefix чтобы обрабатывать пути вида /api/v1/core, /api/v1/core/{id}, /api/v1/core/{id}/status и т.д.
+	h.mux.PathPrefix("/api/v1/core").Handler(h.handleProtected(h.handleCoreProxy))
 
 	// Metrics Service
 	h.mux.HandleFunc("/api/v1/metrics", h.handleProtected(h.handleMetricsProxy))
@@ -1491,26 +1491,29 @@ func (h *Handler) handleCoreProxy(w http.ResponseWriter, r *http.Request) {
 
 // handleExecuteCheck обрабатывает немедленное выполнение проверки
 func (h *Handler) handleExecuteCheck(w http.ResponseWriter, r *http.Request, tenantID, checkID string) {
-	// req := &corev1.ExecuteCheckRequest{
-	// 	CheckId: checkID,
-	// }
+	req := &corev1.ExecuteCheckRequest{
+		CheckId: checkID,
+	}
 
-	// result, err := h.coreClient.ExecuteCheck(r.Context(), req)
-	// if err != nil {
-	// 	h.handleError(w, err)
-	// 	return
-	// }
+	result, err := h.coreClient.ExecuteCheck(r.Context(), req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	// Формируем ответ на основе proto CheckResult
+	resp := map[string]interface{}{
+		"success":      result.GetStatus() == "up",
+		"execution_id": "", // core.CheckResult не содержит execution_id; оставляем пустым
+		"duration_ms":  result.GetResponseTimeMs(),
+		"status_code":  result.GetStatusCode(),
+		"error":        result.GetErrorMessage(),
+		"checked_at":   result.GetCreatedAt(),
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":      true,       // result.Success,
-		"execution_id": "temp",     // result.ExecutionId,
-		"duration_ms":  0,          // result.DurationMs,
-		"status_code":  200,        // result.StatusCode,
-		"error":        "",         // result.Error,
-		"checked_at":   time.Now(), // result.CheckedAt,
-	})
+	json.NewEncoder(w).Encode(resp)
 }
 
 // handleGetCheckStatus обрабатывает получение статуса проверки

@@ -15,6 +15,9 @@ import (
 	"UptimePingPlatform/services/core-service/internal/service"
 
 	corev1 "UptimePingPlatform/proto/api/core/v1"
+	schedulerv1 "UptimePingPlatform/proto/api/scheduler/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // CoreHandler реализует gRPC обработчики для CoreService
@@ -52,12 +55,50 @@ func (h *CoreHandler) ExecuteCheck(ctx context.Context, req *corev1.ExecuteCheck
 		return nil, h.LogError(ctx, err, "ExecuteCheck", req.CheckId)
 	}
 
+	// Получаем информацию о проверке из Scheduler Service (чтобы узнать target и type)
+	var target, typ string
+	{
+		// Подключаемся к Scheduler Service
+		conn, err := grpc.DialContext(ctx, "scheduler-service:50052", grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err == nil {
+			defer conn.Close()
+			sClient := schedulerv1.NewSchedulerServiceClient(conn)
+			checkResp, err := sClient.GetCheck(ctx, &schedulerv1.GetCheckRequest{CheckId: req.CheckId})
+			if err == nil && checkResp != nil {
+				target = checkResp.Target
+				typ = checkResp.Type
+			} else {
+				// логируем, но продолжаем — некоторые чекеры могут работать только по check id
+				h.LogOperationStart(ctx, "ExecuteCheck_GetCheckFailed", map[string]interface{}{"check_id": req.CheckId, "error": err})
+			}
+		} else {
+			h.LogOperationStart(ctx, "ExecuteCheck_DialSchedulerFailed", map[string]interface{}{"check_id": req.CheckId, "error": err})
+		}
+	}
+
 	// Создаем задачу для выполнения
 	task := &domain.Task{
 		CheckID:     req.CheckId,
+		Type:        typ,
+		Target:      target,
 		ExecutionID: generateExecutionID(),
 		CreatedAt:   time.Now().UTC(),
 		Config:      make(map[string]interface{}),
+	}
+
+	// Устанавливаем разумные значения по умолчанию для HTTP чекера
+	if task.Type == string(domain.TaskTypeHTTP) {
+		if _, ok := task.Config["method"]; !ok {
+			task.Config["method"] = "GET"
+		}
+		// Если в конфиге нет URL, используем target из Check
+		if _, ok := task.Config["url"]; !ok {
+			task.Config["url"] = task.Target
+		}
+		// По умолчанию ожидаемый статус 200
+		if _, ok := task.Config["expected_status"]; !ok {
+			task.Config["expected_status"] = float64(200)
+		}
 	}
 
 	// Выполняем проверку
@@ -100,8 +141,14 @@ func (h *CoreHandler) GetCheckStatus(ctx context.Context, req *corev1.GetCheckSt
 	// Получаем статус проверки
 	checkStatus, err := h.checkService.GetCheckStatus(ctx, req.CheckId)
 	if err != nil {
-		h.LogError(ctx, err, "GetCheckStatus", req.CheckId)
-		return nil, status.Errorf(codes.NotFound, "check not found: %v", err)
+		// Если не удалось получить статус (например, нет результатов в БД), возвращаем unknown вместо ошибки
+		h.LogOperationStart(ctx, "GetCheckStatus_FallbackUnknown", map[string]interface{}{"check_id": req.CheckId, "error": err.Error()})
+		return &corev1.CheckStatusResponse{
+			CheckId:        req.CheckId,
+			Status:         "unknown",
+			ResponseTimeMs: 0,
+			LastCheckedAt:  "",
+		}, nil
 	}
 
 	// Конвертируем в protobuf
