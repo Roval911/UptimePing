@@ -13,6 +13,7 @@ import (
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/scheduler-service/internal/domain"
 	"UptimePingPlatform/services/scheduler-service/internal/repository"
+
 	"github.com/google/uuid"
 )
 
@@ -226,6 +227,12 @@ func (uc *CheckUseCase) CreateSchedule(ctx context.Context, checkID, cronExpress
 		UpdatedAt:      time.Now(),
 	}
 
+	// ОТЛАДКА: Логируем перед вызовом репозитория
+	uc.logger.Info("DEBUG: Before repository Create",
+		logger.String("check_id", checkID),
+		logger.String("cron_expression", cronExpression),
+		logger.String("schedule_cron_expression", schedule.CronExpression))
+
 	// Сохраняем в репозиторий
 	createdSchedule, err := uc.schedulerRepo.Create(ctx, schedule)
 	if err != nil {
@@ -268,19 +275,20 @@ func (uc *CheckUseCase) UpdateSchedule(ctx context.Context, checkID, cronExpress
 		return nil, fmt.Errorf("invalid cron expression: %w", err)
 	}
 
-	// Получаем существующее расписание
-	schedule, err := uc.schedulerRepo.GetByCheckID(ctx, checkID)
-	if err != nil {
-		return nil, fmt.Errorf("schedule not found: %w", err)
-	}
-
 	// Рассчитываем новое время выполнения
 	nextRunAt, err := calculateNextRun(cronExpression)
 	if err != nil {
 		return nil, fmt.Errorf("failed to calculate next run: %w", err)
 	}
 
-	// Обновляем расписание
+	// Получаем существующее расписание
+	schedule, err := uc.schedulerRepo.GetByCheckID(ctx, checkID)
+	if err != nil {
+		return nil, fmt.Errorf("schedule not found: %w", err)
+	}
+
+	// ✅ ИСПРАВЛЕНИЕ: Обновляем расписание
+	schedule.CronExpression = cronExpression
 	schedule.NextRunAt = &nextRunAt
 	schedule.UpdatedAt = time.Now()
 

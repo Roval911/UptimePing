@@ -72,6 +72,24 @@ func (cs *CheckService) ExecuteCheck(ctx context.Context, task *domain.Task) (*d
 		return nil, fmt.Errorf("failed to execute check: %w", err)
 	}
 
+	// Сохранение результата в БД
+	if err := cs.saveResult(ctx, result); err != nil {
+		cs.logger.Error("Failed to save result to database",
+			logger.String("check_id", task.CheckID),
+			logger.Error(err),
+		)
+		// Не прерываем обработку, так как результат важен
+	}
+
+	// Кеширование результата в Redis (TTL 5 минут)
+	if err := cs.cacheResult(ctx, result); err != nil {
+		cs.logger.Warn("Failed to cache result in Redis",
+			logger.String("check_id", task.CheckID),
+			logger.Error(err),
+		)
+		// Не прерываем обработку, так как кеширование не критично
+	}
+
 	return result, nil
 }
 

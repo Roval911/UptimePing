@@ -183,9 +183,10 @@ func (r *SchedulerRepository) Create(ctx context.Context, schedule *domain.Sched
 	query := `
 		INSERT INTO schedules (check_id, cron_expression, next_run_at, last_run_at, status, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, next_run_at, last_run_at, status`
+		RETURNING id, cron_expression, next_run_at, last_run_at, status` // ✅ ИСПРАВЛЕНО: добавлен cron_expression
 
 	now := time.Now()
+
 	err := r.pool.QueryRow(ctx, query,
 		schedule.CheckID,
 		schedule.CronExpression,
@@ -194,7 +195,7 @@ func (r *SchedulerRepository) Create(ctx context.Context, schedule *domain.Sched
 		schedule.Status,
 		now,
 		now,
-	).Scan(&schedule.ID, &schedule.NextRunAt, &schedule.LastRunAt, &schedule.Status)
+	).Scan(&schedule.ID, &schedule.CronExpression, &schedule.NextRunAt, &schedule.LastRunAt, &schedule.Status) // ✅ ИСПРАВЛЕНО: добавлен cron_expression
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to create schedule: %w", err)
@@ -213,17 +214,24 @@ func (r *SchedulerRepository) Update(ctx context.Context, schedule *domain.Sched
 		WHERE check_id = $1`
 
 	now := time.Now()
-	_, err := r.pool.Exec(ctx, query,
+
+	result, err := r.pool.Exec(ctx, query,
 		schedule.CheckID,
 		schedule.CronExpression,
 		schedule.NextRunAt,
-		schedule.LastRunAt,
+		schedule.LastRunAt, // Может быть nil
 		schedule.Status,
 		now,
 	)
 
 	if err != nil {
 		return fmt.Errorf("failed to update schedule: %w", err)
+	}
+
+	// Проверяем количество обновленных строк
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("no rows affected when updating schedule for check_id: %s", schedule.CheckID)
 	}
 
 	schedule.UpdatedAt = now
@@ -245,7 +253,7 @@ func (r *SchedulerRepository) DeleteByCheckID(ctx context.Context, checkID strin
 // GetByCheckID получает расписание по ID проверки
 func (r *SchedulerRepository) GetByCheckID(ctx context.Context, checkID string) (*domain.Schedule, error) {
 	query := `
-		SELECT id, check_id, next_run_at, last_run_at, status, created_at, updated_at
+		SELECT id, check_id, cron_expression, next_run_at, last_run_at, status, created_at, updated_at
 		FROM schedules
 		WHERE check_id = $1`
 
@@ -253,6 +261,7 @@ func (r *SchedulerRepository) GetByCheckID(ctx context.Context, checkID string) 
 	err := r.pool.QueryRow(ctx, query, checkID).Scan(
 		&schedule.ID,
 		&schedule.CheckID,
+		&schedule.CronExpression, // ✅ ИСПРАВЛЕНО: добавлено cron_expression
 		&schedule.NextRunAt,
 		&schedule.LastRunAt,
 		&schedule.Status,
@@ -270,7 +279,7 @@ func (r *SchedulerRepository) GetByCheckID(ctx context.Context, checkID string) 
 // List получает список расписаний с пагинацией
 func (r *SchedulerRepository) List(ctx context.Context, pageSize int, pageToken string, filter string) ([]*domain.Schedule, error) {
 	query := `
-		SELECT id, check_id, next_run_at, last_run_at, status, created_at, updated_at
+		SELECT id, check_id, cron_expression, next_run_at, last_run_at, status, created_at, updated_at
 		FROM schedules
 		ORDER BY created_at DESC
 		LIMIT $1 OFFSET $2`
@@ -292,6 +301,7 @@ func (r *SchedulerRepository) List(ctx context.Context, pageSize int, pageToken 
 		err := rows.Scan(
 			&schedule.ID,
 			&schedule.CheckID,
+			&schedule.CronExpression, // ✅ ИСПРАВЛЕНО: добавлено cron_expression
 			&schedule.NextRunAt,
 			&schedule.LastRunAt,
 			&schedule.Status,

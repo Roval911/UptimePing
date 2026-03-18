@@ -276,11 +276,15 @@ func (h *Handler) handleProtected(next http.HandlerFunc) http.HandlerFunc {
 
 		// Извлекаем токен из Authorization header
 		authHeader := r.Header.Get("Authorization")
+		h.logger.Info("DEBUG: Authorization header",
+			logger.String("auth_header", authHeader),
+			logger.String("auth_header_length", fmt.Sprintf("%d", len(authHeader))))
+
 		if authHeader == "" {
 			h.logger.Error("Authorization header missing")
-			w.WriteHeader(http.StatusForbidden)
+			w.WriteHeader(http.StatusUnauthorized)
 			json.NewEncoder(w).Encode(map[string]string{
-				"code":    "403",
+				"code":    "401",
 				"error":   "true",
 				"message": "authorization header missing",
 			})
@@ -293,25 +297,67 @@ func (h *Handler) handleProtected(next http.HandlerFunc) http.HandlerFunc {
 			token = authHeader[7:]
 		}
 
-		// Проверяем аутентификацию
+		// Проверяем аутентификацию через Auth Service
+		h.logger.Info("DEBUG: Validating token",
+			logger.String("token_length", fmt.Sprintf("%d", len(token))),
+			logger.String("token_prefix", func() string {
+				if len(token) > 10 {
+					return token[:10]
+				}
+				return token
+			}()))
+
 		userInfo, err := h.authService.ValidateToken(r.Context(), token)
 		if err != nil {
 			h.logger.Error("Authentication failed",
 				logger.Error(err),
-				logger.String("path", r.URL.Path))
+				logger.String("path", r.URL.Path),
+				logger.String("token_length", fmt.Sprintf("%d", len(token))))
 
-			w.WriteHeader(http.StatusForbidden)
+			w.WriteHeader(http.StatusUnauthorized)
 			json.NewEncoder(w).Encode(map[string]string{
-				"code":    "403",
+				"code":    "401",
 				"error":   "true",
-				"message": "insufficient permissions",
+				"message": "authentication failed",
 			})
 			return
 		}
 
+		if userInfo == nil {
+			h.logger.Error("UserInfo is nil after validation",
+				logger.String("path", r.URL.Path))
+
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{
+				"code":    "401",
+				"error":   "true",
+				"message": "user info not found",
+			})
+			return
+		}
+
+		h.logger.Info("DEBUG: Authentication successful",
+			logger.String("user_id", userInfo.UserID),
+			logger.String("tenant_id", userInfo.TenantID),
+			logger.String("email", userInfo.Email))
+
+		// Создаем структуру user для контекста как в AuthMiddleware
+		userData := map[string]interface{}{
+			"user_id":     userInfo.UserID,
+			"tenant_id":   userInfo.TenantID,
+			"email":       userInfo.Email,
+			"is_admin":    userInfo.IsAdmin,
+			"permissions": userInfo.Permissions,
+		}
+
 		// Добавляем информацию о пользователе в контекст
-		ctx := context.WithValue(r.Context(), "user", userInfo)
-		ctx = context.WithValue(ctx, "user_info", userInfo)
+		ctx := context.WithValue(r.Context(), "user", userData)
+		ctx = context.WithValue(ctx, "user_id", userInfo.UserID)
+		ctx = context.WithValue(ctx, "tenant_id", userInfo.TenantID)
+		ctx = context.WithValue(ctx, "email", userInfo.Email)
+		ctx = context.WithValue(ctx, "is_admin", userInfo.IsAdmin)
+		ctx = context.WithValue(ctx, "permissions", userInfo.Permissions)
+
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
 }
@@ -913,9 +959,15 @@ func (h *Handler) handleValidateToken(w http.ResponseWriter, r *http.Request) {
 // handleChecksProxy проксирует запросы к Scheduler Service
 func (h *Handler) handleChecksProxy(w http.ResponseWriter, r *http.Request) {
 	// Получаем информацию о пользователе из контекста
-	userInfo, ok := r.Context().Value("user_info").(*UserInfo)
+	userDataCtx, ok := r.Context().Value("user").(map[string]interface{})
 	if !ok {
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
+		return
+	}
+
+	tenantID, ok := userDataCtx["tenant_id"].(string)
+	if !ok {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant_id not found"), http.StatusUnauthorized)
 		return
 	}
 
@@ -925,21 +977,21 @@ func (h *Handler) handleChecksProxy(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		if checkID != "" {
-			h.handleGetCheck(w, r, userInfo.TenantID, checkID)
+			h.handleGetCheck(w, r, tenantID, checkID)
 		} else {
-			h.handleListChecks(w, r, userInfo.TenantID)
+			h.handleListChecks(w, r, tenantID)
 		}
 	case http.MethodPost:
-		h.handleCreateCheck(w, r, userInfo.TenantID)
+		h.handleCreateCheck(w, r, tenantID)
 	case http.MethodPut:
 		if checkID != "" {
-			h.handleUpdateCheck(w, r, userInfo.TenantID, checkID)
+			h.handleUpdateCheck(w, r, tenantID, checkID)
 		} else {
 			h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "check ID required"), http.StatusBadRequest)
 		}
 	case http.MethodDelete:
 		if checkID != "" {
-			h.handleDeleteCheck(w, r, userInfo.TenantID, checkID)
+			h.handleDeleteCheck(w, r, tenantID, checkID)
 		} else {
 			h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "check ID required"), http.StatusBadRequest)
 		}
@@ -1257,9 +1309,15 @@ func (h *Handler) handleDeleteCheck(w http.ResponseWriter, r *http.Request, tena
 // handleScheduleProxy обрабатывает запросы к расписаниям проверок
 func (h *Handler) handleScheduleProxy(w http.ResponseWriter, r *http.Request) {
 	// Получаем информацию о пользователе из контекста
-	userInfo, ok := r.Context().Value("user_info").(*UserInfo)
+	userDataCtx, ok := r.Context().Value("user").(map[string]interface{})
 	if !ok {
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
+		return
+	}
+
+	tenantID, ok := userDataCtx["tenant_id"].(string)
+	if !ok {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant_id not found"), http.StatusUnauthorized)
 		return
 	}
 
@@ -1272,32 +1330,32 @@ func (h *Handler) handleScheduleProxy(w http.ResponseWriter, r *http.Request) {
 		logger.String("path", r.URL.Path),
 		logger.String("method", r.Method),
 		logger.String("checkID", checkID),
-		logger.String("tenantID", userInfo.TenantID))
+		logger.String("tenantID", tenantID))
 
 	switch r.Method {
 	case http.MethodPost:
 		if checkID != "" {
-			h.handleScheduleCheck(w, r, userInfo.TenantID, checkID)
+			h.handleScheduleCheck(w, r, tenantID, checkID)
 		} else {
 			h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "check ID required"), http.StatusBadRequest)
 		}
 	case http.MethodPut:
 		if checkID != "" {
-			h.handleUpdateSchedule(w, r, userInfo.TenantID, checkID)
+			h.handleUpdateSchedule(w, r, tenantID, checkID)
 		} else {
 			h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "check ID required"), http.StatusBadRequest)
 		}
 	case http.MethodDelete:
 		if checkID != "" {
-			h.handleUnscheduleCheck(w, r, userInfo.TenantID, checkID)
+			h.handleUnscheduleCheck(w, r, tenantID, checkID)
 		} else {
 			h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "check ID required"), http.StatusBadRequest)
 		}
 	case http.MethodGet:
 		if checkID != "" {
-			h.handleGetSchedule(w, r, userInfo.TenantID, checkID)
+			h.handleGetSchedule(w, r, tenantID, checkID)
 		} else {
-			h.handleListSchedules(w, r, userInfo.TenantID)
+			h.handleListSchedules(w, r, tenantID)
 		}
 	default:
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
@@ -1455,9 +1513,15 @@ func (h *Handler) handleListSchedules(w http.ResponseWriter, r *http.Request, te
 // handleCoreProxy обрабатывает запросы к Core Service
 func (h *Handler) handleCoreProxy(w http.ResponseWriter, r *http.Request) {
 	// Получаем информацию о пользователе из контекста
-	userInfo, ok := r.Context().Value("user_info").(*UserInfo)
+	userDataCtx, ok := r.Context().Value("user").(map[string]interface{})
 	if !ok {
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
+		return
+	}
+
+	tenantID, ok := userDataCtx["tenant_id"].(string)
+	if !ok {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant_id not found"), http.StatusUnauthorized)
 		return
 	}
 
@@ -1476,14 +1540,14 @@ func (h *Handler) handleCoreProxy(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodPost:
-		h.handleExecuteCheck(w, r, userInfo.TenantID, checkID)
+		h.handleExecuteCheck(w, r, tenantID, checkID)
 	case http.MethodGet:
 		if strings.HasSuffix(r.URL.Path, "/status") {
-			h.handleGetCheckStatus(w, r, userInfo.TenantID, checkID)
+			h.handleGetCheckStatus(w, r, tenantID, checkID)
 		} else if strings.HasSuffix(r.URL.Path, "/history") {
-			h.handleGetCheckHistory(w, r, userInfo.TenantID, checkID)
+			h.handleGetCheckHistory(w, r, tenantID, checkID)
 		} else {
-			h.handleGetCheckStatus(w, r, userInfo.TenantID, checkID)
+			h.handleGetCheckStatus(w, r, tenantID, checkID)
 		}
 	default:
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
@@ -1794,20 +1858,26 @@ func (h *Handler) handleValidateProto(ctx context.Context, w http.ResponseWriter
 // handleMetricsProxy обрабатывает запросы к Metrics Service
 func (h *Handler) handleMetricsProxy(w http.ResponseWriter, r *http.Request) {
 	// Получаем информацию о пользователе из контекста
-	userInfo, ok := r.Context().Value("user_info").(*UserInfo)
+	userDataCtx, ok := r.Context().Value("user").(map[string]interface{})
 	if !ok {
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
 		return
 	}
 
+	tenantID, ok := userDataCtx["tenant_id"].(string)
+	if !ok {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant_id not found"), http.StatusUnauthorized)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
-		h.handleGetMetrics(w, r, userInfo.TenantID)
+		h.handleGetMetrics(w, r, tenantID)
 	case http.MethodPost:
 		if strings.HasSuffix(r.URL.Path, "/collect") {
-			h.handleCollectMetrics(w, r, userInfo.TenantID)
+			h.handleCollectMetrics(w, r, tenantID)
 		} else {
-			h.handleGetMetrics(w, r, userInfo.TenantID)
+			h.handleGetMetrics(w, r, tenantID)
 		}
 	default:
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
@@ -1864,9 +1934,15 @@ func (h *Handler) handleGetMetrics(w http.ResponseWriter, r *http.Request, tenan
 // handleIncidentProxy обрабатывает запросы к Incident Service
 func (h *Handler) handleIncidentProxy(w http.ResponseWriter, r *http.Request) {
 	// Получаем информацию о пользователе из контекста
-	userInfo, ok := r.Context().Value("user_info").(*UserInfo)
+	userDataCtx, ok := r.Context().Value("user").(map[string]interface{})
 	if !ok {
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
+		return
+	}
+
+	tenantID, ok := userDataCtx["tenant_id"].(string)
+	if !ok {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant_id not found"), http.StatusUnauthorized)
 		return
 	}
 
@@ -1876,15 +1952,15 @@ func (h *Handler) handleIncidentProxy(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		if incidentID != "" {
-			h.handleGetIncident(w, r, userInfo.TenantID, incidentID)
+			h.handleGetIncident(w, r, tenantID, incidentID)
 		} else {
-			h.handleListIncidents(w, r, userInfo.TenantID)
+			h.handleListIncidents(w, r, tenantID)
 		}
 	case http.MethodPost:
-		h.handleCreateIncident(w, r, userInfo.TenantID)
+		h.handleCreateIncident(w, r, tenantID)
 	case http.MethodPut:
 		if incidentID != "" {
-			h.handleResolveIncident(w, r, userInfo.TenantID, incidentID)
+			h.handleResolveIncident(w, r, tenantID, incidentID)
 		} else {
 			h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "incident ID required"), http.StatusBadRequest)
 		}
@@ -2003,24 +2079,30 @@ func (h *Handler) handleResolveIncident(w http.ResponseWriter, r *http.Request, 
 // handleNotificationProxy обрабатывает запросы к Notification Service
 func (h *Handler) handleNotificationProxy(w http.ResponseWriter, r *http.Request) {
 	// Получаем информацию о пользователе из контекста
-	userInfo, ok := r.Context().Value("user_info").(*UserInfo)
+	userDataCtx, ok := r.Context().Value("user").(map[string]interface{})
 	if !ok {
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
+		return
+	}
+
+	tenantID, ok := userDataCtx["tenant_id"].(string)
+	if !ok {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant_id not found"), http.StatusUnauthorized)
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
 		if strings.HasSuffix(r.URL.Path, "/channels") {
-			h.handleGetNotificationChannels(w, r, userInfo.TenantID)
+			h.handleGetNotificationChannels(w, r, tenantID)
 		} else {
-			h.handleSendNotification(w, r, userInfo.TenantID)
+			h.handleSendNotification(w, r, tenantID)
 		}
 	case http.MethodPost:
 		if strings.HasSuffix(r.URL.Path, "/channels") {
-			h.handleCreateNotificationChannel(w, r, userInfo.TenantID)
+			h.handleCreateNotificationChannel(w, r, tenantID)
 		} else {
-			h.handleSendNotification(w, r, userInfo.TenantID)
+			h.handleSendNotification(w, r, tenantID)
 		}
 	default:
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)

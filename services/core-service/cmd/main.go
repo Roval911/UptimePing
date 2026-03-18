@@ -13,12 +13,15 @@ import (
 	"time"
 
 	"UptimePingPlatform/pkg/config"
+	"UptimePingPlatform/pkg/database"
 	"UptimePingPlatform/pkg/health"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
 	pkg_redis "UptimePingPlatform/pkg/redis"
 	corev1 "UptimePingPlatform/proto/api/core/v1"
 	grpcHandler "UptimePingPlatform/services/core-service/internal/handler/grpc"
+	"UptimePingPlatform/services/core-service/internal/repository"
+	"UptimePingPlatform/services/core-service/internal/repository/postgres"
 	coreservice "UptimePingPlatform/services/core-service/internal/service"
 	"UptimePingPlatform/services/core-service/internal/service/checker"
 	"google.golang.org/grpc"
@@ -40,12 +43,26 @@ func main() {
 
 	appLogger.Info("Starting Core Service...")
 
-	// Initialize metrics
-	appMetrics := metrics.NewMetrics("core-service")
-	metricsHandler := appMetrics.GetHandler()
-
-	// Initialize health checker
-	healthChecker := health.NewSimpleHealthChecker("1.0.0")
+	// Initialize database connection
+	db, err := database.Connect(context.Background(), &database.Config{
+		Host:          cfg.Database.Host,
+		Port:          cfg.Database.Port,
+		User:          cfg.Database.User,
+		Password:      cfg.Database.Password,
+		Database:      cfg.Database.Name,
+		MaxConns:      20,
+		MinConns:      5,
+		MaxConnLife:   30 * time.Minute,
+		MaxConnIdle:   5 * time.Minute,
+		HealthCheck:   30 * time.Second,
+		MaxRetries:    3,
+		RetryInterval: time.Second,
+	})
+	if err != nil {
+		appLogger.Error("Failed to connect to database", logger.Error(err))
+	} else {
+		defer db.Close()
+	}
 
 	// Initialize Redis client
 	redisClient, err := pkg_redis.Connect(context.Background(), &pkg_redis.Config{
@@ -58,6 +75,13 @@ func main() {
 	} else {
 		defer redisClient.Close()
 	}
+
+	// Initialize metrics
+	appMetrics := metrics.NewMetrics("core-service")
+	metricsHandler := appMetrics.GetHandler()
+
+	// Initialize health checker
+	healthChecker := health.NewSimpleHealthChecker("1.0.0")
 
 	// Start HTTP server for metrics and health
 	httpPort := 51054 // Default HTTP port
@@ -74,9 +98,15 @@ func main() {
 		Handler: setupHTTPHandler(metricsHandler, healthChecker, appLogger),
 	}
 
-	// Initialize checker factory and check service (repository/redis/incidentManager can be nil)
+	// Initialize checker factory and check service
 	checkerFactory := checker.NewDefaultCheckerFactory(appLogger, checker.NewDefaultHTTPClient(30*time.Second))
-	checkService := coreservice.NewCheckService(appLogger, checkerFactory, nil, nil, nil)
+
+	var repository repository.CheckResultRepository
+	if db != nil {
+		repository = postgres.NewCheckResultRepository(db.Pool, appLogger)
+	}
+
+	checkService := coreservice.NewCheckService(appLogger, checkerFactory, repository, redisClient, nil)
 
 	// Start gRPC server for Core Service
 	grpcPort := cfg.Server.Port
