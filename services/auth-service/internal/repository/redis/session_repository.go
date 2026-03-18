@@ -56,23 +56,13 @@ func (r *SessionRepository) Create(ctx context.Context, session *domain.Session)
 
 // FindByID возвращает сессию по ее ID
 func (r *SessionRepository) FindByID(ctx context.Context, id string) (*domain.Session, error) {
-	// Получаем все ключи, соответствующие сессии по ID
-	keys, err := r.client.Keys(ctx, fmt.Sprintf("session:*:%s", id)).Result()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get session keys: %w", err)
-	}
-
-	if len(keys) == 0 {
-		return nil, fmt.Errorf("session not found")
-	}
-
-	// Получаем данные первой найденной сессии
-	data, err := r.client.Get(ctx, keys[0]).Result()
+	key := fmt.Sprintf("session:%s", id)
+	data, err := r.client.Get(ctx, key).Result()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, fmt.Errorf("session not found: %w", err)
 		}
-		return nil, fmt.Errorf("failed to get session: %w", err)
+		return nil, fmt.Errorf("failed to get session by id: %w", err)
 	}
 
 	// Декодируем JSON обратно в структуру
@@ -131,22 +121,39 @@ func (r *SessionRepository) FindByRefreshTokenHash(ctx context.Context, refreshT
 
 // Delete удаляет сессию по ID
 func (r *SessionRepository) Delete(ctx context.Context, id string) error {
-	// Находим все ключи, связанные с сессией
+	// Сначала пробуем "нормальный" ключ
+	sessionKey := fmt.Sprintf("session:%s", id)
+	data, err := r.client.Get(ctx, sessionKey).Result()
+	if err == nil {
+		var session domain.Session
+		if json.Unmarshal([]byte(data), &session) == nil && session.RefreshTokenHash != "" {
+			refreshKey := fmt.Sprintf("session:refresh:%s", session.RefreshTokenHash)
+			_, _ = r.client.Del(ctx, refreshKey).Result()
+		}
+
+		_, err = r.client.Del(ctx, sessionKey).Result()
+		if err != nil {
+			return fmt.Errorf("failed to delete session: %w", err)
+		}
+		return nil
+	}
+
+	if err != nil && err != redis.Nil {
+		return fmt.Errorf("failed to get session for delete: %w", err)
+	}
+
+	// Fallback для старого формата ключей (если когда-то использовали session:*:<id>)
 	keys, err := r.client.Keys(ctx, fmt.Sprintf("session:*:%s", id)).Result()
 	if err != nil {
 		return fmt.Errorf("failed to get session keys: %w", err)
 	}
-
 	if len(keys) == 0 {
 		return fmt.Errorf("session not found")
 	}
-
-	// Удаляем все найденные ключи
 	_, err = r.client.Del(ctx, keys...).Result()
 	if err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
-
 	return nil
 }
 

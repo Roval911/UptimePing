@@ -22,18 +22,22 @@ func NewAPIKeyRepository(pool *pgxpool.Pool) repository.APIKeyRepository {
 
 // Create сохраняет новый API ключ в базе данных
 func (r *APIKeyRepository) Create(ctx context.Context, key *domain.APIKey) error {
-	query := `INSERT INTO api_keys (id, tenant_id, key_hash, secret_hash, name, is_active, expires_at, created_at) 
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+	query := `INSERT INTO api_keys (id, tenant_id, name, key_hash, key_prefix, secret_hash, permissions, is_active, expires_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
 
 	_, err := r.pool.Exec(ctx, query,
 		key.ID,
 		key.TenantID,
-		key.KeyHash,
-		key.SecretHash,
 		key.Name,
+		key.KeyHash,
+		key.KeyPrefix,
+		key.SecretHash,
+		key.Permissions,
 		key.IsActive,
 		key.ExpiresAt,
-		key.CreatedAt)
+		key.CreatedAt,
+		key.UpdatedAt,
+	)
 
 	if err != nil {
 		return fmt.Errorf("failed to create API key: %w", err)
@@ -44,19 +48,22 @@ func (r *APIKeyRepository) Create(ctx context.Context, key *domain.APIKey) error
 
 // FindByID возвращает API ключ по его ID
 func (r *APIKeyRepository) FindByID(ctx context.Context, id string) (*domain.APIKey, error) {
-	query := `SELECT id, tenant_id, key_hash, secret_hash, name, is_active, expires_at, created_at 
+	query := `SELECT id, tenant_id, name, key_hash, key_prefix, secret_hash, permissions, is_active, expires_at, created_at, updated_at
 		FROM api_keys WHERE id = $1`
 
 	var key domain.APIKey
 	err := r.pool.QueryRow(ctx, query, id).Scan(
 		&key.ID,
 		&key.TenantID,
-		&key.KeyHash,
-		&key.SecretHash,
 		&key.Name,
+		&key.KeyHash,
+		&key.KeyPrefix,
+		&key.SecretHash,
+		&key.Permissions,
 		&key.IsActive,
 		&key.ExpiresAt,
 		&key.CreatedAt,
+		&key.UpdatedAt,
 	)
 
 	if err != nil {
@@ -71,19 +78,22 @@ func (r *APIKeyRepository) FindByID(ctx context.Context, id string) (*domain.API
 
 // FindByKeyHash возвращает API ключ по его хэшу публичной части
 func (r *APIKeyRepository) FindByKeyHash(ctx context.Context, keyHash string) (*domain.APIKey, error) {
-	query := `SELECT id, tenant_id, key_hash, secret_hash, name, is_active, expires_at, created_at 
+	query := `SELECT id, tenant_id, name, key_hash, key_prefix, secret_hash, permissions, is_active, expires_at, created_at, updated_at
 		FROM api_keys WHERE key_hash = $1`
 
 	var key domain.APIKey
 	err := r.pool.QueryRow(ctx, query, keyHash).Scan(
 		&key.ID,
 		&key.TenantID,
-		&key.KeyHash,
-		&key.SecretHash,
 		&key.Name,
+		&key.KeyHash,
+		&key.KeyPrefix,
+		&key.SecretHash,
+		&key.Permissions,
 		&key.IsActive,
 		&key.ExpiresAt,
 		&key.CreatedAt,
+		&key.UpdatedAt,
 	)
 
 	if err != nil {
@@ -98,7 +108,7 @@ func (r *APIKeyRepository) FindByKeyHash(ctx context.Context, keyHash string) (*
 
 // ListByTenant возвращает все API ключи для указанного тенанта
 func (r *APIKeyRepository) ListByTenant(ctx context.Context, tenantID string) ([]*domain.APIKey, error) {
-	query := `SELECT id, tenant_id, key_hash, secret_hash, name, is_active, expires_at, created_at 
+	query := `SELECT id, tenant_id, name, key_hash, key_prefix, secret_hash, permissions, is_active, expires_at, created_at, updated_at
 		FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC`
 
 	rows, err := r.pool.Query(ctx, query, tenantID)
@@ -113,12 +123,15 @@ func (r *APIKeyRepository) ListByTenant(ctx context.Context, tenantID string) ([
 		err := rows.Scan(
 			&key.ID,
 			&key.TenantID,
-			&key.KeyHash,
-			&key.SecretHash,
 			&key.Name,
+			&key.KeyHash,
+			&key.KeyPrefix,
+			&key.SecretHash,
+			&key.Permissions,
 			&key.IsActive,
 			&key.ExpiresAt,
 			&key.CreatedAt,
+			&key.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan API key: %w", err)
@@ -139,7 +152,8 @@ func (r *APIKeyRepository) Update(ctx context.Context, key *domain.APIKey) error
 	query := `UPDATE api_keys SET 
 		name = $2, 
 		is_active = $3, 
-		expires_at = $4 
+		expires_at = $4,
+		updated_at = NOW()
 	WHERE id = $1`
 
 	result, err := r.pool.Exec(ctx, query,

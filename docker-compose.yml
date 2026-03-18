@@ -184,16 +184,20 @@ services:
       - ENVIRONMENT=dev
       - LOG_LEVEL=info
       - SERVER_HOST=0.0.0.0
-      - SERVER_PORT=50051
+      # HTTP server (used by API Gateway HTTPAuthClient)
+      - SERVER_PORT=51051
+      # gRPC server (used by internal gRPC clients)
+      - GRPC_PORT=50051
       - DATABASE_HOST=postgres
       - DATABASE_PORT=5432
       - DATABASE_NAME=uptimeping
       - DATABASE_USER=uptimeping
       - DATABASE_PASSWORD=uptimeping123
       - REDIS_ADDR=redis:6379
-      - JWT_SECRET=your-super-secret-jwt-key-change-in-production
-      - JWT_EXPIRE_IN=24h
-      - REFRESH_TOKEN_EXPIRE_IN=168h
+      - JWT_ACCESS_SECRET=your-super-secret-access-key-change-in-production
+      - JWT_REFRESH_SECRET=your-super-secret-refresh-key-change-in-production
+      - JWT_ACCESS_TOKEN_DURATION=24h
+      - JWT_REFRESH_TOKEN_DURATION=168h
     volumes:
       - ./services/auth-service/config:/app/config
       - ./logs/auth-service:/app/logs

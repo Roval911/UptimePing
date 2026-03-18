@@ -7,6 +7,7 @@ import (
 	metricsv1 "UptimePingPlatform/proto/api/metrics/v1"
 	notificationv1 "UptimePingPlatform/proto/api/notification/v1"
 	schedulerv1 "UptimePingPlatform/proto/api/scheduler/v1"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -2293,24 +2294,52 @@ func (h *Handler) handleCoreHealthProxy(w http.ResponseWriter, r *http.Request) 
 
 // handleAPIKeys обрабатывает запросы для API ключей
 func (h *Handler) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+	// Реальная интеграция: проксируем создание API ключей в Auth Service (HTTP).
+	// GET пока не поддерживаем (в чек-листе ожидается 405), POST создаёт ключи в БД.
 
-	if r.Method == http.MethodPost {
-		// Mock ответ для создания API ключа
-		response := map[string]interface{}{
-			"id":     "test-api-key-id",
-			"key":    "test-api-key",
-			"secret": "test-api-secret",
-			"name":   "Test API Key",
-		}
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(response)
+	if r.Method != http.MethodPost {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
 		return
 	}
 
-	// Для других методов
-	w.WriteHeader(http.StatusMethodNotAllowed)
-	json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+	// Дергаем auth-service напрямую; базовый URL уже известен в HTTPAuthClient,
+	// но здесь нам нужно проксирование без адаптера, поэтому берём env.
+	authBaseURL := os.Getenv("AUTH_SERVICE_ADDR")
+	if authBaseURL == "" {
+		authBaseURL = "http://auth-service:51051"
+	}
+
+	targetURL := fmt.Sprintf("%s/api/v1/auth/api-keys", strings.TrimRight(authBaseURL, "/"))
+
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrInternal, "failed to read request body"), http.StatusBadRequest)
+		return
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, targetURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrInternal, "failed to create request"), http.StatusBadGateway)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrInternal, "failed to call auth service"), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = h.copyResponse(w, resp.Body)
 }
 
 // handleSchedulerChecks обрабатывает запросы для проверок

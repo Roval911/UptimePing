@@ -175,9 +175,17 @@ func (s *Service) CreateAPIKey(ctx context.Context, tenantID, name string) (*API
 		KeyHash:    keyHash,
 		SecretHash: secretHash,
 		Name:       name,
-		IsActive:   true,
-		ExpiresAt:  func() *time.Time { t := time.Now().UTC().Add(365 * 24 * time.Hour); return &t }(), // Срок действия 1 год
-		CreatedAt:  time.Now().UTC(),
+		KeyPrefix: func() string {
+			if len(key) >= 16 {
+				return key[:16]
+			}
+			return key
+		}(),
+		Permissions: map[string]interface{}{},
+		IsActive:    true,
+		ExpiresAt:   func() *time.Time { t := time.Now().UTC().Add(365 * 24 * time.Hour); return &t }(), // Срок действия 1 год
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
 	}
 
 	// Сохранение в БД
@@ -485,7 +493,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 	}
 
 	// Хешируем refresh токен для поиска в Redis
-	hashedRefreshToken, err := refreshToken, nil
+	hashedRefreshToken, err := s.tokenHasher.Hash(refreshToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash refresh token: %w", err)
 	}

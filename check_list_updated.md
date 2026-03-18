@@ -7,7 +7,7 @@
 - **Запрос:** `{"email": "string", "password": "string", "tenant_name": "string"}`
 - **Ответ:** `{"access_token": "string", "refresh_token": "string", "tenant_id": "string"}`
 - **Статусы:** `201` (создан), `400` (валидация), `500` (ошибка)
-- **Статус:** ✅ **РАБОТАЕТ** - Возвращает access_token, refresh_token, tenant_id
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-18)** - Возвращает `201 Created` и реальные `tenant_id/user_id` (создаются в Postgres), refresh-сессия сохраняется в Redis
 ---
 
 ### `POST /api/v1/auth/login`
@@ -15,7 +15,7 @@
 - **Запрос:** `{"email": "string", "password": "string"}`
 - **Ответ:** `{"access_token": "string", "refresh_token": "string", "tenant_id": "string"}`
 - **Статусы:** `200` (успех), `400` (валидация), `401` (неверные данные), `500` (ошибка)
-- **Статус:** ✅ **РАБОТАЕТ** - Возвращает access_token, refresh_token, tenant_id
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-18)** - Возвращает `200 OK`, работает с пользователем из Postgres, refresh-сессия в Redis
 ---
 
 ### `POST /api/v1/auth/refresh`
@@ -23,7 +23,7 @@
 - **Запрос:** `{"refresh_token": "string"}`
 - **Ответ:** `{"access_token": "string", "refresh_token": "string"}`
 - **Статусы:** `200` (успех), `400` (валидация), `401` (недействительный), `500` (ошибка)
-- **Статус:** ✅ **РАБОТАЕТ** - Возвращает новые access_token и refresh_token
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-18)** - Возвращает `200 OK`, refresh реально валидируется по сессии в Redis и ротируется
 ---
 
 ### `POST /api/v1/auth/logout`
@@ -31,7 +31,7 @@
 - **Запрос:** `{"access_token": "string"}`
 - **Ответ:** `{"message": "Logged out successfully"}`
 - **Статусы:** `200` (успех), `400` (валидация), `500` (ошибка)
-- **Статус:** ✅ **РАБОТАЕТ** - Возвращает 200 OK с "Logged out successfully"
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-18)** - Возвращает `200 OK` (stateless logout)
 ---
 
 ### `POST /api/v1/auth/validate`
@@ -39,7 +39,7 @@
 - **Запрос:** `{"access_token": "string"}`
 - **Ответ:** `{"user_id": "string", "tenant_id": "string", "email": "string", "is_admin": "bool", "expires_at": "number"}`
 - **Статусы:** `200` (валиден), `400` (невалидный), `401` (просрочен), `500` (ошибка)
-- **Статус:** ✅ **РАБОТАЕТ** - Возвращает 200 OK с null для невалидного токена
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-18)** - Возвращает `200 OK` с данными пользователя из Postgres + roles/permissions из токена
 ---
 
 ### `GET /api/v1/auth/api-keys`
@@ -47,7 +47,7 @@
 - **Запрос:** Нет данных (GET)
 - **Ответ:** `{"id": "string", "key": "string", "secret": "string", "name": "string"}`
 - **Статусы:** `200` (успех), `405` (метод не разрешен)
-- **Статус:** ✅ **РАБОТАЕТ** - Возвращает 405 для GET (ожидаемо, нужен POST)
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-18)** - `GET` возвращает `405` (как и заявлено). `POST /api/v1/auth/api-keys` реализован без моков: создаёт API key в Postgres и возвращает `201` с реальными `key/secret`.
 ---
 
 ## 🔍 2. ПРОВЕРКИ (CHECKS)

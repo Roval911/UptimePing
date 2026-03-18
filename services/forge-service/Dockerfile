@@ -7,6 +7,7 @@ RUN apk add --no-cache git ca-certificates tzdata
 # Set working directory
 WORKDIR /app
 ENV GO111MODULE=on
+ENV GOSUMDB=off
 
 # Create temporary go.work file with only needed modules and correct Go version
 RUN echo "go 1.24.0" > go.work && \

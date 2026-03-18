@@ -1,344 +1,483 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/base64"
-	"encoding/binary"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
+	"UptimePingPlatform/pkg/config"
+	"UptimePingPlatform/pkg/database"
+	"UptimePingPlatform/pkg/health"
+	"UptimePingPlatform/pkg/logger"
+	pkg_redis "UptimePingPlatform/pkg/redis"
+	"UptimePingPlatform/pkg/validation"
+
+	grpc_auth "UptimePingPlatform/proto/api/auth/v1"
+	grpcHandlers "UptimePingPlatform/services/auth-service/internal/grpc/handlers"
+	authJWT "UptimePingPlatform/services/auth-service/internal/pkg/jwt"
+	"UptimePingPlatform/services/auth-service/internal/pkg/password"
+	"UptimePingPlatform/services/auth-service/internal/repository/postgres"
+	authRedis "UptimePingPlatform/services/auth-service/internal/repository/redis"
+	"UptimePingPlatform/services/auth-service/internal/service"
+
+	"google.golang.org/grpc"
 )
 
-// generateUserID генерирует уникальный ID пользователя в формате UUID
-func generateUserID() string {
-	// Генерируем валидный UUID v4
-	id := uuid.New()
-	return id.String()
-}
-
-// generateTenantID генерирует уникальный ID тенанта в формате UUID
-func generateTenantID() string {
-	// Генерируем валидный UUID v4
-	id := uuid.New()
-	return id.String()
-}
-
-// generateJWTToken создает JWT токен для пользователя
-func generateJWTToken(userID, tenantID, email string) (string, error) {
-	// Создаем кастомные claims с уникальными данными пользователя
-	claims := jwt.MapClaims{
-		"user_id":   userID,
-		"tenant_id": tenantID,
-		"email":     email,
-		"is_admin":  true,
-		"exp":       time.Now().Add(24 * time.Hour).Unix(), // Токен на 24 часа
-		"iat":       time.Now().Unix(),
-		"nbf":       time.Now().Unix(),
-		"sub":       userID,
-	}
-
-	// Создаем токен с подписью
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-
-	// Секретный ключ (в реальном приложении должен быть в конфигурации)
-	secretKey := "your-secret-key-here"
-
-	signedToken, err := token.SignedString([]byte(secretKey))
-	if err != nil {
-		return "", fmt.Errorf("failed to sign token: %w", err)
-	}
-
-	return signedToken, nil
-}
-
-// generateRefreshToken генерирует refresh токен
-func generateRefreshToken(userID string) string {
-	// Используем timestamp + random для избежания блокировки rand.Read
-	timestamp := time.Now().UnixNano()
-	randomBytes := make([]byte, 32) // Увеличим до 32 байт для большей длины
-	rand.Read(randomBytes)
-	randomNum := int64(binary.LittleEndian.Uint64(randomBytes))
-	uniqueID := fmt.Sprintf("%d_%d_%s", timestamp, randomNum+2, base64.URLEncoding.EncodeToString(randomBytes))
-	return "refresh_" + base64.URLEncoding.EncodeToString([]byte(uniqueID)) + "_" + userID
-}
-
 func main() {
-	// Initialize HTTP server with timeout
-	mux := http.NewServeMux()
+	cfg, err := config.LoadConfigWithAutoPath("dev")
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
 
-	// Create server with timeouts to prevent hanging
-	server := &http.Server{
-		Addr:         ":51051",
-		Handler:      mux,
+	appLogger, err := logger.NewLogger(cfg.Environment, cfg.Logger.Level, "auth-service", false)
+	if err != nil {
+		log.Fatalf("Failed to initialize logger: %v", err)
+	}
+	defer appLogger.Sync()
+
+	ctx := context.Background()
+
+	pgCfg := database.NewConfig()
+	pgCfg.Host = cfg.Database.Host
+	pgCfg.Port = cfg.Database.Port
+	pgCfg.User = cfg.Database.User
+	pgCfg.Password = cfg.Database.Password
+	pgCfg.Database = cfg.Database.Name
+
+	pg, err := database.Connect(ctx, pgCfg)
+	if err != nil {
+		appLogger.Error("Failed to connect to Postgres", logger.Error(err))
+		log.Fatalf("Postgres connect failed: %v", err)
+	}
+	defer pg.Close()
+
+	redisClient, err := pkg_redis.Connect(ctx, &pkg_redis.Config{
+		Addr:     cfg.Redis.Addr,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+		PoolSize: cfg.Redis.PoolSize,
+	})
+	if err != nil {
+		appLogger.Error("Failed to connect to Redis", logger.Error(err))
+		log.Fatalf("Redis connect failed: %v", err)
+	}
+	defer redisClient.Close()
+
+	if cfg.JWT.AccessSecret == "" || cfg.JWT.RefreshSecret == "" {
+		log.Fatalf("JWT secrets are required (JWT_ACCESS_SECRET, JWT_REFRESH_SECRET)")
+	}
+
+	accessTTL, err := time.ParseDuration(cfg.JWT.AccessTokenDuration)
+	if err != nil {
+		log.Fatalf("Invalid JWT access token duration: %v", err)
+	}
+	refreshTTL, err := time.ParseDuration(cfg.JWT.RefreshTokenDuration)
+	if err != nil {
+		log.Fatalf("Invalid JWT refresh token duration: %v", err)
+	}
+
+	jwtManager := authJWT.NewManager(cfg.JWT.AccessSecret, cfg.JWT.RefreshSecret, accessTTL, refreshTTL)
+	passwordHasher := password.NewBcryptHasher(0)
+
+	userRepo := postgres.NewUserRepository(pg.Pool)
+	tenantRepo := postgres.NewTenantRepository(pg.Pool)
+	apiKeyRepo := postgres.NewAPIKeyRepository(pg.Pool)
+	sessionRepo := authRedis.NewSessionRepository(redisClient.Client)
+
+	authService := service.NewAuthService(userRepo, tenantRepo, apiKeyRepo, sessionRepo, jwtManager, passwordHasher, *redisClient, appLogger)
+
+	healthChecker := health.NewSimpleHealthChecker("1.0.0")
+	validator := validation.NewValidator()
+
+	httpServer := &http.Server{
+		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
+		Handler:      newHTTPHandler(authService, jwtManager, healthChecker, validator, appLogger),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Health endpoints
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "healthy",
-			"service": "auth-service",
-		})
+	grpcLis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPC.Port))
+	if err != nil {
+		appLogger.Error("Failed to listen for gRPC", logger.Error(err))
+		log.Fatalf("Failed to listen: %v", err)
+	}
+
+	grpcServer := grpc.NewServer()
+	grpcAuthHandler := grpcHandlers.NewAuthHandler(authService, jwtManager, appLogger)
+	grpc_auth.RegisterAuthServiceServer(grpcServer, grpcAuthHandler)
+
+	go func() {
+		appLogger.Info(fmt.Sprintf("Starting Auth gRPC server on port %d", cfg.GRPC.Port))
+		if err := grpcServer.Serve(grpcLis); err != nil {
+			appLogger.Error("gRPC server failed", logger.Error(err))
+		}
+	}()
+
+	go func() {
+		appLogger.Info(fmt.Sprintf("Starting Auth HTTP server on port %d", cfg.Server.Port))
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			appLogger.Error("HTTP server failed", logger.Error(err))
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	grpcServer.GracefulStop()
+	_ = httpServer.Shutdown(shutdownCtx)
+}
+
+type httpAuthHandler struct {
+	authService   service.AuthService
+	jwtManager    authJWT.JWTManager
+	healthChecker health.HealthChecker
+	validator     *validation.Validator
+	log           logger.Logger
+}
+
+func newHTTPHandler(
+	authService service.AuthService,
+	jwtManager authJWT.JWTManager,
+	healthChecker health.HealthChecker,
+	validator *validation.Validator,
+	log logger.Logger,
+) http.Handler {
+	h := &httpAuthHandler{
+		authService:   authService,
+		jwtManager:    jwtManager,
+		healthChecker: healthChecker,
+		validator:     validator,
+		log:           log,
+	}
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/health", h.handleHealth)
+	mux.HandleFunc("/ready", h.handleReady)
+	mux.HandleFunc("/live", h.handleLive)
+
+	mux.HandleFunc("/api/v1/auth/register", h.handleRegister)
+	mux.HandleFunc("/api/v1/auth/login", h.handleLogin)
+	mux.HandleFunc("/api/v1/auth/refresh", h.handleRefresh)
+	mux.HandleFunc("/api/v1/auth/logout", h.handleLogout)
+	mux.HandleFunc("/api/v1/auth/validate", h.handleValidate)
+	mux.HandleFunc("/api/v1/auth/api-keys", h.handleAPIKeys)
+	mux.HandleFunc("/api/v1/auth/validate-api-key", h.handleValidateAPIKey)
+
+	return mux
+}
+
+func (h *httpAuthHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"healthy","service":"auth-service"}`))
+}
+
+func (h *httpAuthHandler) handleReady(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ready","service":"auth-service"}`))
+}
+
+func (h *httpAuthHandler) handleLive(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"live","service":"auth-service"}`))
+}
+
+func (h *httpAuthHandler) decodeJSON(r *http.Request, dst any) error {
+	if r.Body == nil {
+		return fmt.Errorf("empty request body")
+	}
+	defer r.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	if len(body) == 0 {
+		return fmt.Errorf("empty request body")
+	}
+	return json.Unmarshal(body, dst)
+}
+
+func (h *httpAuthHandler) writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func (h *httpAuthHandler) handleRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		Email      string `json:"email"`
+		Password   string `json:"password"`
+		TenantName string `json:"tenant_name"`
+	}
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if err := h.validator.ValidateRequiredFields(map[string]interface{}{
+		"email":       req.Email,
+		"password":    req.Password,
+		"tenant_name": req.TenantName,
+	}, map[string]string{
+		"email":       "Email",
+		"password":    "Password",
+		"tenant_name": "Tenant name",
+	}); err != nil {
+		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	tokenPair, err := h.authService.Register(r.Context(), req.Email, req.Password, req.TenantName)
+	if err != nil {
+		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	h.writeJSON(w, http.StatusCreated, tokenPair)
+}
+
+func (h *httpAuthHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if err := h.validator.ValidateRequiredFields(map[string]interface{}{
+		"email":    req.Email,
+		"password": req.Password,
+	}, map[string]string{
+		"email":    "Email",
+		"password": "Password",
+	}); err != nil {
+		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	tokenPair, err := h.authService.Login(r.Context(), req.Email, req.Password)
+	if err != nil {
+		h.writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, tokenPair)
+}
+
+func (h *httpAuthHandler) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if err := h.validator.ValidateRequiredFields(map[string]interface{}{
+		"refresh_token": req.RefreshToken,
+	}, map[string]string{
+		"refresh_token": "Refresh token",
+	}); err != nil {
+		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	tokenPair, err := h.authService.RefreshToken(r.Context(), req.RefreshToken)
+	if err != nil {
+		h.writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, tokenPair)
+}
+
+func (h *httpAuthHandler) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.AccessToken == "" {
+		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "access_token is required"})
+		return
+	}
+
+	// Stateless logout: validate token; session revocation is refresh-token based.
+	if _, err := h.jwtManager.ValidateAccessToken(req.AccessToken); err != nil {
+		h.writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, map[string]string{"message": "Logged out successfully"})
+}
+
+func (h *httpAuthHandler) handleValidate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.AccessToken == "" {
+		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "access_token is required"})
+		return
+	}
+
+	claims, err := h.jwtManager.ValidateAccessToken(req.AccessToken)
+	if err != nil {
+		h.writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
+		return
+	}
+
+	user, err := h.authService.GetUserByID(r.Context(), claims.UserID)
+	if err != nil {
+		h.writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user not found"})
+		return
+	}
+
+	roles, err := h.authService.GetUserRoles(r.Context(), claims.UserID)
+	if err != nil {
+		h.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get user roles"})
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"user_id":     claims.UserID,
+		"tenant_id":   claims.TenantID,
+		"email":       user.Email,
+		"is_admin":    claims.IsAdmin,
+		"expires_at":  claims.ExpiresAt.Unix(),
+		"roles":       roles,
+		"permissions": claims.Permissions,
 	})
+}
 
-	// Auth endpoints
-	mux.HandleFunc("/api/v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+func (h *httpAuthHandler) handleValidateAPIKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
 
-		// Парсим тело запроса для получения email
-		var req struct {
-			Email    string `json:"email"`
-			Password string `json:"password"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
-			return
-		}
+	var req struct {
+		Key    string `json:"key"`
+		Secret string `json:"secret"`
+	}
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
 
-		// Генерируем уникальные ID для пользователя
-		userID := generateUserID()
-		// Используем существующий tenant
-		tenantID := "aa8931e2-44cc-4d07-b077-958e6dc4a4ac" // Используем существующий tenant из БД
+	if req.Key == "" || req.Secret == "" {
+		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "key and secret are required"})
+		return
+	}
 
-		// Генерируем уникальный JWT токен
-		accessToken, err := generateJWTToken(userID, tenantID, req.Email)
-		if err != nil {
-			http.Error(w, "Failed to generate token", http.StatusInternalServerError)
-			return
-		}
+	claims, err := h.authService.ValidateAPIKey(r.Context(), req.Key, req.Secret)
+	if err != nil {
+		h.writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid api key"})
+		return
+	}
 
-		// Генерируем refresh токен
-		refreshToken := generateRefreshToken(userID)
-
-		// Формируем ответ
-		response := map[string]string{
-			"access_token":  accessToken,
-			"refresh_token": refreshToken,
-			"tenant_id":     "aa8931e2-44cc-4d07-b077-958e6dc4a4ac", // Используем тот же tenant_id
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+	h.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"tenant_id": claims.TenantID,
+		"key_id":    claims.KeyID,
+		"is_valid":  true,
 	})
+}
 
-	mux.HandleFunc("/api/v1/auth/register", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+func (h *httpAuthHandler) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
+	// В этом проекте API Gateway ходит в Auth Service по HTTP, поэтому делаем HTTP endpoint.
+	// Поддерживаем создание ключа. Листинг можно будет добавить позже при необходимости.
 
-		// Парсим тело запроса
-		var req struct {
-			Email      string `json:"email"`
-			Password   string `json:"password"`
-			TenantName string `json:"tenant_name"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
-			return
-		}
+	if r.Method != http.MethodPost {
+		h.writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
 
-		// Генерируем уникальные ID для нового пользователя
-		userID := generateUserID()
-		// Используем существующий tenant или создаем новый
-		tenantID := "aa8931e2-44cc-4d07-b077-958e6dc4a4ac" // Используем существующий tenant из БД
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		h.writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing bearer token"})
+		return
+	}
 
-		// Генерируем уникальный JWT токен
-		accessToken, err := generateJWTToken(userID, tenantID, req.Email)
-		if err != nil {
-			http.Error(w, "Failed to generate token", http.StatusInternalServerError)
-			return
-		}
+	accessToken := strings.TrimPrefix(authHeader, "Bearer ")
+	claims, err := h.jwtManager.ValidateAccessToken(accessToken)
+	if err != nil {
+		h.writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
+		return
+	}
 
-		// Генерируем refresh токен
-		refreshToken := generateRefreshToken(userID)
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Name == "" {
+		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
 
-		// Формируем ответ
-		response := map[string]string{
-			"access_token":  accessToken,
-			"refresh_token": refreshToken,
-			"tenant_id":     tenantID,
-		}
+	apiKeyPair, err := h.authService.CreateAPIKey(r.Context(), claims.TenantID, req.Name)
+	if err != nil {
+		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(response)
+	h.writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"key":       apiKeyPair.Key,
+		"secret":    apiKeyPair.Secret,
+		"name":      req.Name,
+		"tenant_id": claims.TenantID,
 	})
-
-	// Refresh token endpoint
-	mux.HandleFunc("/api/v1/auth/refresh", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Парсим тело запроса
-		var req struct {
-			RefreshToken string `json:"refresh_token"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
-			return
-		}
-
-		// Валидация refresh токена
-		if req.RefreshToken == "" {
-			http.Error(w, "Refresh token is required", http.StatusBadRequest)
-			return
-		}
-
-		// Извлекаем userID из refresh токена
-		parts := strings.Split(req.RefreshToken, "_")
-		if len(parts) < 3 {
-			http.Error(w, "Invalid refresh token format", http.StatusBadRequest)
-			return
-		}
-		userID := parts[len(parts)-1]
-
-		// Генерируем новые токены
-		tenantID := generateTenantID()
-		accessToken, err := generateJWTToken(userID, tenantID, "user@example.com")
-		if err != nil {
-			http.Error(w, "Failed to generate access token", http.StatusInternalServerError)
-			return
-		}
-
-		newRefreshToken := generateRefreshToken(userID)
-
-		// Формируем ответ
-		response := map[string]string{
-			"access_token":  accessToken,
-			"refresh_token": newRefreshToken,
-			"tenant_id":     tenantID,
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
-	})
-
-	// Logout endpoint
-	mux.HandleFunc("/api/v1/auth/logout", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Парсим тело запроса
-		var req struct {
-			AccessToken string `json:"access_token"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
-			return
-		}
-
-		// Валидация access токена
-		if req.AccessToken == "" {
-			http.Error(w, "Access token is required", http.StatusBadRequest)
-			return
-		}
-
-		// Парсим JWT токен для валидации
-		token, err := jwt.ParseWithClaims(req.AccessToken, jwt.MapClaims{}, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			return []byte("your-secret-key-here"), nil
-		})
-
-		if err != nil || !token.Valid {
-			http.Error(w, "Invalid access token", http.StatusUnauthorized)
-			return
-		}
-
-		// В реальном приложении здесь была бы инвалидация токена в Redis/БД
-		// Для демонстрации просто возвращаем успех
-		response := map[string]string{
-			"message": "Logged out successfully",
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
-	})
-
-	mux.HandleFunc("/api/v1/auth/validate", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Парсим тело запроса
-		var req struct {
-			AccessToken string `json:"access_token"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
-			return
-		}
-
-		// Валидация JWT токена
-		if req.AccessToken == "" {
-			http.Error(w, "Invalid token", http.StatusUnauthorized)
-			return
-		}
-
-		// Парсим JWT токен
-		token, err := jwt.ParseWithClaims(req.AccessToken, jwt.MapClaims{}, func(token *jwt.Token) (interface{}, error) {
-			// Проверяем метод подписи
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			// Секретный ключ (должен совпадать с тем что используется для генерации)
-			return []byte("your-secret-key-here"), nil
-		})
-
-		if err != nil {
-			http.Error(w, "Invalid token: "+err.Error(), http.StatusUnauthorized)
-			return
-		}
-
-		// Получаем claims из токена
-		claims, ok := token.Claims.(jwt.MapClaims)
-		if !ok || !token.Valid {
-			http.Error(w, "Invalid token claims", http.StatusUnauthorized)
-			return
-		}
-
-		// Извлекаем данные пользователя из claims
-		userID, _ := claims["user_id"].(string)
-		tenantID, _ := claims["tenant_id"].(string)
-		email, _ := claims["email"].(string)
-		isAdmin, _ := claims["is_admin"].(bool)
-		exp, _ := claims["exp"].(float64)
-
-		// Формируем ответ с реальными данными из токена
-		userInfo := map[string]interface{}{
-			"user_id":    userID,
-			"tenant_id":  tenantID,
-			"is_admin":   isAdmin,
-			"email":      email,
-			"expires_at": int64(exp),
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(userInfo)
-	})
-
-	log.Println("Auth Service starting on port 51051...")
-	log.Fatal(server.ListenAndServe())
 }
