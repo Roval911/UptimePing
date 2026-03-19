@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,9 +13,10 @@ import (
 
 	"UptimePingPlatform/pkg/config"
 	"UptimePingPlatform/pkg/health"
-	"UptimePingPlatform/pkg/logger"
+	pkglogger "UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
 	pkg_redis "UptimePingPlatform/pkg/redis"
+	"UptimePingPlatform/services/metrics-service/internal/collector"
 )
 
 func main() {
@@ -25,7 +27,7 @@ func main() {
 	}
 
 	// Initialize logger
-	appLogger, err := logger.NewLogger(cfg.Environment, cfg.Logger.Level, "metrics-service", false)
+	appLogger, err := pkglogger.NewLogger(cfg.Environment, cfg.Logger.Level, "metrics-service", false)
 	if err != nil {
 		log.Fatalf("Failed to initialize logger: %v", err)
 	}
@@ -47,22 +49,40 @@ func main() {
 		DB:       cfg.Redis.DB,
 	})
 	if err != nil {
-		appLogger.Error("Failed to connect to Redis", logger.Error(err))
+		appLogger.Error("Failed to connect to Redis", pkglogger.Error(err))
 	} else {
 		defer redisClient.Close()
 	}
 
+	// Initialize metrics collector
+	metricsCollector := collector.NewMetricsCollector(appLogger)
+
+	// Start collecting metrics in background
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				if err := metricsCollector.CollectAllMetrics(context.Background()); err != nil {
+					appLogger.Error("Failed to collect metrics", pkglogger.Error(err))
+				}
+			}
+		}
+	}()
+
 	// Start HTTP server for metrics and health
 	httpServer := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler: setupHTTPHandler(metricsHandler, healthChecker, appLogger),
+		Handler: setupHTTPHandler(metricsHandler, healthChecker, appLogger, metricsCollector),
 	}
 
 	// Start server
 	go func() {
 		appLogger.Info(fmt.Sprintf("Starting HTTP server on port %d", cfg.Server.Port))
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			appLogger.Error("HTTP server failed", logger.Error(err))
+			appLogger.Error("HTTP server failed", pkglogger.Error(err))
 		}
 	}()
 
@@ -77,49 +97,127 @@ func main() {
 	defer cancel()
 
 	if err := httpServer.Shutdown(ctx); err != nil {
-		appLogger.Error("Server shutdown failed", logger.Error(err))
+		appLogger.Error("Server shutdown failed", pkglogger.Error(err))
 	}
 
 	appLogger.Info("Server stopped")
 }
 
-func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthChecker, appLogger logger.Logger) http.Handler {
+func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthChecker, appLogger pkglogger.Logger, metricsCollector *collector.MetricsCollector) http.Handler {
 	mux := http.NewServeMux()
-	
-	// Metrics endpoint
+
+	// Prometheus metrics endpoint
 	mux.Handle("/metrics", metricsHandler)
-	
+
 	// Health endpoints
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"healthy","service":"metrics-service"}`))
 	})
-	
+
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ready","service":"metrics-service"}`))
 	})
-	
+
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"live","service":"metrics-service"}`))
 	})
 
-	// Metrics service endpoints
-	mux.HandleFunc("/api/v1/metrics/collect", func(w http.ResponseWriter, r *http.Request) {
+	// Metrics API endpoints
+	mux.HandleFunc("/api/v1/metrics", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		// Get metrics from collector
+		allMetrics := metricsCollector.GetAllMetrics()
+
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message":"Metrics Service - Collect endpoint","status":"ok"}`))
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"metrics": allMetrics,
+			"total":   len(allMetrics),
+			"message": "Metrics retrieved successfully",
+		})
+	})
+
+	mux.HandleFunc("/api/v1/metrics/collect", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		// Force collection of metrics
+		if err := metricsCollector.CollectAllMetrics(context.Background()); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   err.Error(),
+				"message": "Failed to collect metrics",
+			})
+			return
+		}
+
+		allMetrics := metricsCollector.GetAllMetrics()
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":       true,
+			"metrics_count": len(allMetrics),
+			"collected_at":  time.Now().Format(time.RFC3339),
+			"metrics":       allMetrics,
+			"message":       "Metrics collected successfully",
+		})
 	})
 
 	mux.HandleFunc("/api/v1/metrics/export", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message":"Metrics Service - Export endpoint","status":"ok"}`))
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":    true,
+			"export_url": "/metrics",
+			"message":    "Metrics export ready",
+		})
 	})
 
 	mux.HandleFunc("/api/v1/metrics/query", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		// Parse query parameters
+		serviceName := r.URL.Query().Get("service_name")
+		metricType := r.URL.Query().Get("metric_type")
+
+		allMetrics := metricsCollector.GetAllMetrics()
+		var filteredMetrics []interface{}
+
+		// Filter metrics based on query parameters
+		for _, metric := range allMetrics {
+			metricMap, ok := metric.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			if serviceName != "" && metricMap["service_name"] != serviceName {
+				continue
+			}
+			if metricType != "" && metricMap["type"] != metricType {
+				continue
+			}
+			filteredMetrics = append(filteredMetrics, metric)
+		}
+
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message":"Metrics Service - Query endpoint","status":"ok"}`))
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":      true,
+			"query_result": filteredMetrics,
+			"total":        len(filteredMetrics),
+			"filters": map[string]string{
+				"service_name": serviceName,
+				"metric_type":  metricType,
+			},
+			"message": "Query executed successfully",
+		})
 	})
-	
+
 	return mux
 }

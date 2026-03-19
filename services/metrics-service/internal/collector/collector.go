@@ -9,13 +9,13 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
-	pkglogger "UptimePingPlatform/pkg/logger"
 	pkgerrors "UptimePingPlatform/pkg/errors"
+	pkglogger "UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/services/metrics-service/internal/domain"
 )
 
@@ -33,13 +33,13 @@ type ServiceMetrics struct {
 	Name    string
 	Address string
 	Conn    *grpc.ClientConn
-	
+
 	// Prometheus метрики
-	RequestCount    *prometheus.CounterVec
-	RequestDuration *prometheus.HistogramVec
-	ErrorCount      *prometheus.CounterVec
+	RequestCount      *prometheus.CounterVec
+	RequestDuration   *prometheus.HistogramVec
+	ErrorCount        *prometheus.CounterVec
 	ActiveConnections prometheus.Gauge
-	
+
 	// gRPC клиенты для метрик
 	metricsClient domain.MetricsServiceClient
 	healthClient  domain.HealthServiceClient
@@ -48,17 +48,17 @@ type ServiceMetrics struct {
 // NewMetricsCollector создает новый коллектор метрик
 func NewMetricsCollector(logger pkglogger.Logger) *MetricsCollector {
 	registry := prometheus.NewRegistry()
-	
+
 	collector := &MetricsCollector{
 		logger:      logger,
 		registry:    registry,
 		services:    make(map[string]*ServiceMetrics),
 		httpHandler: promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
 	}
-	
+
 	// Регистрируем системные метрики
 	collector.registerSystemMetrics()
-	
+
 	return collector
 }
 
@@ -71,14 +71,14 @@ func (mc *MetricsCollector) registerSystemMetrics() {
 			Help: "Total number of services being monitored",
 		},
 	))
-	
+
 	mc.registry.MustRegister(prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "metrics_collector_active_connections",
 			Help: "Number of active gRPC connections",
 		},
 	))
-	
+
 	mc.registry.MustRegister(prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "metrics_collector_scrapes_total",
@@ -91,22 +91,22 @@ func (mc *MetricsCollector) registerSystemMetrics() {
 func (mc *MetricsCollector) AddService(name, address string) error {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
-	
-	mc.logger.Info("Adding service to metrics collector", 
+
+	mc.logger.Info("Adding service to metrics collector",
 		pkglogger.String("service", name),
 		pkglogger.String("address", address))
-	
+
 	// Проверяем, что сервис еще не добавлен
 	if _, exists := mc.services[name]; exists {
 		return pkgerrors.New(pkgerrors.ErrConflict, fmt.Sprintf("service %s already exists", name))
 	}
-	
+
 	// Создаем gRPC подключение
 	conn, err := grpc.Dial(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return pkgerrors.Wrap(err, "failed to connect to service %s", name)
 	}
-	
+
 	// Создаем метрики для сервиса
 	serviceMetrics := &ServiceMetrics{
 		Name:    name,
@@ -141,30 +141,30 @@ func (mc *MetricsCollector) AddService(name, address string) error {
 			},
 		),
 	}
-	
+
 	// Регистрируем метрики в реестре
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(serviceMetrics.RequestCount)
 	registry.MustRegister(serviceMetrics.RequestDuration)
 	registry.MustRegister(serviceMetrics.ErrorCount)
 	registry.MustRegister(serviceMetrics.ActiveConnections)
-	
+
 	// Создаем gRPC клиенты
 	metricsClient := domain.NewMetricsServiceClient(conn)
 	healthClient := domain.NewHealthServiceClient(conn)
-	
+
 	serviceMetrics.metricsClient = metricsClient
 	serviceMetrics.healthClient = healthClient
-	
+
 	mc.services[name] = serviceMetrics
-	
+
 	// Запускаем сбор метрик в отдельной горутине
 	go mc.collectServiceMetrics(name, serviceMetrics)
-	
-	mc.logger.Info("Service added successfully", 
+
+	mc.logger.Info("Service added successfully",
 		pkglogger.String("service", name),
 		pkglogger.String("address", address))
-	
+
 	return nil
 }
 
@@ -172,22 +172,22 @@ func (mc *MetricsCollector) AddService(name, address string) error {
 func (mc *MetricsCollector) RemoveService(name string) error {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
-	
+
 	serviceMetrics, exists := mc.services[name]
 	if !exists {
 		return pkgerrors.New(pkgerrors.ErrNotFound, fmt.Sprintf("service %s not found", name))
 	}
-	
+
 	// Закрываем соединение
 	if serviceMetrics.Conn != nil {
 		serviceMetrics.Conn.Close()
 	}
-	
+
 	delete(mc.services, name)
-	
-	mc.logger.Info("Service removed from metrics collector", 
+
+	mc.logger.Info("Service removed from metrics collector",
 		pkglogger.String("service", name))
-	
+
 	return nil
 }
 
@@ -195,22 +195,22 @@ func (mc *MetricsCollector) RemoveService(name string) error {
 func (mc *MetricsCollector) collectServiceMetrics(name string, sm *ServiceMetrics) {
 	ticker := time.NewTicker(15 * time.Second) // Сбор метрик каждые 15 секунд
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			
+
 			// Собираем метрики через gRPC
 			if err := mc.collectGRPCMetrics(ctx, name, sm); err != nil {
-				mc.logger.Error("Failed to collect gRPC metrics", 
+				mc.logger.Error("Failed to collect gRPC metrics",
 					pkglogger.String("service", name),
 					pkglogger.Error(err))
 			}
-			
+
 			// Обновляем метрики активных соединений
 			sm.ActiveConnections.Set(1)
-			
+
 			cancel()
 		}
 	}
@@ -222,13 +222,13 @@ func (mc *MetricsCollector) collectGRPCMetrics(ctx context.Context, name string,
 	req := &domain.GetMetricsRequest{
 		ServiceName: name,
 	}
-	
+
 	resp, err := sm.metricsClient.GetMetrics(ctx, req)
 	if err != nil {
 		sm.ErrorCount.WithLabelValues("get_metrics", "grpc_error").Inc()
 		return err
 	}
-	
+
 	// Обновляем метрики
 	for _, metric := range resp.Metrics {
 		switch metric.Type {
@@ -249,22 +249,22 @@ func (mc *MetricsCollector) collectGRPCMetrics(ctx context.Context, name string,
 			}
 		}
 	}
-	
+
 	// Проверяем здоровье сервиса
 	healthReq := &domain.HealthCheckRequest{
 		Service: name,
 	}
-	
+
 	healthResp, err := sm.healthClient.Check(ctx, healthReq)
 	if err != nil {
 		sm.ErrorCount.WithLabelValues("health_check", "grpc_error").Inc()
 		return err
 	}
-	
+
 	if healthResp.Status != "SERVING" {
 		sm.ErrorCount.WithLabelValues("health_check", "unhealthy").Inc()
 	}
-	
+
 	return nil
 }
 
@@ -282,12 +282,12 @@ func (mc *MetricsCollector) GetRegistry() *prometheus.Registry {
 func (mc *MetricsCollector) GetServices() []string {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
-	
+
 	services := make([]string, 0, len(mc.services))
 	for name := range mc.services {
 		services = append(services, name)
 	}
-	
+
 	return services
 }
 
@@ -295,12 +295,12 @@ func (mc *MetricsCollector) GetServices() []string {
 func (mc *MetricsCollector) GetServiceMetrics(name string) (*ServiceMetrics, error) {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
-	
+
 	serviceMetrics, exists := mc.services[name]
 	if !exists {
 		return nil, pkgerrors.New(pkgerrors.ErrNotFound, fmt.Sprintf("service %s not found", name))
 	}
-	
+
 	return serviceMetrics, nil
 }
 
@@ -308,22 +308,22 @@ func (mc *MetricsCollector) GetServiceMetrics(name string) (*ServiceMetrics, err
 func (mc *MetricsCollector) ScrapeAll() error {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	
+
 	var errors []error
-	
+
 	for name, serviceMetrics := range mc.services {
 		if err := mc.collectGRPCMetrics(ctx, name, serviceMetrics); err != nil {
 			errors = append(errors, fmt.Errorf("service %s: %w", name, err))
 		}
 	}
-	
+
 	if len(errors) > 0 {
 		return pkgerrors.New(pkgerrors.ErrInternal, fmt.Sprintf("failed to scrape metrics: %v", errors))
 	}
-	
+
 	return nil
 }
 
@@ -383,7 +383,7 @@ func (mc *MetricsCollector) ExportMetrics(ctx context.Context, format, serviceNa
 		// Экспорт в JSON формате
 		result := map[string]interface{}{
 			"timestamp": time.Now().Unix(),
-			"services": mc.GetServices(),
+			"services":  mc.GetServices(),
 		}
 
 		data, err := json.Marshal(result)
@@ -463,28 +463,115 @@ func (mc *MetricsCollector) GetMetrics(ctx context.Context, metricNames []string
 
 // MetricValue представляет значение метрики
 type MetricValue struct {
-	Value     float64            `json:"value"`
-	Timestamp string             `json:"timestamp"`
-	Labels    map[string]string  `json:"labels"`
+	Value     float64           `json:"value"`
+	Timestamp string            `json:"timestamp"`
+	Labels    map[string]string `json:"labels"`
+}
+
+// GetAllMetrics возвращает все метрики в формате для API
+func (mc *MetricsCollector) GetAllMetrics() []interface{} {
+	mc.mu.RLock()
+	defer mc.mu.RUnlock()
+
+	var allMetrics []interface{}
+
+	// Добавляем метрики самого коллектора
+	allMetrics = append(allMetrics, map[string]interface{}{
+		"service_name": "metrics-service",
+		"metric_name":  "services_monitored",
+		"value":        len(mc.services),
+		"type":         "gauge",
+		"timestamp":    time.Now().Format(time.RFC3339),
+		"labels": map[string]string{
+			"service": "metrics-service",
+		},
+	})
+
+	// Добавляем метрики для каждого сервиса
+	for name := range mc.services {
+		// Собираем метрики gRPC
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		metricData, err := mc.GetMetrics(ctx, []string{}, name, "", nil, nil)
+		cancel()
+
+		if err == nil {
+			for metricName, metricValue := range metricData {
+				allMetrics = append(allMetrics, map[string]interface{}{
+					"service_name": name,
+					"metric_name":  metricName,
+					"value":        metricValue.Value,
+					"type":         "gauge",
+					"timestamp":    metricValue.Timestamp,
+					"labels":       metricValue.Labels,
+				})
+			}
+		} else {
+			// Если не удалось получить метрики, добавляем базовую информацию
+			allMetrics = append(allMetrics, map[string]interface{}{
+				"service_name": name,
+				"metric_name":  "status",
+				"value":        "unreachable",
+				"type":         "status",
+				"timestamp":    time.Now().Format(time.RFC3339),
+				"labels": map[string]string{
+					"service": name,
+					"status":  "error",
+				},
+			})
+		}
+	}
+
+	return allMetrics
+}
+
+// CollectAllMetrics выполняет сбор метрик со всех сервисов
+func (mc *MetricsCollector) CollectAllMetrics(ctx context.Context) error {
+	mc.logger.Info("Starting metrics collection from all services")
+
+	// Добавляем основные сервисы для мониторинга
+	services := map[string]string{
+		"auth-service":         "localhost:50051",
+		"scheduler-service":    "localhost:50052",
+		"forge-service":        "localhost:50053",
+		"core-service":         "localhost:50054",
+		"metrics-service":      "localhost:50055",
+		"incident-manager":     "localhost:50056",
+		"notification-service": "localhost:50057",
+	}
+
+	// Добавляем сервисы, если они еще не добавлены
+	for name, address := range services {
+		if _, exists := mc.services[name]; !exists {
+			if err := mc.AddService(name, address); err != nil {
+				mc.logger.Error("Failed to add service",
+					pkglogger.String("service", name),
+					pkglogger.String("address", address),
+					pkglogger.Error(err))
+			}
+		}
+	}
+
+	// Выполняем сбор метрик
+	return mc.ScrapeAll()
 }
 
 // Shutdown корректно завершает работу коллектора
 func (mc *MetricsCollector) Shutdown() error {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
-	
+
 	mc.logger.Info("Shutting down metrics collector")
-	
+
 	// Закрываем все соединения
 	for name, serviceMetrics := range mc.services {
 		if serviceMetrics.Conn != nil {
 			serviceMetrics.Conn.Close()
-			mc.logger.Debug("Closed connection for service", 
+			mc.logger.Debug("Closed connection for service",
 				pkglogger.String("service", name))
 		}
 	}
-	
+
 	mc.services = make(map[string]*ServiceMetrics)
-	
+
 	return nil
 }
