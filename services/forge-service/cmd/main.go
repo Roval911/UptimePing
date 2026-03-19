@@ -15,12 +15,12 @@ import (
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
 	pkg_redis "UptimePingPlatform/pkg/redis"
-	"net"
-	"google.golang.org/grpc"
 	forgev1 "UptimePingPlatform/proto/api/forge/v1"
 	grpcHandler "UptimePingPlatform/services/forge-service/internal/handler/grpc"
 	"UptimePingPlatform/services/forge-service/internal/service"
 	"encoding/json"
+	"google.golang.org/grpc"
+	"net"
 )
 
 func main() {
@@ -120,21 +120,21 @@ func main() {
 
 func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthChecker, appLogger logger.Logger, forgeSvc service.ForgeService) http.Handler {
 	mux := http.NewServeMux()
-	
+
 	// Metrics endpoint
 	mux.Handle("/metrics", metricsHandler)
-	
+
 	// Health endpoints
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"healthy","service":"forge-service"}`))
 	})
-	
+
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ready","service":"forge-service"}`))
 	})
-	
+
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"live","service":"forge-service"}`))
@@ -247,6 +247,88 @@ func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthCh
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	})
-	
+
+	// Add code generation endpoint
+	mux.HandleFunc("/api/v1/forge/code", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var payload struct {
+			ProtoContent string                 `json:"proto_content"`
+			Options      map[string]interface{} `json:"options"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			appLogger.Error("Failed to decode code request", logger.Error(err))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Invalid JSON"})
+			return
+		}
+		var opts *service.CodeOptions
+		if payload.Options != nil {
+			opts = &service.CodeOptions{}
+			if v, ok := payload.Options["language"].(string); ok {
+				opts.Language = v
+			}
+			if v, ok := payload.Options["framework"].(string); ok {
+				opts.Framework = v
+			}
+			if v, ok := payload.Options["template"].(string); ok {
+				opts.Template = v
+			}
+		}
+		code, filename, language, err := forgeSvc.GenerateCode(r.Context(), payload.ProtoContent, opts)
+		if err != nil {
+			appLogger.Error("GenerateCode failed", logger.Error(err))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": fmt.Sprintf("Code generation failed: %s", err.Error())})
+			return
+		}
+		resp := map[string]interface{}{
+			"success":  true,
+			"code":     code,
+			"filename": filename,
+			"language": language,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	// Add validate endpoint
+	mux.HandleFunc("/api/v1/forge/validate", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var payload struct {
+			ProtoContent string `json:"proto_content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			appLogger.Error("Failed to decode validate request", logger.Error(err))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Invalid JSON"})
+			return
+		}
+		isValid, errors, warnings, err := forgeSvc.ValidateProto(r.Context(), payload.ProtoContent)
+		if err != nil {
+			appLogger.Error("ValidateProto failed", logger.Error(err))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": fmt.Sprintf("Validation failed: %s", err.Error())})
+			return
+		}
+		resp := map[string]interface{}{
+			"success":  true,
+			"is_valid": isValid,
+			"errors":   errors,
+			"warnings": warnings,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+
 	return mux
 }

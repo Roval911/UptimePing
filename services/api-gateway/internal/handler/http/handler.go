@@ -155,8 +155,13 @@ func (h *Handler) setupRoutes() {
 	h.mux.HandleFunc("/api/v1/auth/api-keys", h.handleAPIKeys)
 
 	// Config роуты (требуют прав доступа)
-	configHandler := middleware.PermissionMiddleware([]string{"config:read"}, h.logger)(http.HandlerFunc(h.handleConfig))
-	h.mux.HandleFunc("/api/v1/config", configHandler.ServeHTTP).Methods(http.MethodGet)
+	h.logger.Info("DEBUG: Setting up /api/v1/config route")
+	configHandler := middleware.AuthMiddleware(h.authService, h.logger)(http.HandlerFunc(h.handleConfig))
+	h.logger.Info("DEBUG: AuthMiddleware applied to /api/v1/config")
+	configHandler = middleware.PermissionMiddleware([]string{"config:read"}, h.logger)(configHandler)
+	h.logger.Info("DEBUG: PermissionMiddleware applied to /api/v1/config")
+	h.mux.Handle("/api/v1/config", configHandler).Methods(http.MethodGet)
+	h.logger.Info("DEBUG: /api/v1/config route registered")
 
 	// Auth Service health endpoints (для тестирования) - ВАЖНО: регистрируем ПЕРЕД другими роутами
 	h.logger.Info("DEBUG: Registering /api/v1/auth/health route")
@@ -1808,6 +1813,12 @@ func (h *Handler) handleGenerateCode(ctx context.Context, w http.ResponseWriter,
 		}
 	}
 
+	// Проверяем, что forgeClient доступен
+	if h.forgeClient == nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrInternal, "Forge Service client is not available"), http.StatusServiceUnavailable)
+		return
+	}
+
 	resp, err := h.forgeClient.GenerateCode(ctx, req.ProtoContent, options)
 	if err != nil {
 		h.handleError(w, err)
@@ -1835,6 +1846,12 @@ func (h *Handler) handleValidateProto(ctx context.Context, w http.ResponseWriter
 	Options      map[string]interface{} `json:"options,omitempty"`
 	Action       string                 `json:"action"`
 }) {
+	// Проверяем, что forgeClient доступен
+	if h.forgeClient == nil {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrInternal, "Forge Service client is not available"), http.StatusServiceUnavailable)
+		return
+	}
+
 	resp, err := h.forgeClient.ValidateProto(ctx, req.ProtoContent)
 	if err != nil {
 		h.handleError(w, err)

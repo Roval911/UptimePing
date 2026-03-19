@@ -63,10 +63,10 @@ func (h *ForgeHandler) ParseProto(ctx context.Context, req *forgev1.ParseProtoRe
 	protoServiceInfo := h.convertForgeServiceInfoToProto(serviceInfo)
 
 	h.LogOperationSuccess(ctx, "ParseProto", map[string]interface{}{
-		"file_name":    req.FileName,
-		"is_valid":     isValid,
+		"file_name":      req.FileName,
+		"is_valid":       isValid,
 		"warnings_count": len(warnings),
-		"methods_count": len(protoServiceInfo.Methods),
+		"methods_count":  len(protoServiceInfo.Methods),
 	})
 
 	return &forgev1.ParseProtoResponse{
@@ -115,7 +115,7 @@ func (h *ForgeHandler) GenerateConfig(ctx context.Context, req *forgev1.Generate
 	protoCheckConfig := h.convertCheckConfigToProto(checkConfig)
 
 	h.LogOperationSuccess(ctx, "GenerateConfig", map[string]interface{}{
-		"config_length":  len(configYaml),
+		"config_length":    len(configYaml),
 		"has_check_config": protoCheckConfig != nil,
 	})
 
@@ -162,8 +162,8 @@ func (h *ForgeHandler) GenerateCode(ctx context.Context, req *forgev1.GenerateCo
 
 	h.LogOperationSuccess(ctx, "GenerateCode", map[string]interface{}{
 		"code_length": len(code),
-		"filename":   filename,
-		"language":   language,
+		"filename":    filename,
+		"language":    language,
 	})
 
 	return &forgev1.GenerateCodeResponse{
@@ -198,8 +198,8 @@ func (h *ForgeHandler) ValidateProto(ctx context.Context, req *forgev1.ValidateP
 	}
 
 	h.LogOperationSuccess(ctx, "ValidateProto", map[string]interface{}{
-		"is_valid":     isValid,
-		"errors_count":  len(errors),
+		"is_valid":       isValid,
+		"errors_count":   len(errors),
 		"warnings_count": len(warnings),
 	})
 
@@ -255,16 +255,55 @@ func (h *ForgeHandler) convertForgeServiceInfoToProto(info *service.ForgeService
 // convertConfigOptionsFromProto конвертирует protobuf ConfigOptions в доменную модель
 func (h *ForgeHandler) convertConfigOptionsFromProto(proto *forgev1.ConfigOptions) *service.ConfigOptions {
 	if proto == nil {
-		return nil
+		// Возвращаем значения по умолчанию вместо nil
+		return &service.ConfigOptions{
+			TargetHost:    "localhost",
+			TargetPort:    50051,
+			CheckInterval: 60,
+			Timeout:       5,
+			TenantID:      "default",
+			Metadata:      make(map[string]string),
+		}
+	}
+
+	// Устанавливаем значения по умолчанию для пустых полей
+	targetHost := proto.TargetHost
+	if targetHost == "" {
+		targetHost = "localhost"
+	}
+
+	targetPort := int(proto.TargetPort)
+	if targetPort == 0 {
+		targetPort = 50051
+	}
+
+	checkInterval := int(proto.CheckInterval)
+	if checkInterval == 0 {
+		checkInterval = 60
+	}
+
+	timeout := int(proto.Timeout)
+	if timeout == 0 {
+		timeout = 5
+	}
+
+	tenantID := proto.TenantId
+	if tenantID == "" {
+		tenantID = "default"
+	}
+
+	metadata := proto.Metadata
+	if metadata == nil {
+		metadata = make(map[string]string)
 	}
 
 	return &service.ConfigOptions{
-		TargetHost:   proto.TargetHost,
-		TargetPort:   int(proto.TargetPort),
-		CheckInterval: int(proto.CheckInterval),
-		Timeout:      int(proto.Timeout),
-		TenantID:     proto.TenantId,
-		Metadata:     proto.Metadata,
+		TargetHost:    targetHost,
+		TargetPort:    targetPort,
+		CheckInterval: checkInterval,
+		Timeout:       timeout,
+		TenantID:      tenantID,
+		Metadata:      metadata,
 	}
 }
 
@@ -286,12 +325,23 @@ func (h *ForgeHandler) convertCheckConfigToProto(config *service.CheckConfig) *f
 		checkType = forgev1.CheckType_CHECK_TYPE_UNSPECIFIED
 	}
 
+	// Безопасное получение значений из указателей
+	interval := int32(60) // значение по умолчанию
+	if config.Interval != nil {
+		interval = int32(*config.Interval)
+	}
+
+	timeout := int32(5) // значение по умолчанию
+	if config.Timeout != nil {
+		timeout = int32(*config.Timeout)
+	}
+
 	return &forgev1.CheckConfig{
 		Name:     config.Name,
 		Type:     checkType,
 		Target:   config.Target,
-		Interval: int32(config.Interval),
-		Timeout:  int32(config.Timeout),
+		Interval: interval,
+		Timeout:  timeout,
 		Config:   config.Config,
 	}
 }

@@ -17,12 +17,6 @@ import (
 func AuthMiddleware(authClient client.AuthHTTPClientInterface, log logger.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			log.Info("DEBUG: AuthMiddleware called",
-				logger.String("method", r.Method),
-				logger.String("path", r.URL.Path),
-				logger.String("auth_header", r.Header.Get("Authorization")),
-				logger.String("request_id", fmt.Sprintf("%p", r))) // Уникальный ID запроса
-
 			// Пропускаем публичные роуты
 			if isPublicRoute(r.URL.Path) {
 				log.Debug("Public route, skipping auth",
@@ -54,7 +48,7 @@ func AuthMiddleware(authClient client.AuthHTTPClientInterface, log logger.Logger
 			if isBearerToken(authHeader) {
 				// Обработка Bearer токена (JWT)
 				log.Debug("Processing Bearer token authentication")
-				if err := handleBearerAuth(r, authHeader, authClient); err != nil {
+				if err := handleBearerAuth(r, authHeader, authClient, log); err != nil {
 					log.Error("Bearer authentication failed", logger.Error(err))
 					http.Error(w, "Authentication failed", http.StatusUnauthorized)
 					return
@@ -98,7 +92,7 @@ func isAPIKey(authHeader string) bool {
 }
 
 // handleBearerAuth обрабатывает аутентификацию через Bearer токен
-func handleBearerAuth(r *http.Request, authHeader string, authClient client.AuthHTTPClientInterface) error {
+func handleBearerAuth(r *http.Request, authHeader string, authClient client.AuthHTTPClientInterface, log logger.Logger) error {
 	// Извлечение токена
 	token := authHeader[7:] // Убираем "Bearer "
 
@@ -153,6 +147,13 @@ func handleBearerAuth(r *http.Request, authHeader string, authClient client.Auth
 	ctx = context.WithValue(ctx, "tenant_id", claims.TenantID)
 	ctx = context.WithValue(ctx, "email", claims.Email)
 	ctx = context.WithValue(ctx, "is_admin", claims.IsAdmin)
+
+	// Отладочный лог для проверки значений claims
+	log.Info("JWT Claims received",
+		logger.String("user_id", claims.UserID),
+		logger.String("tenant_id", claims.TenantID),
+		logger.Bool("is_admin", claims.IsAdmin),
+		logger.String("permissions", strings.Join(claims.Permissions, ",")))
 
 	// Устанавливаем права доступа на основе ролей
 	permissions := []string{}

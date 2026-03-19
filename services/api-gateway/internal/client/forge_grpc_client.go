@@ -83,7 +83,7 @@ func NewGRPCForgeClient(address string, timeout time.Duration, logger logger.Log
 func (c *GRPCForgeClient) GenerateConfig(ctx context.Context, protoContent string, options *forgev1.ConfigOptions) (*forgev1.GenerateConfigResponse, error) {
 	c.baseHandler.LogOperationStart(ctx, "forge_generate_config", map[string]interface{}{
 		"proto_length": len(protoContent),
-		"has_options": options != nil,
+		"has_options":  options != nil,
 	})
 
 	req := &forgev1.GenerateConfigRequest{
@@ -192,7 +192,7 @@ func (c *GRPCForgeClient) GenerateConfig(ctx context.Context, protoContent strin
 	}
 
 	c.baseHandler.LogOperationSuccess(ctx, "forge_generate_config", map[string]interface{}{
-		"config_length": len(resp.ConfigYaml),
+		"config_length":    len(resp.ConfigYaml),
 		"has_check_config": resp.CheckConfig != nil,
 	})
 
@@ -202,7 +202,7 @@ func (c *GRPCForgeClient) GenerateConfig(ctx context.Context, protoContent strin
 // ParseProto парсит .proto файл
 func (c *GRPCForgeClient) ParseProto(ctx context.Context, protoContent, fileName string) (*forgev1.ParseProtoResponse, error) {
 	c.baseHandler.LogOperationStart(ctx, "forge_parse_proto", map[string]interface{}{
-		"file_name": fileName,
+		"file_name":    fileName,
 		"proto_length": len(protoContent),
 	})
 
@@ -226,22 +226,22 @@ func (c *GRPCForgeClient) ParseProto(ctx context.Context, protoContent, fileName
 		}
 		defer httpResp.Body.Close()
 		var parsed struct {
-			Success     bool   `json:"success"`
-			Message     string `json:"message"`
+			Success     bool                   `json:"success"`
+			Message     string                 `json:"message"`
 			ServiceInfo map[string]interface{} `json:"service_info"`
-			IsValid     bool   `json:"is_valid"`
-			Warnings    []string `json:"warnings"`
+			IsValid     bool                   `json:"is_valid"`
+			Warnings    []string               `json:"warnings"`
 		}
 		if err := json.NewDecoder(httpResp.Body).Decode(&parsed); err != nil {
 			c.baseHandler.LogError(ctx, err, "forge_parse_proto_http_decode_failed", "")
 			return nil, fmt.Errorf("failed to decode HTTP response: %w", err)
 		}
 		respProto := &forgev1.ParseProtoResponse{
-			IsValid: parsed.IsValid,
+			IsValid:  parsed.IsValid,
 			Warnings: parsed.Warnings,
 		}
 		c.baseHandler.LogOperationSuccess(ctx, "forge_parse_proto_http", map[string]interface{}{
-			"is_valid": respProto.IsValid,
+			"is_valid":       respProto.IsValid,
 			"warnings_count": len(respProto.Warnings),
 		})
 		return respProto, nil
@@ -255,7 +255,7 @@ func (c *GRPCForgeClient) ParseProto(ctx context.Context, protoContent, fileName
 	}
 
 	c.baseHandler.LogOperationSuccess(ctx, "forge_parse_proto", map[string]interface{}{
-		"is_valid": resp.IsValid,
+		"is_valid":       resp.IsValid,
 		"warnings_count": len(resp.Warnings),
 	})
 
@@ -264,10 +264,60 @@ func (c *GRPCForgeClient) ParseProto(ctx context.Context, protoContent, fileName
 
 // GenerateCode генерирует код для проверки gRPC методов
 func (c *GRPCForgeClient) GenerateCode(ctx context.Context, protoContent string, options *forgev1.CodeOptions) (*forgev1.GenerateCodeResponse, error) {
+	// Проверяем, что baseHandler не равен nil
+	if c.baseHandler == nil {
+		return nil, fmt.Errorf("forge client baseHandler is nil")
+	}
+
 	c.baseHandler.LogOperationStart(ctx, "forge_generate_code", map[string]interface{}{
 		"proto_length": len(protoContent),
-		"has_options": options != nil,
+		"has_options":  options != nil,
 	})
+
+	// If HTTP fallback is configured, call HTTP endpoint
+	if c.client == nil && c.httpBaseURL != "" {
+		payload := map[string]interface{}{
+			"proto_content": protoContent,
+			"options":       map[string]interface{}{},
+		}
+		if options != nil {
+			optMap := map[string]interface{}{}
+			if options.Language != "" {
+				optMap["language"] = options.Language
+			}
+			if options.Framework != "" {
+				optMap["framework"] = options.Framework
+			}
+			if options.Template != "" {
+				optMap["template"] = options.Template
+			}
+			payload["options"] = optMap
+		}
+		bodyBytes, _ := json.Marshal(payload)
+		httpClient := &http.Client{Timeout: 15 * time.Second}
+		httpURL := strings.TrimRight(c.httpBaseURL, "/") + "/api/v1/forge/code"
+		httpResp, err := httpClient.Post(httpURL, "application/json", strings.NewReader(string(bodyBytes)))
+		if err != nil {
+			c.baseHandler.LogError(ctx, err, "forge_generate_code_http_failed", "")
+			return nil, fmt.Errorf("failed to generate code via HTTP: %w", err)
+		}
+		defer httpResp.Body.Close()
+		var parsed struct {
+			Success  bool   `json:"success"`
+			Code     string `json:"code"`
+			Filename string `json:"filename"`
+			Language string `json:"language"`
+		}
+		if err := json.NewDecoder(httpResp.Body).Decode(&parsed); err != nil {
+			c.baseHandler.LogError(ctx, err, "forge_generate_code_http_decode_failed", "")
+			return nil, fmt.Errorf("failed to decode HTTP response: %w", err)
+		}
+		return &forgev1.GenerateCodeResponse{
+			Code:     parsed.Code,
+			Filename: parsed.Filename,
+			Language: parsed.Language,
+		}, nil
+	}
 
 	req := &forgev1.GenerateCodeRequest{
 		ProtoContent: protoContent,
@@ -282,8 +332,8 @@ func (c *GRPCForgeClient) GenerateCode(ctx context.Context, protoContent string,
 
 	c.baseHandler.LogOperationSuccess(ctx, "forge_generate_code", map[string]interface{}{
 		"code_length": len(resp.Code),
-		"filename": resp.Filename,
-		"language": resp.Language,
+		"filename":    resp.Filename,
+		"language":    resp.Language,
 	})
 
 	return resp, nil
@@ -294,6 +344,37 @@ func (c *GRPCForgeClient) ValidateProto(ctx context.Context, protoContent string
 	c.baseHandler.LogOperationStart(ctx, "forge_validate_proto", map[string]interface{}{
 		"proto_length": len(protoContent),
 	})
+
+	// If HTTP fallback is configured, call HTTP endpoint
+	if c.client == nil && c.httpBaseURL != "" {
+		payload := map[string]interface{}{
+			"proto_content": protoContent,
+		}
+		bodyBytes, _ := json.Marshal(payload)
+		httpClient := &http.Client{Timeout: 15 * time.Second}
+		httpURL := strings.TrimRight(c.httpBaseURL, "/") + "/api/v1/forge/validate"
+		httpResp, err := httpClient.Post(httpURL, "application/json", strings.NewReader(string(bodyBytes)))
+		if err != nil {
+			c.baseHandler.LogError(ctx, err, "forge_validate_proto_http_failed", "")
+			return nil, fmt.Errorf("failed to validate proto via HTTP: %w", err)
+		}
+		defer httpResp.Body.Close()
+		var parsed struct {
+			Success  bool     `json:"success"`
+			IsValid  bool     `json:"is_valid"`
+			Errors   []string `json:"errors"`
+			Warnings []string `json:"warnings"`
+		}
+		if err := json.NewDecoder(httpResp.Body).Decode(&parsed); err != nil {
+			c.baseHandler.LogError(ctx, err, "forge_validate_proto_http_decode_failed", "")
+			return nil, fmt.Errorf("failed to decode HTTP response: %w", err)
+		}
+		return &forgev1.ValidateProtoResponse{
+			IsValid:  parsed.IsValid,
+			Errors:   parsed.Errors,
+			Warnings: parsed.Warnings,
+		}, nil
+	}
 
 	req := &forgev1.ValidateProtoRequest{
 		ProtoContent: protoContent,
@@ -306,8 +387,8 @@ func (c *GRPCForgeClient) ValidateProto(ctx context.Context, protoContent string
 	}
 
 	c.baseHandler.LogOperationSuccess(ctx, "forge_validate_proto", map[string]interface{}{
-		"is_valid": resp.IsValid,
-		"errors_count": len(resp.Errors),
+		"is_valid":       resp.IsValid,
+		"errors_count":   len(resp.Errors),
 		"warnings_count": len(resp.Warnings),
 	})
 

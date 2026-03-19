@@ -12,25 +12,25 @@ import (
 type ForgeService interface {
 	// ParseProto парсит .proto файл и возвращает информацию о сервисе
 	ParseProto(ctx context.Context, protoContent, fileName string) (*ForgeServiceInfo, bool, []string, error)
-	
+
 	// GenerateConfig генерирует конфигурацию проверки из .proto файла
 	GenerateConfig(ctx context.Context, protoContent string, options *ConfigOptions) (string, *CheckConfig, error)
-	
+
 	// GenerateCode генерирует код для проверки gRPC методов
 	GenerateCode(ctx context.Context, protoContent string, options *CodeOptions) (string, string, string, error)
-	
+
 	// ValidateProto проверяет валидность .proto файла
 	ValidateProto(ctx context.Context, protoContent string) (bool, []string, []string, error)
-	
+
 	// GetTemplates возвращает доступные шаблоны для генерации кода
 	GetTemplates(ctx context.Context, templateType, language string) ([]TemplateInfo, error)
 }
 
 // ForgeServiceInfo содержит информацию о сервисе из .proto файла
 type ForgeServiceInfo struct {
-	PackageName string           `json:"package_name"`
-	ServiceName string           `json:"service_name"`
-	Methods     []ForgeMethodInfo `json:"methods"`
+	PackageName string             `json:"package_name"`
+	ServiceName string             `json:"service_name"`
+	Methods     []ForgeMethodInfo  `json:"methods"`
 	Messages    []ForgeMessageInfo `json:"messages"`
 }
 
@@ -45,7 +45,7 @@ type ForgeMethodInfo struct {
 
 // ForgeMessageInfo содержит информацию о сообщении
 type ForgeMessageInfo struct {
-	Name   string            `json:"name"`
+	Name   string           `json:"name"`
 	Fields []ForgeFieldInfo `json:"fields"`
 }
 
@@ -59,12 +59,12 @@ type ForgeFieldInfo struct {
 
 // ConfigOptions содержит опции генерации конфигурации
 type ConfigOptions struct {
-	TargetHost   string            `json:"target_host"`
-	TargetPort   int               `json:"target_port"`
+	TargetHost    string            `json:"target_host"`
+	TargetPort    int               `json:"target_port"`
 	CheckInterval int               `json:"check_interval"`
-	Timeout      int               `json:"timeout"`
-	TenantID     string            `json:"tenant_id"`
-	Metadata     map[string]string `json:"metadata"`
+	Timeout       int               `json:"timeout"`
+	TenantID      string            `json:"tenant_id"`
+	Metadata      map[string]string `json:"metadata"`
 }
 
 // CheckConfig содержит конфигурацию проверки
@@ -72,8 +72,8 @@ type CheckConfig struct {
 	Name     string `json:"name"`
 	Type     string `json:"type"`
 	Target   string `json:"target"`
-	Interval int    `json:"interval"`
-	Timeout  int    `json:"timeout"`
+	Interval *int   `json:"interval,omitempty"`
+	Timeout  *int   `json:"timeout,omitempty"`
 	Config   string `json:"config"`
 }
 
@@ -88,23 +88,23 @@ type CodeOptions struct {
 type forgeService struct {
 	logger        logger.Logger
 	protoParser   *ProtoParser
-	codeGenerator  *CodeGenerator
+	codeGenerator *CodeGenerator
 	validator     *validation.ForgeValidator
 }
 
 // NewForgeService создает новый экземпляр ForgeService
 func NewForgeService(logger logger.Logger, protoParser *ProtoParser, codeGenerator *CodeGenerator, validator *validation.ForgeValidator) ForgeService {
 	return &forgeService{
-		logger:       logger,
-		protoParser:  protoParser,
+		logger:        logger,
+		protoParser:   protoParser,
 		codeGenerator: codeGenerator,
-		validator:    validator,
+		validator:     validator,
 	}
 }
 
 // ParseProto парсит .proto файл и возвращает информацию о сервисе
 func (s *forgeService) ParseProto(ctx context.Context, protoContent, fileName string) (*ForgeServiceInfo, bool, []string, error) {
-	s.logger.Info("Parsing proto file", 
+	s.logger.Info("Parsing proto file",
 		logger.String("file_name", fileName),
 		logger.Int("content_length", len(protoContent)))
 
@@ -130,7 +130,7 @@ func (s *forgeService) ParseProto(ctx context.Context, protoContent, fileName st
 
 	// Берем первый сервис для простоты
 	service := services[0]
-	
+
 	// Конвертируем методы
 	methods := make([]ForgeMethodInfo, 0, len(service.Methods))
 	for _, method := range service.Methods {
@@ -182,6 +182,38 @@ func (s *forgeService) GenerateConfig(ctx context.Context, protoContent string, 
 		logger.Int("proto_length", len(protoContent)),
 		logger.Bool("has_options", options != nil))
 
+	// Валидация опций
+	if options == nil {
+		options = &ConfigOptions{
+			TargetHost:    "localhost",
+			TargetPort:    50051,
+			CheckInterval: 60,
+			Timeout:       5,
+			TenantID:      "default",
+			Metadata:      make(map[string]string),
+		}
+	}
+
+	// Установка значений по умолчанию
+	if options.TargetHost == "" {
+		options.TargetHost = "localhost"
+	}
+	if options.TargetPort == 0 {
+		options.TargetPort = 50051
+	}
+	if options.CheckInterval == 0 {
+		options.CheckInterval = 60
+	}
+	if options.Timeout == 0 {
+		options.Timeout = 5
+	}
+	if options.TenantID == "" {
+		options.TenantID = "default"
+	}
+	if options.Metadata == nil {
+		options.Metadata = make(map[string]string)
+	}
+
 	// Парсим proto для получения информации о сервисе
 	serviceInfo, _, _, err := s.ParseProto(ctx, protoContent, "")
 	if err != nil {
@@ -194,20 +226,20 @@ func (s *forgeService) GenerateConfig(ctx context.Context, protoContent string, 
 
 	// Создаем конфигурацию для первого метода
 	method := serviceInfo.Methods[0]
-	
+
 	// Определяем тип проверки на основе метода
 	checkType := "grpc" // По умолчанию для gRPC сервисов
 	if method.HttpMethod != "" {
 		checkType = "http"
 	}
 
-	// Формируем target
+	// Формируем target с валидными значениями
 	target := fmt.Sprintf("%s:%d", options.TargetHost, options.TargetPort)
-	if target == ":0" {
-		target = "localhost:50051" // По умолчанию
+	if options.TargetHost == "" {
+		target = fmt.Sprintf("localhost:%d", options.TargetPort)
 	}
 
-	// Создаем YAML конфигурацию
+	// Создаем YAML конфигурацию с валидными значениями
 	configYaml := fmt.Sprintf(`name: %s
 type: %s
 target: %s
@@ -232,19 +264,22 @@ metadata:
 		method.OutputType,
 	)
 
-	// Создаем CheckConfig
+	// Создаем CheckConfig с валидными значениями (используем указатели)
 	checkConfig := &CheckConfig{
 		Name:     method.Name,
 		Type:     checkType,
 		Target:   target,
-		Interval: options.CheckInterval,
-		Timeout:  options.Timeout,
+		Interval: &options.CheckInterval, // Теперь указатель на значение
+		Timeout:  &options.Timeout,       // Теперь указатель на значение
 		Config:   fmt.Sprintf("service_name: %s\nmethod_name: %s", serviceInfo.ServiceName, method.Name),
 	}
 
 	s.logger.Info("Config generated successfully",
 		logger.String("check_name", checkConfig.Name),
-		logger.String("check_type", checkConfig.Type))
+		logger.String("check_type", checkConfig.Type),
+		logger.String("target", checkConfig.Target),
+		logger.Int("interval", *checkConfig.Interval),
+		logger.Int("timeout", *checkConfig.Timeout))
 
 	return configYaml, checkConfig, nil
 }
@@ -255,6 +290,26 @@ func (s *forgeService) GenerateCode(ctx context.Context, protoContent string, op
 		logger.Int("proto_length", len(protoContent)),
 		logger.String("language", options.Language),
 		logger.String("framework", options.Framework))
+
+	// Валидация опций
+	if options == nil {
+		options = &CodeOptions{
+			Language:  "go",
+			Framework: "grpc",
+			Template:  "checker",
+		}
+	}
+
+	// Установка значений по умолчанию
+	if options.Language == "" {
+		options.Language = "go"
+	}
+	if options.Framework == "" {
+		options.Framework = "grpc"
+	}
+	if options.Template == "" {
+		options.Template = "checker"
+	}
 
 	// Парсим proto для получения информации о сервисе
 	serviceInfo, _, _, err := s.ParseProto(ctx, protoContent, "")
@@ -272,8 +327,12 @@ func (s *forgeService) GenerateCode(ctx context.Context, protoContent string, op
 		language = "go"
 	}
 
+	// Генерируем имя файла с валидными значениями
 	filename := fmt.Sprintf("%s_checker.go", serviceInfo.ServiceName)
-	
+	if serviceInfo.ServiceName == "" {
+		filename = "service_checker.go"
+	}
+
 	// Генерируем базовый код для gRPC checker
 	template := `package checkers
 
@@ -324,16 +383,23 @@ func (c *%sChecker) Execute(ctx context.Context) error {
 }
 `
 
-	code := fmt.Sprintf(template, 
-		serviceInfo.ServiceName,
-		serviceInfo.ServiceName,
-		serviceInfo.ServiceName,
-		serviceInfo.ServiceName,
-		serviceInfo.ServiceName)
+	// Используем валидное имя сервиса
+	serviceName := serviceInfo.ServiceName
+	if serviceName == "" {
+		serviceName = "Service"
+	}
+
+	code := fmt.Sprintf(template,
+		serviceName,
+		serviceName,
+		serviceName,
+		serviceName,
+		serviceName)
 
 	s.logger.Info("Code generated successfully",
 		logger.String("filename", filename),
 		logger.String("language", language),
+		logger.String("service_name", serviceName),
 		logger.Int("code_length", len(code)))
 
 	return code, filename, language, nil
@@ -386,7 +452,7 @@ type TemplateInfo struct {
 
 // GetTemplates возвращает доступные шаблоны для генерации кода
 func (s *forgeService) GetTemplates(ctx context.Context, templateType, language string) ([]TemplateInfo, error) {
-	s.logger.Info("Getting templates", 
+	s.logger.Info("Getting templates",
 		logger.String("type", templateType),
 		logger.String("language", language))
 
@@ -436,7 +502,7 @@ func (s *forgeService) GetTemplates(ctx context.Context, templateType, language 
 
 	// Реализация загрузки шаблонов из файлов или БД
 	// В текущей реализации возвращаем статичные шаблоны
-	
+
 	// TODO: В будущем можно добавить:
 	// 1. Загрузку шаблонов из файловой системы
 	// 2. Кеширование шаблонов в Redis
@@ -450,9 +516,9 @@ func (s *forgeService) GetTemplates(ctx context.Context, templateType, language 
 
 // contains проверяет наличие подстроки в строке
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && 
-		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || 
-		findSubstring(s, substr)))
+	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) &&
+		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
+			findSubstring(s, substr)))
 }
 
 // findSubstring ищет подстроку в строке
