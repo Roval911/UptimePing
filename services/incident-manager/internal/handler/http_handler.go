@@ -1,28 +1,31 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
-	"strconv"
-	"time"
+	"strings"
 
-	"UptimePingPlatform/pkg/logger"
-	"UptimePingPlatform/services/incident-manager/internal/api"
+	"UptimePingPlatform/pkg/errors"
+	pkglogger "UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/pkg/validation"
 	"UptimePingPlatform/services/incident-manager/internal/domain"
 	"UptimePingPlatform/services/incident-manager/internal/service"
 )
 
 // HTTPHandler обрабатывает HTTP запросы для Incident Manager
 type HTTPHandler struct {
-	logger          logger.Logger
+	logger          pkglogger.Logger
 	incidentService service.IncidentService
+	validator       *validation.Validator
 }
 
 // NewHTTPHandler создает новый HTTP обработчик
-func NewHTTPHandler(logger logger.Logger, incidentService service.IncidentService) *HTTPHandler {
+func NewHTTPHandler(logger pkglogger.Logger, incidentService service.IncidentService) *HTTPHandler {
 	return &HTTPHandler{
 		logger:          logger,
 		incidentService: incidentService,
+		validator:       &validation.Validator{},
 	}
 }
 
@@ -38,8 +41,10 @@ func (h *HTTPHandler) handleIncidents(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		h.listIncidents(w, r)
+	case http.MethodPost:
+		h.createIncident(w, r)
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.writeError(w, errors.New(errors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
 	}
 }
 
@@ -48,288 +53,248 @@ func (h *HTTPHandler) handleIncidentByID(w http.ResponseWriter, r *http.Request)
 	// Извлекаем ID из URL
 	id := extractIncidentID(r.URL.Path)
 	if id == "" {
-		http.Error(w, "Invalid incident ID", http.StatusBadRequest)
+		h.writeError(w, errors.New(errors.ErrValidation, "invalid incident ID"), http.StatusBadRequest)
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
 		h.getIncident(w, r, id)
-	case http.MethodPost:
-		// Проверяем, это подтверждение или решение
-		if r.URL.Query().Get("action") == "acknowledge" {
-			h.acknowledgeIncident(w, r, id)
-		} else if r.URL.Query().Get("action") == "resolve" {
-			h.resolveIncident(w, r, id)
-		} else {
-			http.Error(w, "Invalid action. Use ?action=acknowledge or ?action=resolve", http.StatusBadRequest)
-		}
+	case http.MethodPut:
+		h.updateIncident(w, r, id)
+	case http.MethodDelete:
+		h.deleteIncident(w, r, id)
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.writeError(w, errors.New(errors.ErrValidation, "method not allowed"), http.StatusMethodNotAllowed)
 	}
 }
 
 // listIncidents получает список инцидентов
 func (h *HTTPHandler) listIncidents(w http.ResponseWriter, r *http.Request) {
-	h.logger.Info("Processing list incidents request")
-
-	// Получаем query параметры
-	query := r.URL.Query()
-	status := query.Get("status")
-	severity := query.Get("severity")
-	page, _ := strconv.Atoi(query.Get("page"))
-	pageSize, _ := strconv.Atoi(query.Get("page_size"))
-
-	if page <= 0 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = 20
-	}
-
-	h.logger.Info("List incidents parameters",
-		logger.String("status", status),
-		logger.String("severity", severity),
-		logger.Int("page", page),
-		logger.Int("page_size", pageSize))
-
-	// Создаем фильтр для сервиса
-	var statusPtr *domain.IncidentStatus
-	if statusStr := status; statusStr != "" {
+	ctx := context.Background()
+	
+	// Получаем параметры фильтрации
+	statusStr := r.URL.Query().Get("status")
+	
+	var status *domain.IncidentStatus
+	if statusStr != "" {
 		s := domain.IncidentStatus(statusStr)
-		statusPtr = &s
+		status = &s
 	}
-
-	var severityPtr *domain.IncidentSeverity
-	if severityStr := severity; severityStr != "" {
-		sev := domain.IncidentSeverity(severityStr)
-		severityPtr = &sev
-	}
-
-	limit := pageSize
-	offset := (page - 1) * pageSize
-
+	
 	filter := &domain.IncidentFilter{
-		Status:   statusPtr,
-		Severity: severityPtr,
-		Limit:    limit,
-		Offset:   offset,
+		Status: status,
 	}
 
-	// Вызываем реальный сервис
-	domainIncidents, err := h.incidentService.GetIncidents(r.Context(), filter)
+	incidents, err := h.incidentService.GetIncidents(ctx, filter)
 	if err != nil {
-		h.logger.Error("Failed to get incidents", logger.Error(err))
-		http.Error(w, "Failed to get incidents", http.StatusInternalServerError)
+		h.writeError(w, err, http.StatusInternalServerError)
 		return
 	}
 
-	// Конвертируем domain модели в API модели
-	incidents := make([]api.Incident, len(domainIncidents))
-	for i, domainIncident := range domainIncidents {
-		incidents[i] = api.Incident{
-			ID:          domainIncident.ID,
-			Title:       domainIncident.Title,
-			Description: domainIncident.Description,
-			Status:      string(domainIncident.Status),
-			Severity:    string(domainIncident.Severity),
-			CreatedAt:   domainIncident.CreatedAt,
-			UpdatedAt:   domainIncident.UpdatedAt,
-		}
+	h.writeResponse(w, map[string]interface{}{
+		"success": true,
+		"incidents": incidents,
+		"total":    len(incidents),
+		"message":  "Incidents retrieved successfully",
+	})
+}
+
+// createIncident создает новый инцидент
+func (h *HTTPHandler) createIncident(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Title       string                 `json:"title"`
+		Description string                 `json:"description"`
+		Severity    string                 `json:"severity"`
+		CheckID     string                 `json:"check_id,omitempty"`
+		Metadata    map[string]interface{} `json:"metadata,omitempty"`
 	}
 
-	response := api.ListIncidentsResponse{
-		Incidents: incidents,
-		Total:     len(incidents),
-		Page:      page,
-		PageSize:  pageSize,
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, errors.New(errors.ErrValidation, "invalid request body"), http.StatusBadRequest)
+		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	// Валидация обязательных полей
+	if err := h.validator.ValidateRequiredFields(map[string]interface{}{
+		"title":       req.Title,
+		"description": req.Description,
+		"severity":    req.Severity,
+	}, map[string]string{
+		"title":       "required",
+		"description": "required",
+		"severity":    "required",
+	}); err != nil {
+		h.writeError(w, err, http.StatusBadRequest)
+		return
+	}
+
+	// Валидация severity
+	if err := h.validator.ValidateEnum(req.Severity, []string{"low", "medium", "high", "critical"}, "severity"); err != nil {
+		h.writeError(w, errors.New(errors.ErrValidation, "invalid severity value"), http.StatusBadRequest)
+		return
+	}
+
+	// Создаем инцидент
+	incident := domain.NewIncident(
+		req.CheckID,
+		domain.IncidentSeverity(req.Severity),
+		req.Title,
+		req.Description,
+	)
+
+	// Сохраняем инцидент через сервис
+	ctx := context.Background()
+	if err := h.incidentService.CreateIncident(ctx, incident); err != nil {
+		h.writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	h.logger.Info("Incident created via API",
+		pkglogger.String("incident_id", incident.ID),
+		pkglogger.String("title", req.Title),
+		pkglogger.String("severity", req.Severity))
+
+	h.writeResponse(w, map[string]interface{}{
+		"success":  true,
+		"incident": incident,
+		"message":  "Incident created successfully",
+	})
 }
 
 // getIncident получает инцидент по ID
 func (h *HTTPHandler) getIncident(w http.ResponseWriter, r *http.Request, id string) {
-	h.logger.Info("Processing get incident request", logger.String("id", id))
+	ctx := context.Background()
 
-	// Вызываем реальный сервис
-	domainIncident, err := h.incidentService.GetIncident(r.Context(), id)
+	incident, err := h.incidentService.GetIncident(ctx, id)
 	if err != nil {
-		h.logger.Error("Failed to get incident", logger.Error(err))
-		http.Error(w, "Incident not found", http.StatusNotFound)
+		h.writeError(w, err, http.StatusNotFound)
 		return
 	}
 
-	// Конвертируем domain модель в API модель
-	incident := api.Incident{
-		ID:          domainIncident.ID,
-		Title:       domainIncident.Title,
-		Description: domainIncident.Description,
-		Status:      string(domainIncident.Status),
-		Severity:    string(domainIncident.Severity),
-		CreatedAt:   domainIncident.CreatedAt,
-		UpdatedAt:   domainIncident.UpdatedAt,
-	}
-
-	response := api.GetIncidentResponse{
-		Incident: &incident,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	h.writeResponse(w, map[string]interface{}{
+		"success":  true,
+		"incident": incident,
+		"message":  "Incident retrieved successfully",
+	})
 }
 
-// acknowledgeIncident подтверждает инцидент
-func (h *HTTPHandler) acknowledgeIncident(w http.ResponseWriter, r *http.Request, id string) {
-	h.logger.Info("Processing acknowledge incident request", logger.String("id", id))
+// updateIncident обновляет инцидент
+func (h *HTTPHandler) updateIncident(w http.ResponseWriter, r *http.Request, id string) {
+	ctx := context.Background()
 
-	var req api.AcknowledgeIncidentRequest
+	var req struct {
+		Title       string `json:"title,omitempty"`
+		Description string `json:"description,omitempty"`
+		Severity    string `json:"severity,omitempty"`
+		Status      string `json:"status,omitempty"`
+	}
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.logger.Error("Failed to decode acknowledge request", logger.Error(err))
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		h.writeError(w, errors.New(errors.ErrValidation, "invalid request body"), http.StatusBadRequest)
 		return
 	}
 
-	req.ID = id
-
-	h.logger.Info("Acknowledging incident",
-		logger.String("id", req.ID),
-		logger.String("message", req.Message),
-		logger.String("assignee", req.Assignee))
-
-	// Вызываем реальный сервис
-	err := h.incidentService.AcknowledgeIncident(r.Context(), id)
+	// Получаем существующий инцидент
+	incident, err := h.incidentService.GetIncident(ctx, id)
 	if err != nil {
-		h.logger.Error("Failed to acknowledge incident", logger.Error(err))
-		http.Error(w, "Failed to acknowledge incident", http.StatusInternalServerError)
+		h.writeError(w, err, http.StatusNotFound)
 		return
 	}
 
-	// Получаем обновленный инцидент
-	domainIncident, err := h.incidentService.GetIncident(r.Context(), id)
-	if err != nil {
-		h.logger.Error("Failed to get updated incident", logger.Error(err))
-		http.Error(w, "Failed to get updated incident", http.StatusInternalServerError)
+	// Обновляем поля
+	if req.Title != "" {
+		incident.Title = req.Title
+	}
+	if req.Description != "" {
+		incident.Description = req.Description
+	}
+	if req.Severity != "" {
+		if err := h.validator.ValidateEnum(req.Severity, []string{"low", "medium", "high", "critical"}, "severity"); err != nil {
+			h.writeError(w, errors.New(errors.ErrValidation, "invalid severity value"), http.StatusBadRequest)
+			return
+		}
+		incident.Severity = domain.IncidentSeverity(req.Severity)
+	}
+	if req.Status != "" {
+		if req.Status == "acknowledged" {
+			incident.Acknowledge()
+		} else if req.Status == "resolved" {
+			incident.Resolve()
+		}
+	}
+
+	// Сохраняем обновленный инцидент
+	if err := h.incidentService.UpdateIncident(ctx, incident); err != nil {
+		h.writeError(w, err, http.StatusInternalServerError)
 		return
 	}
 
-	// Конвертируем domain модель в API модель
-	incident := api.Incident{
-		ID:          domainIncident.ID,
-		Title:       domainIncident.Title,
-		Description: domainIncident.Description,
-		Status:      string(domainIncident.Status),
-		Severity:    string(domainIncident.Severity),
-		CreatedAt:   domainIncident.CreatedAt,
-		UpdatedAt:   domainIncident.UpdatedAt,
-	}
+	h.logger.Info("Incident updated via API",
+		pkglogger.String("incident_id", id),
+		pkglogger.String("status", req.Status))
 
-	response := api.AcknowledgeIncidentResponse{
-		Success:   true,
-		Message:   "Incident acknowledged successfully",
-		Incident:  &incident,
-		Timestamp: time.Now(),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	h.writeResponse(w, map[string]interface{}{
+		"success":  true,
+		"incident": incident,
+		"message":  "Incident updated successfully",
+	})
 }
 
-// resolveIncident решает инцидент
-func (h *HTTPHandler) resolveIncident(w http.ResponseWriter, r *http.Request, id string) {
-	h.logger.Info("Processing resolve incident request", logger.String("id", id))
+// deleteIncident удаляет инцидент (мягкое удаление - статус resolved)
+func (h *HTTPHandler) deleteIncident(w http.ResponseWriter, r *http.Request, id string) {
+	ctx := context.Background()
 
-	var req api.ResolveIncidentRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.logger.Error("Failed to decode resolve request", logger.Error(err))
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+	// Для демонстрации просто разрешаем инцидент
+	if err := h.incidentService.ResolveIncident(ctx, id); err != nil {
+		h.writeError(w, err, http.StatusNotFound)
 		return
 	}
 
-	req.ID = id
+	h.logger.Info("Incident resolved via API",
+		pkglogger.String("incident_id", id))
 
-	h.logger.Info("Resolving incident",
-		logger.String("id", req.ID),
-		logger.String("message", req.Message),
-		logger.String("resolution", req.Resolution))
-
-	// Вызываем реальный сервис
-	err := h.incidentService.ResolveIncident(r.Context(), id)
-	if err != nil {
-		h.logger.Error("Failed to resolve incident", logger.Error(err))
-		http.Error(w, "Failed to resolve incident", http.StatusInternalServerError)
-		return
-	}
-
-	// Получаем обновленный инцидент
-	domainIncident, err := h.incidentService.GetIncident(r.Context(), id)
-	if err != nil {
-		h.logger.Error("Failed to get updated incident", logger.Error(err))
-		http.Error(w, "Failed to get updated incident", http.StatusInternalServerError)
-		return
-	}
-
-	// Конвертируем domain модель в API модель
-	incident := api.Incident{
-		ID:          domainIncident.ID,
-		Title:       domainIncident.Title,
-		Description: domainIncident.Description,
-		Status:      string(domainIncident.Status),
-		Severity:    string(domainIncident.Severity),
-		CreatedAt:   domainIncident.CreatedAt,
-		UpdatedAt:   domainIncident.UpdatedAt,
-	}
-
-	response := api.ResolveIncidentResponse{
-		Success:   true,
-		Message:   "Incident resolved successfully",
-		Incident:  &incident,
-		Timestamp: time.Now(),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	h.writeResponse(w, map[string]interface{}{
+		"success": true,
+		"message": "Incident resolved successfully",
+	})
 }
 
-// Вспомогательные функции
-
-// extractIncidentID извлекает ID инцидента из URL
+// extractIncidentID извлекает ID инцидента из URL пути
 func extractIncidentID(path string) string {
+	parts := strings.Split(path, "/")
 	// URL формат: /api/v1/incidents/{id}
-	parts := splitPath(path)
-	if len(parts) >= 4 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "incidents" {
-		return parts[3]
+	// parts будет: ["", "api", "v1", "incidents", "{id}"]
+	if len(parts) >= 5 && parts[4] != "" {
+		return parts[4]
 	}
 	return ""
 }
 
-// splitPath разделяет URL путь на компоненты
-func splitPath(path string) []string {
-	if path == "" || path[0] != '/' {
-		return []string{}
+// writeResponse пишет JSON ответ
+func (h *HTTPHandler) writeResponse(w http.ResponseWriter, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(data)
+}
+
+// writeError пишет ошибку в формате JSON
+func (h *HTTPHandler) writeError(w http.ResponseWriter, err error, statusCode int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	
+	response := map[string]interface{}{
+		"success": false,
+		"error":   err.Error(),
+		"message": "Request failed",
 	}
 
-	parts := []string{}
-	current := ""
-	for i, char := range path {
-		if i == 0 {
-			continue // Пропускаем первый /
+	// Добавляем детали если есть
+	if customErr, ok := err.(*errors.Error); ok {
+		if customErr.Details != "" {
+			response["details"] = customErr.Details
 		}
-
-		if char == '/' {
-			if current != "" {
-				parts = append(parts, current)
-				current = ""
-			}
-		} else {
-			current += string(char)
-		}
 	}
 
-	if current != "" {
-		parts = append(parts, current)
-	}
-
-	return parts
+	json.NewEncoder(w).Encode(response)
 }

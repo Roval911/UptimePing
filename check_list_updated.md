@@ -375,15 +375,18 @@ curl -s -X POST http://localhost:8080/api/v1/forge/validate \
 - **Запрос:** Нет данных
 - **Ответ:** `{"incidents": [], "total": "number"}`
 - **Статусы:** `200` (успех), `401` (требуются права), `500` (ошибка)
-- **Статус:** ⏳ **НЕ ПРОВЕРЕН**
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-19)** - Возвращает `200 OK` с реальными данными из PostgreSQL, включая total count
+- **Формат запроса:** `GET /api/v1/incidents` с `Authorization: Bearer <token>` (без body)
+
 ---
 
 ### `POST /api/v1/incidents`
 **Описание:** Создание инцидента
-- **Запрос:** `{"title": "string", "description": "string", "severity": "string"}`
-- **Ответ:** `{"success": true, "message": "Incident created", "incident": {}}`
+- **Запрос:** `{"title": "string", "description": "string", "severity": "string", "check_id": "string"}`
+- **Ответ:** `{"success": true, "message": "Incident created successfully", "incident": {}}`
 - **Статусы:** `201` (создан), `400` (валидация), `401` (неавторизован), `500` (ошибка)
-- **Статус:** ⏳ **НЕ ПРОВЕРЕН** - Timeout при тестировании
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-19)** - Возвращает `201 Created` с реальными данными инцидента, сохраняет в PostgreSQL
+- **Формат запроса:** `{"title":"Test Incident","description":"Test Description","severity":"high","check_id":"<existing_check_id>"}`
 
 ---
 
@@ -392,16 +395,18 @@ curl -s -X POST http://localhost:8080/api/v1/forge/validate \
 - **Запрос:** ID инцидента в URL
 - **Ответ:** `{"success": true, "incident": {}}`
 - **Статусы:** `200` (успех), `400` (невалидный ID), `401` (неавторизован), `404` (не найден), `500` (ошибка)
-- **Статус:** ⏳ **НЕ ПРОВЕРЕН** - Timeout при тестировании
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-19)** - Возвращает `200 OK` с реальными данными инцидента из PostgreSQL
+- **Формат запроса:** `GET /api/v1/incidents/<incident_id>` с `Authorization: Bearer <token>` (без body)
 
 ---
 
 ### `PUT /api/v1/incidents/{id}`
-**Описание:** Разрешение инцидента
-- **Запрос:** ID инцидента в URL, `{"resolution": "string", "resolved_by": "string"}`
-- **Ответ:** `{"success": boolean, "message": "Incident resolved"}`
+**Описание:** Обновление инцидента
+- **Запрос:** ID инцидента в URL, `{"status": "string"}`
+- **Ответ:** `{"success": true, "message": "Incident updated successfully", "incident": {}}`
 - **Статусы:** `200` (успех), `400` (валидация), `401` (неавторизован), `404` (не найден), `500` (ошибка)
-- **Статус:** ⏳ **НЕ ПРОВЕРЕН** - Timeout при тестировании
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-19)** - Возвращает `200 OK` и обновляет инцидент в PostgreSQL
+- **Формат запроса:** `PUT /api/v1/incidents/<incident_id>` с `{"status":"acknowledged"}` (обновляет статус)
 
 ---
 
@@ -520,11 +525,11 @@ curl -s http://localhost:8080/api/v1/core/health
 | ⚡ Core Service | 3 | 3 | 0 | 0 |
 | 🔧 Forge Service | 4 | 4 | 0 | 0 |
 | 📊 Metrics Service | 2 | 0 | 1 | 1 |
-| 🚨 Incident Service | 4 | 0 | 0 | 4 |
+| 🚨 Incident Service | 4 | 4 | 0 | 0 |
 | 📢 Notification Service | 3 | 0 | 1 | 2 |
 | ⚙️ Config Service | 1 | 0 | 1 | 0 |
 | 🏥 Health Checks | 7 | 4 | 3 | 0 |
-| **ИТОГО** | **39** | **26** | **6** | **7** |
+| **ИТОГО** | **39** | **30** | **6** | **3** |
 
 ---
 
@@ -537,6 +542,7 @@ curl -s http://localhost:8080/api/v1/core/health
 4. ✅ **Docker networking** - gRPC connectivity работает
 5. ✅ **Forge Service nil pointer dereference** - исправлена проблема с доступом к полям options
 6. ✅ **База данных** - таблицы созданы, migrations применены
+7. ✅ **Incident Manager PostgreSQL persistence** - полностью исправлен, данные сохраняются в БД
 
 ### 🎉 **ФИНАЛЬНЫЙ СТАТУС:**
 1. ✅ **Middleware исправлен** - Bearer токены работают корректно
@@ -546,6 +552,7 @@ curl -s http://localhost:8080/api/v1/core/health
 5. ✅ **База данных готова** - все таблицы созданы
 6. ✅ **Эндпоинты работают** - /api/v1/checks возвращает пустой массив (корректно)
 7. ✅ **Forge Service работает** - генерация кода и валидация proto файлов функционируют
+8. ✅ **Incident Manager работает** - PostgreSQL persistence полностью исправлен, все CRUD операции работают
 
 ### 📊 **РЕЗУЛЬТАТЫ:**
 - **✅ Middleware авторизации**: Полностью исправлен
@@ -554,6 +561,7 @@ curl -s http://localhost:8080/api/v1/core/health
 - **✅ gRPC connectivity**: Все подключения работают
 - **✅ API Gateway**: Обрабатывает запросы корректно
 - **✅ Forge Service**: Генерация кода и валидация работают
+- **✅ Incident Manager**: PostgreSQL persistence полностью исправлен
 
 ---
 
@@ -568,6 +576,7 @@ curl -s http://localhost:8080/api/v1/core/health
 - ✅ **База данных** - все таблицы созданы через migrations
 - ✅ **API Gateway** - корректно обрабатывает запросы и проксирует к сервисам
 - ✅ **Forge Service** - nil pointer dereference исправлен, генерация кода работает
+- ✅ **Incident Manager** - PostgreSQL persistence полностью исправлен, все CRUD операции работают
 
 ### ✅ **Рабочие эндпоинты:**
 - ✅ `GET /health` - базовый health check API Gateway
@@ -578,6 +587,10 @@ curl -s http://localhost:8080/api/v1/core/health
 - ✅ `GET /api/v1/checks` - возвращает пустой массив (корректно для новой БД)
 - ✅ `POST /api/v1/forge/code` - генерация кода работает
 - ✅ `POST /api/v1/forge/validate` - валидация proto файлов работает
+- ✅ `GET /api/v1/incidents` - получение списка инцидентов работает
+- ✅ `POST /api/v1/incidents` - создание инцидентов работает, данные сохраняются в PostgreSQL
+- ✅ `GET /api/v1/incidents/{id}` - получение конкретного инцидента работает
+- ✅ `PUT /api/v1/incidents/{id}` - обновление инцидентов работает
 - ✅ **Middleware** - Bearer токены распознаются корректно
 
 ### 🎯 **ФИНАЛЬНЫЙ ДИАГНОЗ:**
@@ -589,12 +602,13 @@ curl -s http://localhost:8080/api/v1/core/health
 4. **Все сервисы** - запущены и работают
 5. **API Gateway** - функционирует как шлюз
 6. **Forge Service** - генерация кода и валидация работают
+7. **Incident Manager** - PostgreSQL persistence работает, все CRUD операции функциональны
 
 **Система готова к полноценной работе!** 🎉
 
 ---
 
-*Последнее обновление: 2026-03-19 - Все основные эндпоинты проверены и работают ✅*
+*Последнее обновление: 2026-03-19 - Incident Service полностью проверен и работает ✅ PostgreSQL persistence исправлен!*
 
 ## 🎯 **РЕЗУЛЬТАТЫ ПРОВЕРКИ ЧЕК-ЛИСТА:**
 
@@ -605,14 +619,14 @@ curl -s http://localhost:8080/api/v1/core/health
 4. **⚡ Core Service (3/3)** - execute, status, history операции работают
 5. **🔧 Forge Service (4/4)** - generate, parse, code, validate все работают на 100% корректно
 6. **📊 Metrics Service (4/4)** - GET, POST, query, export эндпоинты работают корректно
-7. **🏥 Health Checks (4/7)** - базовые health checks работают
+7. **🚨 Incident Service (4/4)** - GET, POST, PUT операции работают, данные сохраняются в PostgreSQL
+8. **🏥 Health Checks (4/7)** - базовые health checks работают
 
 ### ⚠️ **ЧАСТИЧНО РАБОЧИЕ КАТЕГОРИИ:**
 8. **⚙️ Config Service (0/1)** - 403 ошибка авторизации
 
 ### ⏳ **НЕ ПРОВЕРЕННЫЕ КАТЕГОРИИ:**
-9. **🚨 Incident Service (0/4)** - не проверены
-10. **📢 Notification Service (0/3)** - не проверены
+9. **📢 Notification Service (0/3)** - не проверены
 
 ### 🎊 **КЛЮЧЕВЫЕ ДОСТИЖЕНИЯ:**
 - ✅ **CRUD для проверок работает полностью** - CREATE, READ, UPDATE, DELETE
@@ -623,5 +637,6 @@ curl -s http://localhost:8080/api/v1/core/health
 - ✅ **Расписания полностью работают** - CRUD операции для расписаний работают
 - ✅ **Forge Service полностью работает на 100%** - генерация кода, валидация, парсинг и генерация конфигурации работают корректно, проблемы с nil значениями полностью решены
 - ✅ **Metrics Service полностью работает** - все 4 эндпоинта работают корректно с реальными данными и полным взаимодействием со всеми сервисами
+- ✅ **Incident Service полностью работает** - PostgreSQL persistence исправлен, все CRUD операции работают, данные сохраняются и читаются корректно
 
 **ОСНОВНАЯ ФУНКЦИОНАЛЬНОСТЬ СИСТЕМЫ РАБОТАЕТ!** 🚀

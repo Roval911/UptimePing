@@ -2,6 +2,8 @@ package domain
 
 import (
 	"time"
+	
+	"github.com/google/uuid"
 )
 
 // IncidentStatus представляет статус инцидента
@@ -56,6 +58,7 @@ func NewIncident(checkID string, severity IncidentSeverity, title, description s
 	now := time.Now()
 
 	return &Incident{
+		ID:          uuid.New().String(),
 		CheckID:     checkID,
 		Title:       title,
 		Description: description,

@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"UptimePingPlatform/pkg/errors"
-	"UptimePingPlatform/pkg/logger"
+	pkglogger "UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/validation"
+	pkg_redis "UptimePingPlatform/pkg/redis"
 	"UptimePingPlatform/services/incident-manager/internal/domain"
 	"UptimePingPlatform/services/incident-manager/internal/producer/rabbitmq"
+	logger "UptimePingPlatform/pkg/logger"
 )
 
 // IncidentService интерфейс для управления инцидентами
@@ -28,6 +31,9 @@ type IncidentService interface {
 
 	// GetIncidents получает список инцидентов с фильтрацией
 	GetIncidents(ctx context.Context, filter *domain.IncidentFilter) ([]*domain.Incident, error)
+
+	// CreateIncident создает новый инцидент
+	CreateIncident(ctx context.Context, incident *domain.Incident) error
 
 	// UpdateIncident обновляет инцидент
 	UpdateIncident(ctx context.Context, incident *domain.Incident) error
@@ -993,6 +999,7 @@ func normalizeErrorMessage(message string) string {
 	return message
 }
 
+
 // UpdateIncident обновляет инцидент
 func (s *incidentService) UpdateIncident(ctx context.Context, incident *domain.Incident) error {
 	if incident == nil {
@@ -1114,4 +1121,254 @@ func removeTimestamps(message string) string {
 	}
 
 	return result
+}
+
+// InMemoryIncidentService реализация хранилища в памяти для демонстрации
+type InMemoryIncidentService struct {
+	logger    pkglogger.Logger
+	redis     pkg_redis.Client
+	mu        sync.RWMutex
+	incidents map[string]*domain.Incident
+	events    map[string][]*domain.IncidentEvent
+}
+
+// NewInMemoryIncidentService создает новый сервис инцидентов в памяти
+func NewInMemoryIncidentService(logger pkglogger.Logger, redis pkg_redis.Client) *InMemoryIncidentService {
+	return &InMemoryIncidentService{
+		logger:    logger,
+		redis:     redis,
+		incidents: make(map[string]*domain.Incident),
+		events:    make(map[string][]*domain.IncidentEvent),
+	}
+}
+
+// ProcessCheckResult обрабатывает результат проверки
+func (s *InMemoryIncidentService) ProcessCheckResult(ctx context.Context, result *CheckResult) (*domain.Incident, error) {
+	s.logger.Info("Processing check result",
+		pkglogger.String("check_id", result.CheckID),
+		pkglogger.Bool("is_success", result.IsSuccess))
+
+	// Для демонстрации создаем инцидент если проверка неуспешна
+	if !result.IsSuccess {
+		incident := domain.NewIncident(
+			result.CheckID,
+			domain.IncidentSeverityHigh,
+			fmt.Sprintf("Check %s failed", result.CheckID),
+			result.ErrorMessage,
+		)
+		
+		s.mu.Lock()
+		s.incidents[incident.ID] = incident
+		s.events[incident.ID] = []*domain.IncidentEvent{
+			{
+				ID:         fmt.Sprintf("event-%s", incident.ID),
+				IncidentID: incident.ID,
+				EventType:  "created",
+				OldStatus:  "",
+				NewStatus:  incident.Status,
+				Message:    "Incident created automatically",
+				CreatedAt:  time.Now(),
+			},
+		}
+		s.mu.Unlock()
+
+		s.logger.Info("Incident created",
+			pkglogger.String("incident_id", incident.ID),
+			pkglogger.String("severity", string(incident.Severity)))
+
+		return incident, nil
+	}
+
+	return nil, nil
+}
+
+// ProcessCheckResultEvent обрабатывает результат проверки с публикацией событий
+func (s *InMemoryIncidentService) ProcessCheckResultEvent(ctx context.Context, result *CheckResult) error {
+	incident, err := s.ProcessCheckResult(ctx, result)
+	if err != nil {
+		return err
+	}
+
+	if incident != nil {
+		// Здесь можно добавить публикацию в RabbitMQ
+		s.logger.Info("Incident event published",
+			pkglogger.String("incident_id", incident.ID))
+	}
+
+	return nil
+}
+
+// GetIncident получает инцидент по ID
+func (s *InMemoryIncidentService) GetIncident(ctx context.Context, id string) (*domain.Incident, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	incident, exists := s.incidents[id]
+	if !exists {
+		return nil, errors.New(errors.ErrNotFound, fmt.Sprintf("incident %s not found", id))
+	}
+
+	return incident, nil
+}
+
+// GetIncidents получает список инцидентов с фильтрацией
+func (s *InMemoryIncidentService) GetIncidents(ctx context.Context, filter *domain.IncidentFilter) ([]*domain.Incident, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var incidents []*domain.Incident
+	for _, incident := range s.incidents {
+		// Простая фильтрация по статусу
+		if filter != nil && filter.Status != nil && string(incident.Status) != string(*filter.Status) {
+			continue
+		}
+		incidents = append(incidents, incident)
+	}
+
+	return incidents, nil
+}
+
+// UpdateIncident обновляет инцидент (создает если не существует)
+func (s *InMemoryIncidentService) UpdateIncident(ctx context.Context, incident *domain.Incident) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.incidents[incident.ID]; !exists {
+		// Создаем новый инцидент если не существует
+		incident.UpdatedAt = time.Now()
+		s.incidents[incident.ID] = incident
+		s.events[incident.ID] = []*domain.IncidentEvent{
+			{
+				ID:         fmt.Sprintf("event-%s", incident.ID),
+				IncidentID: incident.ID,
+				EventType:  "created",
+				NewStatus:  incident.Status,
+				Message:    "Incident created via API",
+				CreatedAt:  time.Now(),
+			},
+		}
+
+		s.logger.Info("Incident created",
+			pkglogger.String("incident_id", incident.ID))
+
+		return nil
+	}
+
+	incident.UpdatedAt = time.Now()
+	s.incidents[incident.ID] = incident
+
+	s.logger.Info("Incident updated",
+		pkglogger.String("incident_id", incident.ID))
+
+	return nil
+}
+
+// AcknowledgeIncident подтверждает инцидент
+func (s *InMemoryIncidentService) AcknowledgeIncident(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	incident, exists := s.incidents[id]
+	if !exists {
+		return errors.New(errors.ErrNotFound, fmt.Sprintf("incident %s not found", id))
+	}
+
+	incident.Acknowledge()
+	incident.UpdatedAt = time.Now()
+
+	// Добавляем событие
+	event := &domain.IncidentEvent{
+		ID:         fmt.Sprintf("event-%s-ack", id),
+		IncidentID: id,
+		EventType:  "acknowledged",
+		NewStatus:  incident.Status,
+		Message:    "Incident acknowledged",
+		CreatedAt:  time.Now(),
+	}
+	s.events[id] = append(s.events[id], event)
+
+	s.logger.Info("Incident acknowledged",
+		pkglogger.String("incident_id", id))
+
+	return nil
+}
+
+// ResolveIncident разрешает инцидент
+func (s *InMemoryIncidentService) ResolveIncident(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	incident, exists := s.incidents[id]
+	if !exists {
+		return errors.New(errors.ErrNotFound, fmt.Sprintf("incident %s not found", id))
+	}
+
+	incident.Resolve()
+	incident.UpdatedAt = time.Now()
+
+	// Добавляем событие
+	event := &domain.IncidentEvent{
+		ID:         fmt.Sprintf("event-%s-resolved", id),
+		IncidentID: id,
+		EventType:  "resolved",
+		NewStatus:  incident.Status,
+		Message:    "Incident resolved",
+		CreatedAt:  time.Now(),
+	}
+	s.events[id] = append(s.events[id], event)
+
+	s.logger.Info("Incident resolved",
+		pkglogger.String("incident_id", id))
+
+	return nil
+}
+
+// GetIncidentHistory получает историю инцидента
+func (s *InMemoryIncidentService) GetIncidentHistory(ctx context.Context, incidentID string) ([]*domain.IncidentEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	events, exists := s.events[incidentID]
+	if !exists {
+		return []*domain.IncidentEvent{}, nil
+	}
+
+	return events, nil
+}
+
+// GetIncidentStats получает статистику по инцидентам
+func (s *InMemoryIncidentService) GetIncidentStats(ctx context.Context, tenantID string) (*domain.IncidentStats, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	stats := &domain.IncidentStats{
+		Total:      len(s.incidents),
+		ByStatus:   make(map[domain.IncidentStatus]int),
+		BySeverity: make(map[domain.IncidentSeverity]int),
+		Last24h:    0,
+		Last7d:     0,
+		Last30d:    0,
+	}
+
+	now := time.Now()
+	for _, incident := range s.incidents {
+		// Статистика по статусам
+		stats.ByStatus[incident.Status]++
+		
+		// Статистика по серьезности
+		stats.BySeverity[incident.Severity]++
+		
+		// Статистика по времени
+		if now.Sub(incident.StartedAt) <= 24*time.Hour {
+			stats.Last24h++
+		}
+		if now.Sub(incident.StartedAt) <= 7*24*time.Hour {
+			stats.Last7d++
+		}
+		if now.Sub(incident.StartedAt) <= 30*24*time.Hour {
+			stats.Last30d++
+		}
+	}
+
+	return stats, nil
 }

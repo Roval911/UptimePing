@@ -15,6 +15,8 @@ import (
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
 	pkg_redis "UptimePingPlatform/pkg/redis"
+	"UptimePingPlatform/services/notification-service/internal/handler"
+	"UptimePingPlatform/services/notification-service/internal/service"
 )
 
 func main() {
@@ -105,21 +107,12 @@ func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthCh
 		w.Write([]byte(`{"status":"live","service":"notification-service"}`))
 	})
 
-	// Notification service endpoints
-	mux.HandleFunc("/api/v1/notifications/send", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message":"Notification Service - Send endpoint","status":"ok"}`))
-	})
-
-	mux.HandleFunc("/api/v1/notifications/channels", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message":"Notification Service - Channels endpoint","status":"ok"}`))
-	})
-
-	mux.HandleFunc("/api/v1/notifications/templates", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message":"Notification Service - Templates endpoint","status":"ok"}`))
-	})
+	// Initialize notification service
+	notificationService := service.NewNotificationService(appLogger)
+	httpHandler := handler.NewHTTPHandler(appLogger, notificationService)
+	
+	// Register notification routes
+	httpHandler.RegisterRoutes(mux)
 	
 	return mux
 }
