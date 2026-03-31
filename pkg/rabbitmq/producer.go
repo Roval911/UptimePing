@@ -3,6 +3,7 @@ package rabbitmq
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/rabbitmq/amqp091-go"
@@ -12,6 +13,7 @@ import (
 type Producer struct {
 	conn   *Connection
 	config *Config
+	mu     sync.Mutex // Защита от race conditions
 }
 
 // NewProducer создает нового продюсера
@@ -21,6 +23,9 @@ func NewProducer(conn *Connection, config *Config) *Producer {
 
 // Publish публикует сообщение в RabbitMQ с подтверждениями
 func (p *Producer) Publish(ctx context.Context, body []byte, options ...PublishOption) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	// Устанавливаем опции по умолчанию
 	opts := &PublishOptions{
 		Exchange:   p.config.Exchange,
@@ -46,7 +51,8 @@ func (p *Producer) Publish(ctx context.Context, body []byte, options ...PublishO
 
 	// Создаем канал для подтверждений
 	confirms := p.conn.Channel().NotifyPublish(make(chan amqp091.Confirmation, 1))
-	defer close(confirms)
+
+	// НЕ закрываем канал через defer - закрываем только после успешной обработки
 
 	// Публикуем сообщение
 	msg := amqp091.Publishing{
@@ -74,13 +80,22 @@ func (p *Producer) Publish(ctx context.Context, body []byte, options ...PublishO
 
 	// Ожидаем подтверждение
 	select {
-	case confirm := <-confirms:
+	case confirm, ok := <-confirms:
+		if !ok {
+			return fmt.Errorf("confirmation channel closed")
+		}
 		if !confirm.Ack {
 			return fmt.Errorf("message rejected by broker")
 		}
+		// Закрываем канал только после успешного подтверждения
+		close(confirms)
 	case <-ctx.Done():
+		// Закрываем канал при отмене контекста
+		close(confirms)
 		return fmt.Errorf("context cancelled while waiting for confirmation: %w", ctx.Err())
 	case <-time.After(10 * time.Second): // Таймаут ожидания подтверждения
+		// Закрываем канал при таймауте
+		close(confirms)
 		return fmt.Errorf("timeout waiting for confirmation")
 	}
 

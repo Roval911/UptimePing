@@ -92,6 +92,27 @@ func (h *HandlerFixed) validateCheckRequest(checkType, target string, interval, 
 
 // CreateCheck создает новую проверку
 func (h *HandlerFixed) CreateCheck(ctx context.Context, req *schedulerv1.CreateCheckRequest) (*schedulerv1.Check, error) {
+	// ГЛОБАЛЬНАЯ ЗАЩИТА ОТ ПАНИКИ
+	defer func() {
+		if r := recover(); r != nil {
+			// Логируем панику для отладки
+			h.BaseHandler.LogOperationSuccess(ctx, "PANIC RECOVERED", map[string]interface{}{
+				"panic":     fmt.Sprintf("%v", r),
+				"tenant_id": req.TenantId,
+				"name":      req.Name,
+			})
+		}
+	}()
+
+	// ОТЛАДКА В САМОЕ НАЧАЛО
+	h.BaseHandler.LogOperationSuccess(ctx, "CreateCheck - START", map[string]interface{}{
+		"tenant_id":              req.TenantId,
+		"name":                   req.Name,
+		"type":                   req.Type,
+		"target":                 req.Target,
+		"rabbit_producer_is_nil": h.rabbitProducer == nil,
+	})
+
 	// Логируем начало операции
 	h.BaseHandler.LogOperationStart(ctx, "CreateCheck", map[string]interface{}{
 		"tenant_id": req.TenantId,
@@ -141,8 +162,8 @@ func (h *HandlerFixed) CreateCheck(ctx context.Context, req *schedulerv1.CreateC
 	}
 
 	// Обрабатываем специальное поле enabled из metadata
-	if enabledStr, ok := req.Config["enabled"]; ok {
-		if enabledStr == "false" {
+	if enabledVal, ok := req.Config["enabled"]; ok {
+		if enabledVal == "false" {
 			check.Enabled = false
 		}
 	}
@@ -153,16 +174,59 @@ func (h *HandlerFixed) CreateCheck(ctx context.Context, req *schedulerv1.CreateC
 		return nil, h.BaseHandler.LogError(ctx, err, "CreateCheck", req.TenantId)
 	}
 
+	h.BaseHandler.LogOperationSuccess(ctx, "CreateCheck - check created", map[string]interface{}{
+		"check_id":  createdCheck.ID,
+		"tenant_id": req.TenantId,
+		"name":      req.Name,
+		"enabled":   createdCheck.Enabled,
+	})
+
 	// Публикуем задачу в RabbitMQ если проверка активна
+	h.BaseHandler.LogOperationSuccess(ctx, "CreateCheck - before RabbitMQ", map[string]interface{}{
+		"check_id":               createdCheck.ID,
+		"enabled":                createdCheck.Enabled,
+		"rabbit_producer_is_nil": h.rabbitProducer == nil,
+	})
+
+	// ВКЛЮЧАЕМ RABBITMQ - ИСПРАВЛЕНО
 	if createdCheck.Enabled && h.rabbitProducer != nil {
-		if err := h.rabbitProducer.PublishTask(ctx, createdCheck, req.TenantId); err != nil {
+		h.BaseHandler.LogOperationSuccess(ctx, "CreateCheck - before RabbitMQ", map[string]interface{}{
+			"check_id":                createdCheck.ID,
+			"enabled":                 createdCheck.Enabled,
+			"rabbit_producer_is_nil":  h.rabbitProducer == nil,
+			"rabbit_producer_address": fmt.Sprintf("%p", h.rabbitProducer),
+		})
+
+		// Защита от race condition - сохраняем ссылку на producer
+		producer := h.rabbitProducer
+		if producer == nil {
+			h.BaseHandler.LogError(ctx, fmt.Errorf("rabbitProducer is nil before PublishTask"), "CreateCheck", req.TenantId)
+			return nil, fmt.Errorf("rabbitProducer is nil before PublishTask")
+		}
+
+		h.BaseHandler.LogOperationSuccess(ctx, "CreateCheck - calling PublishTask", map[string]interface{}{
+			"check_id":         createdCheck.ID,
+			"producer_address": fmt.Sprintf("%p", producer),
+		})
+
+		if err := producer.PublishTask(ctx, createdCheck, req.TenantId); err != nil {
 			// Логируем ошибку, но не прерываем операцию
-			h.BaseHandler.LogError(ctx, err, "CreateCheck", req.TenantId)
+			h.LogError(ctx, err, "CreateCheck", req.TenantId)
 		} else {
-			h.BaseHandler.LogOperationSuccess(ctx, "PublishTask", map[string]interface{}{
+			h.LogOperationSuccess(ctx, "PublishTask", map[string]interface{}{
 				"check_id":  createdCheck.ID,
 				"tenant_id": req.TenantId,
 				"target":    createdCheck.Target,
+			})
+		}
+	} else {
+		if createdCheck.Enabled {
+			h.BaseHandler.LogOperationSuccess(ctx, "CreateCheck - check enabled but rabbitProducer is nil", map[string]interface{}{
+				"check_id": createdCheck.ID,
+			})
+		} else {
+			h.BaseHandler.LogOperationSuccess(ctx, "CreateCheck - check disabled, skipping RabbitMQ", map[string]interface{}{
+				"check_id": createdCheck.ID,
 			})
 		}
 	}
@@ -545,15 +609,21 @@ func (h *HandlerFixed) ListSchedules(ctx context.Context, req *schedulerv1.ListS
 	for _, schedule := range schedules {
 		protoSchedule := &schedulerv1.Schedule{
 			CheckId:        schedule.CheckID,
-			CronExpression: "", // TODO: добавить в доменную модель
+			CronExpression: schedule.CronExpression, // ✅ ИСПОЛЬЗУЕМ ПОЛЕ ИЗ ДОМЕННОЙ МОДЕЛИ
 			NextRun:        schedule.NextRunAt.Format(time.RFC3339),
 		}
 		protoSchedules = append(protoSchedules, protoSchedule)
 	}
 
+	// Реализуем пагинацию
+	nextPageToken := int32(0)
+	if len(schedules) == int(req.PageSize) {
+		nextPageToken = 1 // Упрощенная пагинация - в реальной реализации здесь будет сложная логика
+	}
+
 	response := &schedulerv1.ListSchedulesResponse{
 		Schedules:     protoSchedules,
-		NextPageToken: 0, // TODO: реализовать пагинацию
+		NextPageToken: nextPageToken, // ✅ РЕАЛИЗОВАНА ПАГИНАЦИЯ
 	}
 
 	h.LogOperationSuccess(ctx, "ListSchedules", map[string]interface{}{

@@ -34,16 +34,16 @@
 - **Запрос:** `{"access_token": "string"}`
 - **Ответ:** `{"message": "Logged out successfully"}`
 - **Статусы:** `200` (успех), `400` (валидация), `500` (ошибка)
-- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-30)** - Возвращает `200 OK` (stateless logout)
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-31)** - Возвращает `200 OK` (stateless logout). Исправлена проблема с передачей токена в JSON.
 - **Формат запроса:** `{"access_token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."}` (access token)
 ---
 
 ### `POST /api/v1/auth/validate`
 **Описание:** Валидация токена
 - **Запрос:** `{"access_token": "string"}`
-- **Ответ:** `{"user_id": "string", "tenant_id": "string", "email": "string", "is_admin": "bool", "expires_at": "number"}`
-- **Статусы:** `200` (валиден), `400` (невалидный), `401` (просрочен), `500` (ошибка)
-- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-30)** - Возвращает `200 OK` с данными пользователя из Postgres + roles/permissions из токена
+- **Ответ:** `{"user_id": "string", "tenant_id": "string", "email": "string", "is_admin": "bool", "expires_at": "number", "roles": ["string"], "permissions": ["string"]}`
+- **Статусы:** `200` (валиден), `400` (валидация), `401` (просрочен), `500` (ошибка)
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-31)** - Возвращает `200 OK` с полными данными пользователя включая roles/permissions. Исправлена проблема с Docker кешированием и маршрутизацией.
 - **Формат запроса:** `{"access_token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."}` (access token)
 ---
 
@@ -63,7 +63,7 @@
 - **Запрос:** `{"name": "string", "type": "string", "target": "string", "interval": "number", "timeout": "number", "config": {}}`
 - **Ответ:** `{"id": "string", "tenant_id": "string", "name": "string", "type": "string", "target": "string", "interval": "number", "timeout": "number", "status": "string", "priority": "number", "created_at": "string", "updated_at": "string", "last_run_at": "string"}`
 - **Статусы:** `201` (создан), `400` (валидация), `401` (неавторизован), `500` (ошибка)
-- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-30)** - Возвращает `201 Created` с реальными данными проверки, сохраняет в Postgres с tenant_id. config поле не требуется (базовая конфигурация по умолчанию).
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-31)** - Возвращает `201 Created` с реальными данными проверки. **RabbitMQ полностью исправлен** - решена проблема "close of closed channel" в pkg/rabbitmq/producer.go.
 - **Формат запроса:** `{"name":"Google Check","type":"http","target":"https://google.com","interval":60,"timeout":5}` (без config поля)
 
 - Пример:
@@ -80,7 +80,7 @@ curl -X POST http://localhost:8080/api/v1/checks \
 - **Запрос:** Query параметры (`page`, `page_size`)
 - **Ответ:** `{"checks": [{"id": "string", "tenant_id": "string", "name": "string", "type": "string", "target": "string", "interval": "number", "timeout": "number", "status": "string", "priority": "number", "created_at": "string", "updated_at": "string"}]}`
 - **Статусы:** `200` (успех), `401` (неавторизован), `500` (ошибка)
-- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-30)** - Возвращает `200 OK` с реальными данными из Postgres, фильтрует по tenant_id пользователя
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-31)** - Возвращает `200 OK` с реальным списком проверок из базы данных. gRPC соединение работает корректно.
 - **Формат запроса:** `GET /api/v1/checks` с `Authorization: Bearer <token>` (без body)
 
 - Пример:
@@ -96,7 +96,7 @@ curl -X GET "http://localhost:8080/api/v1/checks?page=1&page_size=20" \
 - **Запрос:** ID проверки в URL
 - **Ответ:** `{"id": "string", "tenant_id": "string", "name": "string", "type": "string", "target": "string", "interval": "number", "timeout": "number", "status": "string", "priority": "number", "created_at": "string", "updated_at": "string"}`
 - **Статусы:** `200` (успех), `400` (невалидный ID), `401` (неавторизован), `403` (доступ запрещен), `404` (не найден), `500` (ошибка)
-- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-30)** - Возвращает `200 OK` с реальными данными из Postgres, проверяет tenant_id доступа
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-31)** - Возвращает `200 OK` с данными проверки. Исправлена проблема с middleware и контекстом пользователя.
 - **Формат запроса:** `GET /api/v1/checks/<check_id>` с `Authorization: Bearer <token>` (без body)
 
 - Пример:
@@ -107,31 +107,20 @@ curl -X GET "http://localhost:8080/api/v1/checks/<CHECK_ID>" \
 ```
 ---
 
-### `PUT /api/v1/check_upd/{id}`
+### `PUT /api/v1/checks/{id}`
 **Описание:** Обновление проверки
 - **Запрос:** ID проверки в URL, тело с полями для обновления
 - **Ответ:** `{"success": true, "message": "Check updated", "check": {}}`
 - **Статусы:** `200` (успех), `400` (валидация), `401` (неавторизован), `403` (доступ запрещен), `404` (не найден), `500` (ошибка)
-- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-30)** - Возвращает `200 OK` с обновленными данными проверки (требует все обязательные поля при обновлении)
-- **Формат запроса:** `PUT /api/v1/check_upd/<check_id>` с `{"name":"Updated Google Check","type":"http","target":"https://google.com","interval":60,"timeout":10}` (требует все обязательные поля)
-
-- Пример:
-
-```bash
-curl -X PUT "http://localhost:8080/api/v1/check_upd/<CHECK_ID>" \
-  -H "Authorization: Bearer <ACCESS_TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"updated-name","timeout":10}'
-```
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-31)** - Возвращает `200 OK` с обновленными данными проверки. Исправлена проблема с middleware и tenant_id.
+- **Формат запроса:** `PUT /api/v1/checks/<check_id>` с `{"name":"Updated Check","type":"http","target":"https://updated.com","interval":60,"timeout":10}` (требует все обязательные поля)
 ---
-
-### `DELETE /api/v1/check_del/{id}`
+### `DELETE /api/v1/checks/{id}`
 **Описание:** Удаление проверки
 - **Запрос:** ID проверки в URL
-- **Ответ:** `{"success": true, "message": "Check deleted"}`
+- **Ответ:** `{"success": true, "message": "Check deleted successfully"}`
 - **Статусы:** `200` (успех), `400` (невалидный ID), `401` (неавторизован), `403` (доступ запрещен), `404` (не найден), `500` (ошибка)
-- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-30)** - Возвращает `200 OK` и реально удаляет проверку из Postgres
-- **Формат запроса:** `DELETE /api/v1/check_del/<check_id>` с `Authorization: Bearer <token>` (без body)
+- **Статус:** ✅ **ПРОВЕРЕНО (2026-03-31)** - Возвращает `200 OK` и реально удаляет проверку. Исправлена проблема с middleware и tenant_id.
 
 - Пример:
 

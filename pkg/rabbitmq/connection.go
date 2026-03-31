@@ -98,6 +98,26 @@ func Connect(ctx context.Context, config *Config) (*Connection, error) {
 			continue
 		}
 
+		// Создаем основной exchange
+		err = channel.ExchangeDeclare(
+			config.Exchange,
+			"topic",
+			true,
+			false,
+			false,
+			false,
+			nil,
+		)
+		if err != nil {
+			channel.Close()
+			conn.Close()
+			lastErr = fmt.Errorf("failed to declare exchange: %w", err)
+			if i < config.MaxRetries {
+				time.Sleep(config.ReconnectInterval)
+			}
+			continue
+		}
+
 		// Объявляем dead letter exchange, если задан
 		if config.DLX != "" {
 			err = channel.ExchangeDeclare(
@@ -171,82 +191,82 @@ func (c *Connection) Channel() *amqp091.Channel {
 // GetConfig возвращает конфигурацию из переменных окружения
 func GetConfig() *Config {
 	config := NewConfig()
-	
+
 	// Загружаем URL подключения
 	if url := os.Getenv("RABBITMQ_URL"); url != "" {
 		config.URL = url
 	}
-	
+
 	// Загружаем exchange
 	if exchange := os.Getenv("RABBITMQ_EXCHANGE"); exchange != "" {
 		config.Exchange = exchange
 	}
-	
+
 	// Загружаем routing key
 	if routingKey := os.Getenv("RABBITMQ_ROUTING_KEY"); routingKey != "" {
 		config.RoutingKey = routingKey
 	}
-	
+
 	// Загружаем queue
 	if queue := os.Getenv("RABBITMQ_QUEUE"); queue != "" {
 		config.Queue = queue
 	}
-	
+
 	// Загружаем DLX
 	if dlx := os.Getenv("RABBITMQ_DLX"); dlx != "" {
 		config.DLX = dlx
 	}
-	
+
 	// Загружаем DLQ
 	if dlq := os.Getenv("RABBITMQ_DLQ"); dlq != "" {
 		config.DLQ = dlq
 	}
-	
+
 	// Загружаем интервал переподключения
 	if reconnectInterval := os.Getenv("RABBITMQ_RECONNECT_INTERVAL"); reconnectInterval != "" {
 		if interval, err := time.ParseDuration(reconnectInterval); err == nil {
 			config.ReconnectInterval = interval
 		}
 	}
-	
+
 	// Загружаем максимальное количество попыток
 	if maxRetries := os.Getenv("RABBITMQ_MAX_RETRIES"); maxRetries != "" {
 		if retries, err := strconv.Atoi(maxRetries); err == nil {
 			config.MaxRetries = retries
 		}
 	}
-	
+
 	// Загружаем prefetch count
 	if prefetchCount := os.Getenv("RABBITMQ_PREFETCH_COUNT"); prefetchCount != "" {
 		if count, err := strconv.Atoi(prefetchCount); err == nil {
 			config.PrefetchCount = count
 		}
 	}
-	
+
 	// Загружаем prefetch size
 	if prefetchSize := os.Getenv("RABBITMQ_PREFETCH_SIZE"); prefetchSize != "" {
 		if size, err := strconv.Atoi(prefetchSize); err == nil {
 			config.PrefetchSize = size
 		}
 	}
-	
+
 	// Загружаем global prefetch
 	if global := os.Getenv("RABBITMQ_GLOBAL"); global != "" {
 		config.Global = global == "true" || global == "1"
 	}
-	
+
 	// Загружаем retry настройки
 	if maxRetryAttempts := os.Getenv("RABBITMQ_MAX_RETRY_ATTEMPTS"); maxRetryAttempts != "" {
 		if attempts, err := strconv.Atoi(maxRetryAttempts); err == nil {
 			config.MaxRetryAttempts = attempts
 		}
 	}
-	
+
 	if retryDelay := os.Getenv("RABBITMQ_RETRY_DELAY"); retryDelay != "" {
 		if delay, err := time.ParseDuration(retryDelay); err == nil {
 			config.RetryDelay = delay
 		}
 	}
-	
+
 	return config
 }

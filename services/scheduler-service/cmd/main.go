@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+
 	"UptimePingPlatform/pkg/config"
 	"UptimePingPlatform/pkg/health"
 	"UptimePingPlatform/pkg/logger"
@@ -241,13 +243,14 @@ type RabbitMQProducer struct {
 }
 
 type TaskMessage struct {
-	CheckID   string                 `json:"check_id"`
-	TenantID  string                 `json:"tenant_id"`
-	TaskType  string                 `json:"task_type"`
-	Target    string                 `json:"target"`
-	Timeout   int                    `json:"timeout"`
-	Config    map[string]interface{} `json:"config,omitempty"`
-	CreatedAt string                 `json:"created_at"`
+	CheckID     string                 `json:"check_id"`
+	ExecutionID string                 `json:"execution_id"`
+	Target      string                 `json:"target"`
+	Type        string                 `json:"type"`
+	Config      map[string]interface{} `json:"config"`
+	ScheduledAt string                 `json:"scheduled_at"`
+	TenantID    string                 `json:"tenant_id"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
 func NewRabbitMQProducer(cfg *config.Config, logger logger.Logger) (*RabbitMQProducer, error) {
@@ -280,20 +283,42 @@ func NewRabbitMQProducer(cfg *config.Config, logger logger.Logger) (*RabbitMQPro
 }
 
 func (p *RabbitMQProducer) PublishTask(ctx context.Context, check *domain.Check, tenantID string) error {
+	// Проверяем, что producer не nil
+	if p.producer == nil {
+		p.logger.Error("RabbitMQ producer is nil during PublishTask")
+		return fmt.Errorf("rabbitmq producer is nil")
+	}
+
+	p.logger.Info("DEBUG: About to publish to RabbitMQ",
+		logger.String("check_id", check.ID),
+		logger.String("tenant_id", tenantID),
+		logger.Bool("producer_is_nil", p.producer == nil))
+
 	taskMessage := TaskMessage{
-		CheckID:   check.ID,
-		TenantID:  tenantID,
-		TaskType:  string(check.Type),
-		Target:    check.Target,
-		Timeout:   check.Timeout,
-		Config:    check.Config,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		CheckID:     check.ID,
+		ExecutionID: fmt.Sprintf("exec-%d-%s", time.Now().Unix(), uuid.New().String()[:8]),
+		Target:      check.Target,
+		Type:        string(check.Type),
+		Config:      check.Config,
+		ScheduledAt: time.Now().UTC().Format(time.RFC3339),
+		TenantID:    tenantID,
+		Metadata: map[string]interface{}{
+			"timeout":  check.Timeout,
+			"interval": check.Interval,
+		},
 	}
 
 	payload, err := json.Marshal(taskMessage)
 	if err != nil {
 		return fmt.Errorf("failed to marshal task message: %w", err)
 	}
+
+	p.logger.Info("DEBUG: TaskMessage payload",
+		logger.String("payload", string(payload)))
+
+	p.logger.Info("DEBUG: Publishing to RabbitMQ",
+		logger.String("exchange", p.config.RabbitMQ.Exchange),
+		logger.String("routing_key", "check.task"))
 
 	err = p.producer.Publish(ctx, payload,
 		pkg_rabbitmq.WithExchange(p.config.RabbitMQ.Exchange),

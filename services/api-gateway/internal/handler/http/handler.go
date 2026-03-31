@@ -9,6 +9,7 @@ import (
 	schedulerv1 "UptimePingPlatform/proto/api/scheduler/v1"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -82,12 +83,6 @@ func NewHandler(authService client.AuthHTTPClientInterface, healthHandler Health
 
 // ServeHTTP реализует интерфейс http.Handler
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// DEBUG: логируем все запросы
-	h.logger.Info("DEBUG: Incoming request",
-		logger.String("method", r.Method),
-		logger.String("path", r.URL.Path),
-		logger.String("full_url", r.URL.String()))
-
 	h.mux.ServeHTTP(w, r)
 }
 
@@ -95,22 +90,34 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) setupRoutes() {
 	// Scheduler роуты для всех операций с проверками
 
-	// Простые маршруты для операций с проверками по ID
-	getCheckHandler := h.handleProtected(http.HandlerFunc(h.handleGetCheckByIDCompatible))
-	putCheckHandler := h.handleProtected(http.HandlerFunc(h.handleUpdateCheckByID))
-	deleteCheckHandler := h.handleProtected(http.HandlerFunc(h.handleDeleteCheckByIDCompatible))
+	// Единый обработчик для всех операций с проверками по ID
+	checkByIDHandler := h.handleProtected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			// GET /api/v1/checks/{id} - требует checks:read
+			middleware.PermissionMiddleware([]string{"checks:read"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				h.handleGetCheckByIDCompatible(w, r)
+			})).ServeHTTP(w, r)
+		case http.MethodPut:
+			// PUT /api/v1/checks/{id} - требует checks:write
+			middleware.PermissionMiddleware([]string{"checks:write"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				h.handleUpdateCheckByID(w, r)
+			})).ServeHTTP(w, r)
+		case http.MethodDelete:
+			// DELETE /api/v1/checks/{id} - требует checks:delete
+			middleware.PermissionMiddleware([]string{"checks:delete"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				h.handleDeleteCheckByIDCompatible(w, r)
+			})).ServeHTTP(w, r)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		}
+	}))
 
-	h.mux.Handle("/api/v1/checks/{id}", getCheckHandler).Methods(http.MethodGet)
-	h.mux.Handle("/api/v1/check_upd/{id}", putCheckHandler).Methods(http.MethodPut)
-	h.mux.Handle("/api/v1/check_del/{id}", deleteCheckHandler).Methods(http.MethodDelete)
+	h.mux.Handle("/api/v1/checks/{id}", checkByIDHandler).Methods(http.MethodGet, http.MethodPut, http.MethodDelete)
 
 	// Роут для /api/v1/checks - операции с проверками (должен идти после {id})
 	checksHandler := middleware.AuthMiddleware(h.authService, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h.logger.Info("DEBUG: Route /api/v1/checks matched!",
-			logger.String("method", r.Method),
-			logger.String("path", r.URL.Path),
-			logger.String("full_url", r.URL.String()))
-
 		// Получаем информацию о пользователе из контекста
 		userDataCtx, ok := r.Context().Value("user").(map[string]interface{})
 		if !ok {
@@ -126,13 +133,11 @@ func (h *Handler) setupRoutes() {
 
 		switch r.Method {
 		case http.MethodGet:
-			h.logger.Info("Handling GET /api/v1/checks (list) with checks:read permission")
 			// GET /api/v1/checks - требует checks:read
 			middleware.PermissionMiddleware([]string{"checks:read"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				h.handleSchedulerChecks(w, r)
 			})).ServeHTTP(w, r)
 		case http.MethodPost:
-			h.logger.Info("Handling POST /api/v1/checks (create) with checks:write permission")
 			// POST /api/v1/checks - требует checks:write
 			middleware.PermissionMiddleware([]string{"checks:write"}, h.logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				h.handleCreateCheck(w, r, tenantID)
@@ -174,32 +179,10 @@ func (h *Handler) setupRoutes() {
 	h.mux.HandleFunc("/ready", h.healthHandler.ReadyCheck)
 	h.mux.HandleFunc("/live", h.healthHandler.LiveCheck)
 
-	// TEST: простой тестовый роут
-	h.logger.Info("DEBUG: Registering /api/v1/test-debug route")
-	h.mux.HandleFunc("/api/v1/test-debug", func(w http.ResponseWriter, r *http.Request) {
-		h.logger.Info("DEBUG: Test route called!")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Test OK"))
-	})
-
-	// TEST: корневой тестовый роут
-	h.logger.Info("DEBUG: Registering /test-simple route")
-	h.mux.HandleFunc("/test-simple", func(w http.ResponseWriter, r *http.Request) {
-		h.logger.Info("DEBUG: Simple test route called!")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Simple Test OK"))
-	})
-
 	// Расписания проверок - используем mux.Handle для правильного паттерн-матчинга
 	schedulesHandler := h.handleProtected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h.logger.Info("DEBUG: Route /api/v1/schedules matched!",
-			logger.String("method", r.Method),
-			logger.String("path", r.URL.Path),
-			logger.String("full_url", r.URL.String()))
-
 		switch r.Method {
 		case http.MethodGet:
-			h.logger.Info("Handling GET /api/v1/schedules (list)")
 			h.handleScheduleProxy(w, r)
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -213,7 +196,7 @@ func (h *Handler) setupRoutes() {
 		vars := mux.Vars(r)
 		checkID := vars["id"]
 
-		h.logger.Info("DEBUG: Route /api/v1/schedules/{id} matched!",
+		h.logger.Info("Route /api/v1/schedules/{id} matched",
 			logger.String("method", r.Method),
 			logger.String("path", r.URL.Path),
 			logger.String("check_id", checkID))
@@ -269,6 +252,8 @@ func (h *Handler) setupRoutes() {
 	h.mux.HandleFunc("/api/v1/forge/parse", h.handleProtected(h.handleForgeProxy))
 	h.mux.HandleFunc("/api/v1/forge/code", h.handleProtected(h.handleForgeProxy))
 	h.mux.HandleFunc("/api/v1/forge/validate", h.handleProtected(h.handleForgeProxy))
+
+	h.logger.Info("DEBUG: setupRoutes completed successfully!")
 }
 
 // handleProtected оборачивает обработчик, требующий аутентификации
@@ -592,11 +577,92 @@ func (h *Handler) isAuthenticated(r *http.Request) bool {
 			return false
 		}
 
-		//TODO В реальной реализации здесь будет проверка подписи и экспирации
-		// Сейчас проверяем только базовый формат
+		// ✅ РЕАЛИЗОВАНО: Проверка подписи и экспирации JWT токена
+		// Декодируем payload для проверки экспирации
+		payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+		if err != nil {
+			h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+				"error": "invalid_jwt_payload_encoding",
+			})
+			return false
+		}
+
+		// Парсим payload
+		var claims map[string]interface{}
+		if err := json.Unmarshal(payload, &claims); err != nil {
+			h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+				"error": "invalid_jwt_payload_json",
+			})
+			return false
+		}
+
+		// Проверяем экспирацию (exp)
+		if exp, ok := claims["exp"].(float64); ok {
+			if time.Now().Unix() > int64(exp) {
+				h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+					"error": "jwt_expired",
+					"exp":   exp,
+				})
+				return false
+			}
+		} else {
+			h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+				"error": "jwt_missing_exp_claim",
+			})
+			return false
+		}
+
+		// Проверяем issued at (iat)
+		if iat, ok := claims["iat"].(float64); ok {
+			if time.Now().Unix() < int64(iat) {
+				h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+					"error": "jwt_issued_in_future",
+					"iat":   iat,
+				})
+				return false
+			}
+		}
+
+		// Проверяем not before (nbf) если есть
+		if nbf, ok := claims["nbf"].(float64); ok {
+			if time.Now().Unix() < int64(nbf) {
+				h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+					"error": "jwt_not_yet_valid",
+					"nbf":   nbf,
+				})
+				return false
+			}
+		}
+
+		// ✅ РЕАЛИЗОВАНО: Проверка подписи через Auth Service
+		// Вызываем Auth Service для валидации токена
+		userInfo, err := h.authService.ValidateToken(ctx, token)
+		if err != nil {
+			h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+				"error":   "auth_service_validation_failed",
+				"details": err.Error(),
+			})
+			return false
+		}
+
+		// Проверяем, что токен не истек (дополнительная проверка)
+		if userInfo.ExpiresAt > 0 && time.Now().Unix() > userInfo.ExpiresAt {
+			h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
+				"error":      "token_expired_in_auth_service",
+				"expires_at": userInfo.ExpiresAt,
+			})
+			return false
+		}
+
+		// ✅ УСПЕШНАЯ ВАЛИДАЦИЯ через Auth Service
 		h.baseHandler.LogOperationStart(ctx, "authentication", map[string]interface{}{
-			"success": true,
-			"method":  "jwt_bearer",
+			"success":      true,
+			"method":       "jwt_bearer",
+			"user_id":      userInfo.UserID,
+			"tenant_id":    userInfo.TenantID,
+			"email":        userInfo.Email,
+			"is_admin":     userInfo.IsAdmin,
+			"validated_by": "auth_service",
 		})
 		return true
 	}
@@ -1052,21 +1118,35 @@ func (h *Handler) handleListChecks(w http.ResponseWriter, r *http.Request, tenan
 
 // handleCreateCheck обрабатывает создание новой проверки
 func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request, tenantID string) {
+	h.logger.Info("DEBUG: handleCreateCheck called",
+		logger.String("tenant_id", tenantID),
+		logger.String("method", r.Method),
+		logger.String("path", r.URL.Path))
+
 	var createReq schedulerv1.CreateCheckRequest
 	if err := json.NewDecoder(r.Body).Decode(&createReq); err != nil {
+		h.logger.Info("DEBUG: JSON decode error", logger.Error(err))
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrValidation, "invalid request body"), http.StatusBadRequest)
 		return
 	}
 
+	h.logger.Info("DEBUG: Request decoded",
+		logger.String("name", createReq.Name),
+		logger.String("type", createReq.Type),
+		logger.String("target", createReq.Target))
+
 	// Устанавливаем tenant_id из контекста
 	createReq.TenantId = tenantID
 
+	h.logger.Info("DEBUG: Calling schedulerClient.CreateCheck")
 	check, err := h.schedulerClient.CreateCheck(r.Context(), &createReq)
 	if err != nil {
+		h.logger.Info("DEBUG: schedulerClient.CreateCheck error", logger.Error(err))
 		h.handleError(w, err)
 		return
 	}
 
+	h.logger.Info("DEBUG: Check created successfully")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1125,20 +1205,14 @@ func (h *Handler) handleGetCheck(w http.ResponseWriter, r *http.Request, tenantI
 	})
 }
 
-// handleUpdateCheckByID обрабатывает обновление проверки по ID для handleProtected
+// handleUpdateCheckByID обрабатывает обновление проверки по ID
 func (h *Handler) handleUpdateCheckByID(w http.ResponseWriter, r *http.Request) {
 	// Извлекаем checkID из URL
 	vars := mux.Vars(r)
 	checkID := vars["id"]
 
-	// Получаем информацию о пользователе из контекста
-	userDataCtx, ok := r.Context().Value("user").(map[string]interface{})
-	if !ok {
-		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "user info not found"), http.StatusUnauthorized)
-		return
-	}
-
-	tenantID, ok := userDataCtx["tenant_id"].(string)
+	// Получаем tenant_id из контекста (установленный handleProtected)
+	tenantID, ok := r.Context().Value("tenant_id").(string)
 	if !ok {
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant_id not found"), http.StatusUnauthorized)
 		return
@@ -1163,6 +1237,7 @@ func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request, tena
 	}
 
 	updateReq.CheckId = checkID
+	// updateReq.TenantId = tenantID // НЕ НУЖЕН - tenant_id берется из gRPC контекста
 
 	h.logger.Info("Updating check",
 		logger.String("check_id", checkID),
@@ -1175,7 +1250,15 @@ func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request, tena
 	}
 
 	// Проверяем, что проверка принадлежит тенанту
+	h.logger.Info("Checking tenant ownership",
+		logger.String("check_tenant_id", check.TenantId),
+		logger.String("user_tenant_id", tenantID),
+		logger.String("check_id", checkID))
+
 	if check.TenantId != tenantID {
+		h.logger.Error("Tenant ID mismatch",
+			logger.String("check_tenant_id", check.TenantId),
+			logger.String("user_tenant_id", tenantID))
 		h.writeError(w, pkgErrors.New(pkgErrors.ErrForbidden, "access denied"), http.StatusForbidden)
 		return
 	}
@@ -1241,8 +1324,57 @@ func (h *Handler) handleDeleteCheckByIDCompatible(w http.ResponseWriter, r *http
 	vars := mux.Vars(r)
 	checkID := vars["id"]
 
-	// Вызываем основную функцию
-	h.handleDeleteCheckByID(w, r, checkID)
+	// Получаем tenant_id из контекста (установленный handleProtected)
+	tenantID, ok := r.Context().Value("tenant_id").(string)
+	if !ok {
+		h.writeError(w, pkgErrors.New(pkgErrors.ErrUnauthorized, "tenant_id not found"), http.StatusUnauthorized)
+		return
+	}
+
+	// Вызываем основную функцию с tenantID
+	h.handleDeleteCheckByIDWithTenant(w, r, checkID, tenantID)
+}
+
+// handleDeleteCheckByIDWithTenant обрабатывает удаление проверки по ID с tenantID
+func (h *Handler) handleDeleteCheckByIDWithTenant(w http.ResponseWriter, r *http.Request, checkID, tenantID string) {
+	h.logger.Info("=== handleDeleteCheckByIDWithTenant called ===",
+		logger.String("check_id", checkID),
+		logger.String("tenant_id", tenantID),
+		logger.String("method", r.Method),
+		logger.String("path", r.URL.Path))
+
+	// Валидация UUID
+	if err := h.validator.ValidateUUID(checkID, "check_id"); err != nil {
+		h.writeError(w, pkgErrors.Wrap(err, pkgErrors.ErrValidation, "invalid check ID format"), http.StatusBadRequest)
+		return
+	}
+
+	// Создаем gRPC запрос
+	req := &schedulerv1.DeleteCheckRequest{
+		CheckId: checkID,
+		// TenantId: tenantID, // НЕ НУЖЕН - tenant_id берется из gRPC контекста
+	}
+
+	// Вызываем Scheduler Service
+	_, err := h.schedulerClient.DeleteCheck(r.Context(), req)
+	if err != nil {
+		h.logger.Error("Error deleting check",
+			logger.Error(err),
+			logger.String("check_id", checkID))
+		h.handleError(w, err)
+		return
+	}
+
+	h.logger.Info("Check deleted successfully",
+		logger.String("check_id", checkID))
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"message":  "Check deleted successfully",
+		"check_id": checkID,
+	})
 }
 
 // handleDeleteCheckByID обрабатывает удаление проверки по ID
@@ -2552,9 +2684,49 @@ func (h *Handler) handleSchedulerChecks(w http.ResponseWriter, r *http.Request) 
 		}
 
 		h.logger.Info("Updating check via Scheduler Service", logger.String("check_id", checkID))
+
+		// ✅ РЕАЛИЗОВАНО: Парсинг request body
+		var updateData map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&updateData); err != nil {
+			h.logger.Error("Error parsing request body", logger.Error(err))
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON in request body"})
+			return
+		}
+
+		// Создаем запрос с данными из body
 		req := &schedulerv1.UpdateCheckRequest{
 			CheckId: checkID,
-		} // TODO: parse request body
+		}
+
+		// Заполняем поля из request body если они есть
+		if name, ok := updateData["name"].(string); ok {
+			req.Name = name
+		}
+		if description, ok := updateData["description"].(string); ok {
+			req.Description = description
+		}
+		if checkType, ok := updateData["type"].(string); ok {
+			req.Type = checkType
+		}
+		if target, ok := updateData["target"].(string); ok {
+			req.Target = target
+		}
+		if interval, ok := updateData["interval"].(float64); ok {
+			req.Interval = int32(interval)
+		}
+		if timeout, ok := updateData["timeout"].(float64); ok {
+			req.Timeout = int32(timeout)
+		}
+		if status, ok := updateData["status"].(string); ok {
+			req.Status = status
+		}
+		if config, ok := updateData["config"].(map[string]interface{}); ok {
+			req.Config = make(map[string]string)
+			for k, v := range config {
+				req.Config[k] = fmt.Sprintf("%v", v)
+			}
+		}
 		response, err := h.schedulerClient.UpdateCheck(r.Context(), req)
 		if err != nil {
 			h.logger.Error("Error updating check", logger.Error(err))

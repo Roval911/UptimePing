@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/robfig/cron/v3"
 	"github.com/vektah/gqlparser/ast"
 	"github.com/vektah/gqlparser/parser"
 
@@ -337,15 +338,198 @@ func validateCronExpression(expr string) error {
 	if expr == "" {
 		return fmt.Errorf("cron expression cannot be empty")
 	}
-	// TODO: реализовать полную валидацию cron выражения
+
+	// Пытаемся распарсить cron выражение с помощью библиотеки
+	_, err := cron.ParseStandard(expr)
+	if err != nil {
+		return fmt.Errorf("invalid cron expression: %w", err)
+	}
+
+	// Дополнительная валидация формата
+	fields := strings.Fields(expr)
+	if len(fields) != 5 {
+		return fmt.Errorf("cron expression must have exactly 5 fields (minute hour day month weekday), got %d", len(fields))
+	}
+
+	// Валидация каждого поля
+	for i, field := range fields {
+		if err := validateCronField(field, i); err != nil {
+			return fmt.Errorf("invalid field %d (%s): %w", i, field, err)
+		}
+	}
+
+	return nil
+}
+
+// validateCronField валидирует отдельное поле cron выражения
+func validateCronField(field string, fieldIndex int) error {
+	// Специальная валидация для каждого поля
+	switch fieldIndex {
+	case 0: // minute (0-59)
+		return validateCronFieldRange(field, 0, 59, "minute")
+	case 1: // hour (0-23)
+		return validateCronFieldRange(field, 0, 23, "hour")
+	case 2: // day (1-31)
+		return validateCronFieldRange(field, 1, 31, "day")
+	case 3: // month (1-12)
+		return validateCronFieldRange(field, 1, 12, "month")
+	case 4: // weekday (0-7, где 0 и 7 = воскресенье)
+		return validateCronFieldRange(field, 0, 7, "weekday")
+	}
+
+	return fmt.Errorf("invalid field index: %d", fieldIndex)
+}
+
+// validateCronFieldRange валидирует поле с учетом диапазона значений
+func validateCronFieldRange(field string, min, max int, fieldName string) error {
+	// Проверка на wildcard
+	if field == "*" {
+		return nil
+	}
+
+	// Разделение на несколько выражений через запятую
+	parts := strings.Split(field, ",")
+	for _, part := range parts {
+		if err := validateCronPart(part, min, max, fieldName); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateCronPart валидирует часть cron выражения
+func validateCronPart(part string, min, max int, fieldName string) error {
+	// Проверка на диапазон (например, 1-5)
+	if strings.Contains(part, "-") {
+		return validateCronRange(part, min, max, fieldName)
+	}
+
+	// Проверка на шаг (например, */5 или 1-10/2)
+	if strings.Contains(part, "/") {
+		return validateCronStep(part, min, max, fieldName)
+	}
+
+	// Проверка на простое число
+	if part == "*" {
+		return nil
+	}
+
+	// Валидация числового значения
+	num, err := strconv.Atoi(part)
+	if err != nil {
+		return fmt.Errorf("invalid %s value '%s': must be a number", fieldName, part)
+	}
+
+	if num < min || num > max {
+		return fmt.Errorf("invalid %s value '%d': must be between %d and %d", fieldName, num, min, max)
+	}
+
+	return nil
+}
+
+// validateCronRange валидирует диапазон в cron выражении
+func validateCronRange(part string, min, max int, fieldName string) error {
+	rangeParts := strings.Split(part, "/")
+	if len(rangeParts) > 2 {
+		return fmt.Errorf("invalid %s range format '%s': too many '/'", fieldName, part)
+	}
+
+	// Проверка диапазона (например, 1-5)
+	rangeStr := rangeParts[0]
+	if !strings.Contains(rangeStr, "-") {
+		return fmt.Errorf("invalid %s range format '%s': expected 'start-end'", fieldName, part)
+	}
+
+	startEnd := strings.Split(rangeStr, "-")
+	if len(startEnd) != 2 {
+		return fmt.Errorf("invalid %s range format '%s': expected 'start-end'", fieldName, part)
+	}
+
+	start, err := strconv.Atoi(strings.TrimSpace(startEnd[0]))
+	if err != nil {
+		return fmt.Errorf("invalid %s range start '%s': must be a number", fieldName, startEnd[0])
+	}
+
+	end, err := strconv.Atoi(strings.TrimSpace(startEnd[1]))
+	if err != nil {
+		return fmt.Errorf("invalid %s range end '%s': must be a number", fieldName, startEnd[1])
+	}
+
+	if start < min || start > max {
+		return fmt.Errorf("invalid %s range start '%d': must be between %d and %d", fieldName, start, min, max)
+	}
+
+	if end < min || end > max {
+		return fmt.Errorf("invalid %s range end '%d': must be between %d and %d", fieldName, end, min, max)
+	}
+
+	if start > end {
+		return fmt.Errorf("invalid %s range: start (%d) must be less than or equal to end (%d)", fieldName, start, end)
+	}
+
+	// Если есть шаг, валидируем его
+	if len(rangeParts) == 2 {
+		step, err := strconv.Atoi(strings.TrimSpace(rangeParts[1]))
+		if err != nil {
+			return fmt.Errorf("invalid %s step '%s': must be a number", fieldName, rangeParts[1])
+		}
+		if step <= 0 {
+			return fmt.Errorf("invalid %s step '%d': must be positive", fieldName, step)
+		}
+	}
+
+	return nil
+}
+
+// validateCronStep валидирует шаг в cron выражении
+func validateCronStep(part string, min, max int, fieldName string) error {
+	stepParts := strings.Split(part, "/")
+	if len(stepParts) != 2 {
+		return fmt.Errorf("invalid %s step format '%s': expected 'base/step'", fieldName, part)
+	}
+
+	base := stepParts[0]
+	stepStr := stepParts[1]
+
+	// Валидация шага
+	step, err := strconv.Atoi(strings.TrimSpace(stepStr))
+	if err != nil {
+		return fmt.Errorf("invalid %s step '%s': must be a number", fieldName, stepStr)
+	}
+	if step <= 0 {
+		return fmt.Errorf("invalid %s step '%d': must be positive", fieldName, step)
+	}
+
+	// Валидация базовой части
+	if base != "*" {
+		return validateCronPart(base, min, max, fieldName)
+	}
+
 	return nil
 }
 
 // calculateNextRun рассчитывает следующее время выполнения
 func calculateNextRun(cronExpression string) (time.Time, error) {
-	// TODO: реализовать парсинг cron выражения
-	// Пока используем простую логику - через 5 минут
-	return time.Now().Add(5 * time.Minute), nil
+	// Создаем парсер cron с использованием UTC времени
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+
+	// Парсим cron выражение
+	schedule, err := parser.Parse(cronExpression)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to parse cron expression '%s': %w", cronExpression, err)
+	}
+
+	// Рассчитываем следующее время выполнения от текущего момента
+	nextRun := schedule.Next(time.Now())
+
+	// Добавляем небольшую проверку на случай, если следующее выполнение слишком далеко в будущем
+	maxFuture := time.Now().Add(365 * 24 * time.Hour) // максимум 1 год вперед
+	if nextRun.After(maxFuture) {
+		return time.Time{}, fmt.Errorf("next run time is too far in the future: %s", nextRun.Format(time.RFC3339))
+	}
+
+	return nextRun, nil
 }
 
 // GetActiveChecks возвращает список активных проверок

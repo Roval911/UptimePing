@@ -83,7 +83,8 @@ func AuthMiddleware(authClient client.AuthHTTPClientInterface, log logger.Logger
 
 // isBearerToken проверяет, является ли заголовок Bearer токеном
 func isBearerToken(authHeader string) bool {
-	return len(authHeader) > 7 && authHeader[:7] == "Bearer "
+	return (len(authHeader) > 7 && authHeader[:7] == "Bearer ") ||
+		(len(authHeader) > 6 && authHeader[:6] == "Bearer")
 }
 
 // isAPIKey проверяет, является ли заголовок APIKey
@@ -94,7 +95,14 @@ func isAPIKey(authHeader string) bool {
 // handleBearerAuth обрабатывает аутентификацию через Bearer токен
 func handleBearerAuth(r *http.Request, authHeader string, authClient client.AuthHTTPClientInterface, log logger.Logger) error {
 	// Извлечение токена
-	token := authHeader[7:] // Убираем "Bearer "
+	var token string
+	if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+		token = authHeader[7:] // Убираем "Bearer "
+	} else if len(authHeader) > 6 && authHeader[:6] == "Bearer" {
+		token = authHeader[6:] // Убираем "Bearer"
+	} else {
+		return fmt.Errorf("invalid bearer token format")
+	}
 
 	// Для CLI mock токенов используем простую валидацию
 	if strings.HasPrefix(token, "mock-access-token-") {

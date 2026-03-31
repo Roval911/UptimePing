@@ -427,6 +427,26 @@ services:
       timeout: 5s
       retries: 3
 
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: uptimeping-frontend
+    ports:
+      - "3000:80"
+    networks:
+      - uptimeping-network
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   # CLI Service (optional, for manual commands)
   cli-service:
     build:

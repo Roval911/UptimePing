@@ -21,6 +21,7 @@ import (
 	forgev1 "UptimePingPlatform/proto/api/forge/v1"
 	grpcHandler "UptimePingPlatform/services/forge-service/internal/handler/grpc"
 	"UptimePingPlatform/services/forge-service/internal/service"
+	"UptimePingPlatform/services/forge-service/internal/validation"
 	"google.golang.org/grpc"
 )
 
@@ -90,7 +91,10 @@ func main() {
 	// Initialize forge service components (parser, code generator, validator)
 	protoParser := service.NewProtoParser(cfg.Forge.ProtoDir)
 	// codeGenerator/validator can be nil for now
-	forgeSvc := service.NewForgeService(appLogger, protoParser, nil, nil)
+	var codeGenerator *service.CodeGenerator
+	var validator *validation.ForgeValidator
+
+	forgeSvc := service.NewForgeService(appLogger, protoParser, codeGenerator, validator, redisClient.Client, cfg.Forge.ProtoDir)
 	grpcHandler := grpcHandler.NewForgeHandler(forgeSvc, appLogger)
 
 	grpcServer := grpc.NewServer()

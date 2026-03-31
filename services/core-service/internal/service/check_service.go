@@ -47,7 +47,7 @@ type TaskMessage struct {
 	Target      string                 `json:"target"`
 	Type        string                 `json:"type"`
 	Config      map[string]interface{} `json:"config"`
-	ScheduledAt time.Time              `json:"scheduled_at"`
+	ScheduledAt string                 `json:"scheduled_at"`
 	TenantID    string                 `json:"tenant_id"`
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
@@ -248,6 +248,9 @@ func (cs *CheckService) ProcessTask(ctx context.Context, message []byte) error {
 
 // deserializeMessage десериализует сообщение из RabbitMQ
 func (cs *CheckService) deserializeMessage(message []byte) (*TaskMessage, error) {
+	cs.logger.Info("DEBUG: Raw message received",
+		logger.String("message", string(message)))
+
 	var taskMessage TaskMessage
 	if err := json.Unmarshal(message, &taskMessage); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal task message: %w", err)
@@ -272,12 +275,22 @@ func (cs *CheckService) deserializeMessage(message []byte) (*TaskMessage, error)
 
 // createTask создает доменную модель Task из TaskMessage
 func (cs *CheckService) createTask(message *TaskMessage) *domain.Task {
+	// Парсим строку времени в time.Time
+	scheduledTime, err := time.Parse(time.RFC3339, message.ScheduledAt)
+	if err != nil {
+		cs.logger.Error("Failed to parse scheduled_at",
+			logger.String("scheduled_at", message.ScheduledAt),
+			logger.Error(err))
+		// Используем текущее время как запасной вариант
+		scheduledTime = time.Now()
+	}
+
 	return domain.NewTask(
 		message.CheckID,
 		message.Target,
 		message.Type,
 		message.ExecutionID,
-		message.ScheduledAt,
+		scheduledTime,
 		message.Config,
 	)
 }

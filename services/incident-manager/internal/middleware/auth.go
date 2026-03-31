@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"UptimePingPlatform/pkg/errors"
 	pkglogger "UptimePingPlatform/pkg/logger"
@@ -70,21 +71,68 @@ func JWTAuthMiddleware(logger pkglogger.Logger, authServiceURL string) func(http
 
 // validateToken валидирует JWT токен через Auth Service
 func validateToken(token, authServiceURL string, logger pkglogger.Logger) (*JWTClaims, error) {
-	// TODO: Реализовать валидацию через Auth Service
-	// Сейчас для демонстрации парсим JWT напрямую (в production использовать Auth Service)
-
-	// Временная реализация - парсим JWT без верификации подписи
-	// В реальном проекте здесь должен быть запрос к Auth Service
-	claims := &JWTClaims{
-		UserID:   "8df32706-16a2-40a6-b829-75ee0a890840", // Временный hardcoded user
-		TenantID: "bb9dfee7-60f2-4566-9a6f-77f988195ea6", // Временный hardcoded tenant
-		IsAdmin:  true,
-		Permissions: []string{
-			"incidents:read", "incidents:write", "incidents:resolve",
-		},
+	// Создаем HTTP клиент для запроса к Auth Service
+	client := &http.Client{
+		Timeout: 5 * time.Second,
 	}
 
-	return claims, nil
+	// Формируем запрос к Auth Service
+	req, err := http.NewRequest("POST", authServiceURL+"/api/v1/auth/validate", nil)
+	if err != nil {
+		logger.Error("Failed to create request to Auth Service",
+			pkglogger.Error(err),
+			pkglogger.String("auth_service_url", authServiceURL))
+		return nil, errors.New(errors.ErrInternal, "failed to validate token")
+	}
+
+	// Добавляем токен в заголовок
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	// Отправляем запрос
+	resp, err := client.Do(req)
+	if err != nil {
+		logger.Error("Failed to call Auth Service",
+			pkglogger.Error(err),
+			pkglogger.String("auth_service_url", authServiceURL))
+		return nil, errors.New(errors.ErrInternal, "failed to validate token")
+	}
+	defer resp.Body.Close()
+
+	// Проверяем статус ответа
+	if resp.StatusCode != http.StatusOK {
+		logger.Error("Auth Service returned error",
+			pkglogger.Int("status_code", resp.StatusCode),
+			pkglogger.String("auth_service_url", authServiceURL))
+		return nil, errors.New(errors.ErrUnauthorized, "invalid token")
+	}
+
+	// Парсим ответ
+	var validateResp struct {
+		Valid       bool     `json:"valid"`
+		UserID      string   `json:"user_id,omitempty"`
+		TenantID    string   `json:"tenant_id,omitempty"`
+		IsAdmin     bool     `json:"is_admin,omitempty"`
+		Permissions []string `json:"permissions,omitempty"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&validateResp); err != nil {
+		logger.Error("Failed to decode Auth Service response",
+			pkglogger.Error(err))
+		return nil, errors.New(errors.ErrInternal, "failed to validate token")
+	}
+
+	if !validateResp.Valid {
+		return nil, errors.New(errors.ErrUnauthorized, "invalid token")
+	}
+
+	// Возвращаем claims
+	return &JWTClaims{
+		UserID:      validateResp.UserID,
+		TenantID:    validateResp.TenantID,
+		IsAdmin:     validateResp.IsAdmin,
+		Permissions: validateResp.Permissions,
+	}, nil
 }
 
 // GetUserIDFromContext извлекает user_id из контекста
