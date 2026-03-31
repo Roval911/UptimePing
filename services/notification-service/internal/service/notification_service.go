@@ -12,26 +12,29 @@ import (
 type NotificationService interface {
 	// SendNotification отправляет уведомление через указанные каналы
 	SendNotification(ctx context.Context, notification *Notification) ([]*SendResult, error)
-	
+
 	// RegisterChannel регистрирует новый канал уведомлений
 	RegisterChannel(ctx context.Context, channel *Channel) (*Channel, error)
-	
+
+	// UpdateChannel обновляет существующий канал уведомлений
+	UpdateChannel(ctx context.Context, channel *Channel) error
+
 	// UnregisterChannel удаляет канал уведомлений
 	UnregisterChannel(ctx context.Context, channelID string) error
-	
+
 	// ListChannels возвращает список каналов уведомлений
 	ListChannels(ctx context.Context, tenantID string, channelType ChannelType) ([]*Channel, error)
 }
 
 // Notification представляет уведомление
 type Notification struct {
-	TenantID   string            `json:"tenant_id"`
-	IncidentID string            `json:"incident_id"`
+	TenantID   string               `json:"tenant_id"`
+	IncidentID string               `json:"incident_id"`
 	Severity   NotificationSeverity `json:"severity"`
-	Title      string            `json:"title"`
-	Message    string            `json:"message"`
-	ChannelIDs []string          `json:"channel_ids"`
-	Metadata   map[string]string `json:"metadata,omitempty"`
+	Title      string               `json:"title"`
+	Message    string               `json:"message"`
+	ChannelIDs []string             `json:"channel_ids"`
+	Metadata   map[string]string    `json:"metadata,omitempty"`
 }
 
 // NotificationSeverity определяет серьезность уведомления
@@ -177,10 +180,10 @@ func (s *notificationService) ListChannels(ctx context.Context, tenantID string,
 	// Для примера вернем несколько тестовых каналов
 	channels := []*Channel{
 		{
-			ID:        "channel_1",
-			TenantID:  tenantID,
-			Type:      ChannelTypeEmail,
-			Name:      "Email Notifications",
+			ID:       "channel_1",
+			TenantID: tenantID,
+			Type:     ChannelTypeEmail,
+			Name:     "Email Notifications",
 			Config: map[string]string{
 				"smtp_host": "smtp.example.com",
 				"smtp_port": "587",
@@ -190,10 +193,10 @@ func (s *notificationService) ListChannels(ctx context.Context, tenantID string,
 			UpdatedAt: time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
 		},
 		{
-			ID:        "channel_2",
-			TenantID:  tenantID,
-			Type:      ChannelTypeSlack,
-			Name:      "Slack Webhook",
+			ID:       "channel_2",
+			TenantID: tenantID,
+			Type:     ChannelTypeSlack,
+			Name:     "Slack Webhook",
 			Config: map[string]string{
 				"webhook_url": "https://hooks.slack.com/services/...",
 			},
@@ -233,6 +236,22 @@ func (s *notificationService) sendToChannel(ctx context.Context, channelID strin
 		logger.String("channel_id", channelID),
 		logger.String("title", notification.Title),
 		logger.String("message", notification.Message))
+
+	return nil
+}
+
+// UpdateChannel обновляет существующий канал уведомлений
+func (s *notificationService) UpdateChannel(ctx context.Context, channel *Channel) error {
+	s.logger.Info("Updating channel",
+		logger.String("channel_id", channel.ID),
+		logger.String("tenant_id", channel.TenantID),
+		logger.String("name", channel.Name))
+
+	// Здесь будет реальная логика обновления канала в базе данных
+	// Для примера просто логируем успешное обновление
+	s.logger.Info("Channel updated successfully",
+		logger.String("channel_id", channel.ID),
+		logger.String("name", channel.Name))
 
 	return nil
 }

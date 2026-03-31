@@ -1,0 +1,469 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strconv"
+	"time"
+
+	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/services/notification-service/internal/api"
+	"UptimePingPlatform/services/notification-service/internal/service"
+)
+
+// HTTPHandler обрабатывает HTTP запросы для Notification Service
+type HTTPHandler struct {
+	logger             logger.Logger
+	notificationService service.NotificationService
+}
+
+// NewHTTPHandler создает новый HTTP обработчик
+func NewHTTPHandler(logger logger.Logger, notificationService service.NotificationService) *HTTPHandler {
+	return &HTTPHandler{
+		logger:             logger,
+		notificationService: notificationService,
+	}
+}
+
+// RegisterRoutes регистрирует HTTP маршруты
+func (h *HTTPHandler) RegisterRoutes(mux *http.ServeMux) {
+	// API маршруты для отправки уведомлений
+	mux.HandleFunc("/api/v1/notification/send", h.handleSendNotification)
+	
+	// Создаем и регистрируем ChannelHandler для управления каналами
+	channelHandler := NewChannelHandler(h.notificationService, h.logger)
+	channelHandler.RegisterRoutes(mux)
+}
+
+// handleChannels обрабатывает запросы к /api/v1/notification/channels
+func (h *HTTPHandler) handleChannels(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		h.listChannels(w, r)
+	case http.MethodPost:
+		h.createChannel(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleChannelByID обрабатывает запросы к /api/v1/notification/channels/{id}
+func (h *HTTPHandler) handleChannelByID(w http.ResponseWriter, r *http.Request) {
+	// Извлекаем ID из URL
+	id := extractChannelID(r.URL.Path)
+	if id == "" {
+		http.Error(w, "Invalid channel ID", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodDelete:
+		h.deleteChannel(w, r, id)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleSendNotification обрабатывает запросы к /api/v1/notification/send
+func (h *HTTPHandler) handleSendNotification(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	h.sendNotification(w, r)
+}
+
+// createChannel создает новый канал уведомлений
+func (h *HTTPHandler) createChannel(w http.ResponseWriter, r *http.Request) {
+	h.logger.Info("Processing create channel request")
+
+	var req api.CreateChannelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.Error("Failed to decode create channel request", logger.Error(err))
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	h.logger.Info("Creating notification channel",
+		logger.String("name", req.Name),
+		logger.String("type", req.Type))
+
+	// Конвертируем API модель в domain модель
+	channelType := service.ChannelTypeEmail
+	switch req.Type {
+	case "slack":
+		channelType = service.ChannelTypeSlack
+	case "telegram":
+		channelType = service.ChannelTypeTelegram
+	case "webhook":
+		channelType = service.ChannelTypeUnspecified // Используем Unspecified
+	case "sms":
+		channelType = service.ChannelTypeUnspecified // Используем Unspecified
+	}
+
+	// Конвертируем map[string]interface{} в map[string]string
+	config := make(map[string]string)
+	for k, v := range req.Config {
+		if str, ok := v.(string); ok {
+			config[k] = str
+		} else {
+			config[k] = fmt.Sprintf("%v", v)
+		}
+	}
+
+	domainChannel := &service.Channel{
+		TenantID:    getTenantIDFromContext(r.Context()), // Получаем tenant ID из контекста
+		Name:        req.Name,
+		Type:        channelType,
+		Config:      config,
+		IsActive:    true, // По умолчанию активный
+	}
+
+	// Вызываем реальный сервис
+	createdChannel, err := h.notificationService.RegisterChannel(r.Context(), domainChannel)
+	if err != nil {
+		h.logger.Error("Failed to create channel", logger.Error(err))
+		http.Error(w, "Failed to create channel", http.StatusInternalServerError)
+		return
+	}
+
+	// Конвертируем domain модель в API ответ
+	apiResponse := api.ChannelAPIResponse{
+		ID:        createdChannel.ID,
+		TenantID:  createdChannel.TenantID,
+		Name:      createdChannel.Name,
+		Type:      string(createdChannel.Type),
+		Config:    convertStringMapToInterface(createdChannel.Config),
+		IsActive:  createdChannel.IsActive,
+		CreatedAt: parseTime(createdChannel.CreatedAt),
+		UpdatedAt: parseTime(createdChannel.UpdatedAt),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(apiResponse)
+}
+
+// deleteChannel удаляет канал уведомлений
+func (h *HTTPHandler) deleteChannel(w http.ResponseWriter, r *http.Request, id string) {
+	h.logger.Info("Processing delete channel request", logger.String("id", id))
+
+	// Вызываем реальный сервис
+	err := h.notificationService.UnregisterChannel(r.Context(), id)
+	if err != nil {
+		h.logger.Error("Failed to delete channel", logger.Error(err))
+		http.Error(w, "Failed to delete channel", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Channel deleted successfully",
+	})
+}
+
+// listChannels получает список каналов уведомлений
+func (h *HTTPHandler) listChannels(w http.ResponseWriter, r *http.Request) {
+	h.logger.Info("Processing list channels request")
+
+	// Получаем query параметры
+	query := r.URL.Query()
+	channelType := query.Get("type")
+	page, _ := strconv.Atoi(query.Get("page"))
+	pageSize, _ := strconv.Atoi(query.Get("page_size"))
+	
+	var isActive *bool
+	if activeStr := query.Get("is_active"); activeStr != "" {
+		if active, err := strconv.ParseBool(activeStr); err == nil {
+			isActive = &active
+		}
+	}
+
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	h.logger.Info("List channels parameters",
+		logger.String("type", channelType),
+		logger.Bool("is_active", isActive != nil && *isActive),
+		logger.Int("page", page),
+		logger.Int("page_size", pageSize))
+
+	// Конвертируем API тип в domain тип
+	var domainChannelType service.ChannelType
+	switch channelType {
+	case "email":
+		domainChannelType = service.ChannelTypeEmail
+	case "slack":
+		domainChannelType = service.ChannelTypeSlack
+	case "telegram":
+		domainChannelType = service.ChannelTypeTelegram
+	case "webhook":
+		domainChannelType = service.ChannelTypeUnspecified // Используем Unspecified
+	case "sms":
+		domainChannelType = service.ChannelTypeUnspecified // Используем Unspecified
+	default:
+		domainChannelType = service.ChannelTypeEmail // По умолчанию
+	}
+
+	// Вызываем реальный сервис
+	domainChannels, err := h.notificationService.ListChannels(r.Context(), "default", domainChannelType)
+	if err != nil {
+		h.logger.Error("Failed to list channels", logger.Error(err))
+		http.Error(w, "Failed to list channels", http.StatusInternalServerError)
+		return
+	}
+
+	// Конвертируем domain модели в API модели
+	channels := make([]api.ChannelAPIResponse, len(domainChannels))
+	for i, domainChannel := range domainChannels {
+		// Конвертируем domain тип обратно в API тип
+		apiType := "email"
+		switch domainChannel.Type {
+		case service.ChannelTypeSlack:
+			apiType = "slack"
+		case service.ChannelTypeTelegram:
+			apiType = "telegram"
+		case service.ChannelTypeUnspecified:
+			apiType = "webhook" // Для Unspecified используем webhook
+		case service.ChannelTypeEmail:
+			apiType = "email"
+		}
+
+		channels[i] = api.ChannelAPIResponse{
+			ID:        domainChannel.ID,
+			TenantID:  domainChannel.TenantID,
+			Name:      domainChannel.Name,
+			Type:      apiType,
+			Config:    convertStringMapToInterface(domainChannel.Config),
+			IsActive:  domainChannel.IsActive,
+			CreatedAt: parseTime(domainChannel.CreatedAt),
+			UpdatedAt: parseTime(domainChannel.UpdatedAt),
+		}
+	}
+
+	// Фильтрация по активности (если указано)
+	if isActive != nil {
+		filteredChannels := []api.ChannelAPIResponse{}
+		for _, channel := range channels {
+			if channel.IsActive == *isActive {
+				filteredChannels = append(filteredChannels, channel)
+			}
+		}
+		channels = filteredChannels
+	}
+
+	// Пагинация
+	total := len(channels)
+	start := (page - 1) * pageSize
+	end := start + pageSize
+	if start >= total {
+		channels = []api.ChannelAPIResponse{}
+	} else {
+		if end > total {
+			end = total
+		}
+		channels = channels[start:end]
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"channels": channels,
+		"total":    total,
+		"page":     page,
+		"pageSize": pageSize,
+	})
+}
+
+// sendNotification отправляет уведомление
+func (h *HTTPHandler) sendNotification(w http.ResponseWriter, r *http.Request) {
+	fmt.Printf("=== HTTP HANDLER sendNotification CALLED ===\n")
+	h.logger.Info("=== HTTP HANDLER sendNotification CALLED ===")
+	h.logger.Info("Processing send notification request")
+
+	var req map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.Error("Failed to decode send notification request", logger.Error(err))
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	h.logger.Info("Sending notification",
+		logger.String("channel_id", fmt.Sprintf("%v", req["channel_id"])),
+		logger.String("subject", fmt.Sprintf("%v", req["subject"])),
+		logger.String("recipient", fmt.Sprintf("%v", req["recipient"])),
+		logger.String("priority", fmt.Sprintf("%v", req["priority"])))
+
+	// Конвертируем API модель в domain модель
+	severity := service.NotificationSeverityInfo
+	switch fmt.Sprintf("%v", req["priority"]) {
+	case "low":
+		severity = service.NotificationSeverityInfo
+	case "normal":
+		severity = service.NotificationSeverityWarning
+	case "high":
+		severity = service.NotificationSeverityError
+	case "critical":
+		severity = service.NotificationSeverityCritical
+	}
+
+	domainNotification := &service.Notification{
+		TenantID:   getTenantIDFromContext(r.Context()), // Получаем tenant ID из контекста
+		IncidentID: getIncidentIDFromContext(r.Context()), // Получаем incident ID из контекста
+		Severity:   severity,
+		Title:      fmt.Sprintf("%v", req["subject"]),
+		Message:    fmt.Sprintf("%v", req["message"]),
+		ChannelIDs: []string{fmt.Sprintf("%v", req["channel_id"])},
+		Metadata:   convertMetadataToStringMap(convertInterfaceToMetadata(req["metadata"])),
+	}
+
+	// Вызываем реальный сервис
+	h.logger.Info("=== BEFORE SendNotification CALL ===")
+	results, err := h.notificationService.SendNotification(r.Context(), domainNotification)
+	h.logger.Info("=== AFTER SendNotification CALL ===",
+		logger.String("error", fmt.Sprintf("%v", err)),
+		logger.Int("results_count", len(results)))
+	if err != nil {
+		h.logger.Error("Failed to send notification", logger.Error(err))
+		http.Error(w, "Failed to send notification", http.StatusInternalServerError)
+		return
+	}
+
+	// Проверяем результаты
+	success := true
+	message := "Notification sent successfully"
+	for _, result := range results {
+		if !result.Success {
+			success = false
+			message = "Some notifications failed"
+			break
+		}
+	}
+
+	// Генерируем MessageID на основе результатов
+	messageID := "msg-" + generateID()
+	if len(results) > 0 && results[0].ChannelID != "" {
+		messageID = results[0].ChannelID + "-" + generateID()
+	}
+
+	response := api.SendNotificationResponse{
+		Success:   success,
+		Message:   message,
+		MessageID: messageID, // Используем ID из результата
+		Timestamp: time.Now(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// Вспомогательные функции
+
+// extractChannelID извлекает ID канала из URL
+func extractChannelID(path string) string {
+	// URL формат: /api/v1/notification/channels/{id}
+	parts := splitPath(path)
+	if len(parts) >= 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "notification" && parts[3] == "channels" {
+		return parts[4]
+	}
+	return ""
+}
+
+// splitPath разделяет URL путь на компоненты
+func splitPath(path string) []string {
+	if path == "" || path[0] != '/' {
+		return []string{}
+	}
+	
+	parts := []string{}
+	current := ""
+	for i, char := range path {
+		if i == 0 {
+			continue // Пропускаем первый /
+		}
+		
+		if char == '/' {
+			if current != "" {
+				parts = append(parts, current)
+				current = ""
+			}
+		} else {
+			current += string(char)
+		}
+	}
+	
+	if current != "" {
+		parts = append(parts, current)
+	}
+	
+	return parts
+}
+
+// generateID генерирует уникальный ID
+func generateID() string {
+	return strconv.FormatInt(time.Now().UnixNano(), 36)
+}
+
+// getTenantIDFromContext получает tenant ID из контекста запроса
+func getTenantIDFromContext(ctx context.Context) string {
+	// Реализация получения tenant ID из JWT токена или заголовков
+	// Проверяем сначала контекст, установленный middleware
+	if tenantID := ctx.Value("tenant_id"); tenantID != nil {
+		if id, ok := tenantID.(string); ok {
+			return id
+		}
+	}
+	
+	// Если в контексте нет, пробуем извлечь из заголовков
+	// Это fallback для случаев, когда middleware не используется
+	return "default"
+}
+
+// getIncidentIDFromContext получает incident ID из контекста запроса
+func getIncidentIDFromContext(ctx context.Context) string {
+	// Реализация получения incident ID из контекста или заголовков
+	// Проверяем сначала контекст
+	if incidentID := ctx.Value("incident_id"); incidentID != nil {
+		if id, ok := incidentID.(string); ok {
+			return id
+		}
+	}
+	
+	// Fallback значение для вебхуков
+	return "webhook"
+}
+
+// convertInterfaceToMetadata конвертирует interface{} в map[string]interface{}
+func convertInterfaceToMetadata(data interface{}) map[string]interface{} {
+	if data == nil {
+		return make(map[string]interface{})
+	}
+	
+	if metadata, ok := data.(map[string]interface{}); ok {
+		return metadata
+	}
+	
+	// Если это другой тип, возвращаем пустую карту
+	return make(map[string]interface{})
+}
+
+// convertMetadataToStringMap конвертирует map[string]interface{} в map[string]string
+func convertMetadataToStringMap(metadata map[string]interface{}) map[string]string {
+	result := make(map[string]string)
+	for k, v := range metadata {
+		if str, ok := v.(string); ok {
+			result[k] = str
+		} else {
+			result[k] = fmt.Sprintf("%v", v)
+		}
+	}
+	return result
+}

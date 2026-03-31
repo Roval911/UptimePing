@@ -6,6 +6,7 @@ require (
 	UptimePingPlatform/pkg v0.0.0-00010101000000-000000000000
 	UptimePingPlatform/proto v0.0.0-00010101000000-000000000000
 	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/lib/pq v1.10.9
 	github.com/rabbitmq/amqp091-go v1.10.0
 	google.golang.org/grpc v1.78.0
 )

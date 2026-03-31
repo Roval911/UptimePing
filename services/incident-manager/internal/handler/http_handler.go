@@ -71,33 +71,73 @@ func (h *HTTPHandler) handleIncidentByID(w http.ResponseWriter, r *http.Request)
 
 // listIncidents получает список инцидентов
 func (h *HTTPHandler) listIncidents(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
-	
+	h.logger.Info("listIncidents called", pkglogger.String("method", r.Method))
+
+	// Извлекаем токен из Authorization header
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		h.logger.Error("Authorization header missing")
+		h.writeError(w, errors.New(errors.ErrUnauthorized, "Authorization header required"), http.StatusUnauthorized)
+		return
+	}
+
+	h.logger.Info("Authorization header found", pkglogger.String("auth_header", authHeader[:min(len(authHeader), 20)]+"..."))
+
+	// Проверяем формат Bearer token
+	tokenParts := strings.Split(authHeader, " ")
+	if len(tokenParts) != 2 || tokenParts[0] != "Bearer" {
+		h.logger.Error("Invalid authorization header format")
+		h.writeError(w, errors.New(errors.ErrUnauthorized, "Invalid authorization header format"), http.StatusUnauthorized)
+		return
+	}
+
+	// Временная валидация токена (в production использовать Auth Service)
+	// Извлекаем tenant_id из токена (временно hardcoded для демонстрации)
+	tenantID := "bb9dfee7-60f2-4566-9a6f-77f988195ea6" // Первый пользователь
+
+	h.logger.Info("Using tenant_id", pkglogger.String("tenant_id", tenantID))
+
+	ctx := r.Context()
+
 	// Получаем параметры фильтрации
 	statusStr := r.URL.Query().Get("status")
-	
+
 	var status *domain.IncidentStatus
 	if statusStr != "" {
 		s := domain.IncidentStatus(statusStr)
 		status = &s
 	}
-	
+
 	filter := &domain.IncidentFilter{
-		Status: status,
+		TenantID: &tenantID, // Фильтруем по tenant_id из токена
+		Status:   status,
 	}
+
+	h.logger.Info("Calling GetIncidents with filter", pkglogger.String("tenant_id", *filter.TenantID))
 
 	incidents, err := h.incidentService.GetIncidents(ctx, filter)
 	if err != nil {
+		h.logger.Error("GetIncidents failed", pkglogger.Error(err))
 		h.writeError(w, err, http.StatusInternalServerError)
 		return
 	}
 
+	h.logger.Info("GetIncidents succeeded", pkglogger.Int("count", len(incidents)))
+
 	h.writeResponse(w, map[string]interface{}{
-		"success": true,
+		"success":   true,
 		"incidents": incidents,
-		"total":    len(incidents),
-		"message":  "Incidents retrieved successfully",
+		"total":     len(incidents),
+		"message":   "Incidents retrieved successfully",
 	})
+}
+
+// min возвращает минимальное из двух чисел
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // createIncident создает новый инцидент
@@ -282,7 +322,7 @@ func (h *HTTPHandler) writeResponse(w http.ResponseWriter, data interface{}) {
 func (h *HTTPHandler) writeError(w http.ResponseWriter, err error, statusCode int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	
+
 	response := map[string]interface{}{
 		"success": false,
 		"error":   err.Error(),

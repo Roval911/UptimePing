@@ -5,6 +5,7 @@ go 1.24.0
 require (
 	UptimePingPlatform/pkg v0.0.0-00010101000000-000000000000
 	UptimePingPlatform/proto v0.0.0-00010101000000-000000000000
+	github.com/lib/pq v1.10.9
 	github.com/prometheus/client_golang v1.23.2
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.78.0

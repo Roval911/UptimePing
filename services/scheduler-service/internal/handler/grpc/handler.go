@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -21,16 +22,23 @@ import (
 type HandlerFixed struct {
 	*grpcBase.BaseHandler
 	schedulerv1.UnimplementedSchedulerServiceServer
-	checkUseCase *usecase.CheckUseCase
-	validator    *validation.Validator
+	checkUseCase   *usecase.CheckUseCase
+	validator      *validation.Validator
+	rabbitProducer RabbitMQProducer // Добавлен RabbitMQ producer
+}
+
+// RabbitMQProducer интерфейс для публикации задач
+type RabbitMQProducer interface {
+	PublishTask(ctx context.Context, check *domain.Check, tenantID string) error
 }
 
 // NewHandlerFixed создает новый экземпляр HandlerFixed
-func NewHandlerFixed(checkUseCase *usecase.CheckUseCase, logger logger.Logger) *HandlerFixed {
+func NewHandlerFixed(checkUseCase *usecase.CheckUseCase, logger logger.Logger, rabbitProducer RabbitMQProducer) *HandlerFixed {
 	return &HandlerFixed{
-		BaseHandler:  grpcBase.NewBaseHandler(logger),
-		checkUseCase: checkUseCase,
-		validator:    validation.NewValidator(),
+		BaseHandler:    grpcBase.NewBaseHandler(logger),
+		checkUseCase:   checkUseCase,
+		validator:      validation.NewValidator(),
+		rabbitProducer: rabbitProducer,
 	}
 }
 
@@ -113,8 +121,12 @@ func (h *HandlerFixed) CreateCheck(ctx context.Context, req *schedulerv1.CreateC
 		status = "active"
 	}
 
+	// Генерация UUID для новой проверки
+	checkID := uuid.New().String()
+
 	// Конвертация запроса в доменную модель
 	check := &domain.Check{
+		ID:          checkID,      // ✅ ДОБАВЛЕНО!
 		TenantID:    req.TenantId, // ✅ ДОБАВЛЕНО!
 		Name:        req.Name,
 		Description: req.Description, // ✅ ДОБАВЛЕНО!
@@ -139,6 +151,20 @@ func (h *HandlerFixed) CreateCheck(ctx context.Context, req *schedulerv1.CreateC
 	createdCheck, err := h.checkUseCase.CreateCheck(ctx, req.TenantId, check)
 	if err != nil {
 		return nil, h.BaseHandler.LogError(ctx, err, "CreateCheck", req.TenantId)
+	}
+
+	// Публикуем задачу в RabbitMQ если проверка активна
+	if createdCheck.Enabled && h.rabbitProducer != nil {
+		if err := h.rabbitProducer.PublishTask(ctx, createdCheck, req.TenantId); err != nil {
+			// Логируем ошибку, но не прерываем операцию
+			h.BaseHandler.LogError(ctx, err, "CreateCheck", req.TenantId)
+		} else {
+			h.BaseHandler.LogOperationSuccess(ctx, "PublishTask", map[string]interface{}{
+				"check_id":  createdCheck.ID,
+				"tenant_id": req.TenantId,
+				"target":    createdCheck.Target,
+			})
+		}
 	}
 
 	// Логируем успешное завершение

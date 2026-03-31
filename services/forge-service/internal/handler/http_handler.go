@@ -15,7 +15,7 @@ import (
 	"UptimePingPlatform/services/forge-service/internal/api"
 	"UptimePingPlatform/services/forge-service/internal/domain"
 	"UptimePingPlatform/services/forge-service/internal/service"
-	
+
 	// gRPC клиенты
 	authv1 "UptimePingPlatform/proto/api/auth/v1"
 	"google.golang.org/grpc"
@@ -26,18 +26,18 @@ import (
 type HTTPHandler struct {
 	logger            logger.Logger
 	codeGenerator     *service.CodeGenerator
-	protoParser      *service.ProtoParser
+	protoParser       *service.ProtoParser
 	forgeService      service.ForgeService
 	interactiveConfig *domain.InteractiveConfig
 	authClient        authv1.AuthServiceClient // gRPC клиент для Auth Service
 }
 
 // NewHTTPHandler создает новый HTTP обработчик
-func NewHTTPHandler(logger logger.Logger, codeGenerator *service.CodeGenerator, protoParser *service.ProtoParser, forgeService service.ForgeService, apiGatewayAddress string) *HTTPHandler {
-	// Создаем gRPC подключение к API Gateway
-	conn, err := grpc.Dial(apiGatewayAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+func NewHTTPHandler(logger logger.Logger, codeGenerator *service.CodeGenerator, protoParser *service.ProtoParser, forgeService service.ForgeService, authServiceAddress string) *HTTPHandler {
+	// Создаем gRPC подключение к Auth Service
+	conn, err := grpc.Dial(authServiceAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		logger.Error("Failed to connect to API Gateway", pkglogger.String("error", err.Error()))
+		logger.Error("Failed to connect to Auth Service", pkglogger.String("error", err.Error()))
 		return nil
 	}
 
@@ -47,7 +47,7 @@ func NewHTTPHandler(logger logger.Logger, codeGenerator *service.CodeGenerator, 
 	return &HTTPHandler{
 		logger:            logger,
 		codeGenerator:     codeGenerator,
-		protoParser:      protoParser,
+		protoParser:       protoParser,
 		forgeService:      forgeService,
 		interactiveConfig: domain.NewDefaultInteractiveConfig(),
 		authClient:        authClient,
@@ -58,7 +58,7 @@ func NewHTTPHandler(logger logger.Logger, codeGenerator *service.CodeGenerator, 
 func (h *HTTPHandler) RegisterRoutes(mux *http.ServeMux) {
 	// Статические файлы (включая login.html)
 	mux.Handle("/", h.staticHandler())
-	
+
 	// API маршруты (защищенные)
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("/api/config", h.handleConfig)
@@ -67,19 +67,19 @@ func (h *HTTPHandler) RegisterRoutes(mux *http.ServeMux) {
 	apiMux.HandleFunc("/api/config/generate", h.handleGenerateConfig)
 	apiMux.HandleFunc("/api/checkers/generate", h.handleGenerateCheckers)
 	apiMux.HandleFunc("/api/status", h.handleStatus)
-	
+
 	// CLI API маршруты (v1)
 	apiMux.HandleFunc("/api/v1/forge/generate", h.handleGenerate)
 	// Compatibility HTTP API for programmatic access (wraps service methods)
 	apiMux.HandleFunc("/api/v1/forge/generate_config", h.handleGenerateConfigAPI)
 	apiMux.HandleFunc("/api/v1/forge/parse", h.handleParseProtoAPI)
-	
+
 	// Применяем middleware аутентификации к API
 	mux.Handle("/api/", h.authMiddleware(apiMux))
-	
+
 	// Login endpoint (открытый)
 	mux.HandleFunc("/api/auth/login", h.handleLogin)
-	
+
 	// Register endpoint (открытый)
 	mux.HandleFunc("/api/auth/register", h.handleRegister)
 }
@@ -100,7 +100,7 @@ func (h *HTTPHandler) staticHandler() http.HandlerFunc {
 			http.ServeFile(w, r, filepath.Join("web", "index.html"))
 			return
 		}
-		
+
 		// Для других статических файлов
 		filePath := filepath.Join("web", r.URL.Path)
 		http.ServeFile(w, r, filePath)
@@ -115,22 +115,22 @@ func (h *HTTPHandler) authMiddleware(next http.Handler) http.Handler {
 			h.writeErrorResponse(w, http.StatusUnauthorized, "Missing authorization token")
 			return
 		}
-		
+
 		// Валидация токена через Auth Service
 		valid, tenantID, err := h.validateToken(token)
 		if err != nil {
 			h.writeErrorResponse(w, http.StatusInternalServerError, "Token validation error")
 			return
 		}
-		
+
 		if !valid {
 			h.writeErrorResponse(w, http.StatusUnauthorized, "Invalid token")
 			return
 		}
-		
+
 		// Добавляем tenant ID в контекст
 		ctx := context.WithValue(r.Context(), "tenant_id", tenantID)
-		
+
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -145,7 +145,7 @@ func (h *HTTPHandler) extractTokenFromRequest(r *http.Request) string {
 		}
 		return authHeader
 	}
-	
+
 	// Проверяем query параметр
 	return r.URL.Query().Get("token")
 }
@@ -171,7 +171,7 @@ func (h *HTTPHandler) validateToken(token string) (bool, string, error) {
 		return false, "", nil
 	}
 
-	h.logger.Info("Token validated successfully", 
+	h.logger.Info("Token validated successfully",
 		pkglogger.String("tenant_id", resp.TenantId),
 		pkglogger.String("user_id", resp.UserId))
 
@@ -194,17 +194,17 @@ func (h *HTTPHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
-	
+
 	var loginReq struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
-	
+
 	if err := json.NewDecoder(r.Body).Decode(&loginReq); err != nil {
 		h.writeErrorResponse(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
-	
+
 	// Вызываем Login через gRPC к Auth Service
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -216,7 +216,7 @@ func (h *HTTPHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.authClient.Login(ctx, req)
 	if err != nil {
-		h.logger.Error("Login failed", 
+		h.logger.Error("Login failed",
 			pkglogger.String("email", loginReq.Email),
 			pkglogger.String("error", err.Error()))
 		h.writeErrorResponse(w, http.StatusUnauthorized, "Invalid credentials")
@@ -245,31 +245,31 @@ func (h *HTTPHandler) handleRegister(w http.ResponseWriter, r *http.Request) {
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
-	
+
 	var registerReq struct {
 		Email      string `json:"email"`
-		Password    string `json:"password"`
-		TenantName  string `json:"tenant_name"`
+		Password   string `json:"password"`
+		TenantName string `json:"tenant_name"`
 	}
-	
+
 	if err := json.NewDecoder(r.Body).Decode(&registerReq); err != nil {
 		h.writeErrorResponse(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
-	
+
 	// Вызываем Register через gRPC к Auth Service
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	req := &authv1.RegisterRequest{
 		Email:      registerReq.Email,
-		Password:    registerReq.Password,
-		TenantName:  registerReq.TenantName,
+		Password:   registerReq.Password,
+		TenantName: registerReq.TenantName,
 	}
 
 	resp, err := h.authClient.Register(ctx, req)
 	if err != nil {
-		h.logger.Error("Registration failed", 
+		h.logger.Error("Registration failed",
 			pkglogger.String("email", registerReq.Email),
 			pkglogger.String("tenant_name", registerReq.TenantName),
 			pkglogger.String("error", err.Error()))
@@ -298,13 +298,13 @@ func (h *HTTPHandler) handleRegister(w http.ResponseWriter, r *http.Request) {
 func (h *HTTPHandler) writeErrorResponse(w http.ResponseWriter, statusCode int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	
+
 	response := map[string]interface{}{
 		"success": false,
 		"error":   message,
 		"code":    statusCode,
 	}
-	
+
 	json.NewEncoder(w).Encode(response)
 }
 
@@ -464,7 +464,7 @@ func (h *HTTPHandler) handleGenerateCheckers(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	h.logger.Info("Retrieved services from parser", 
+	h.logger.Info("Retrieved services from parser",
 		logger.Int("count", len(services)))
 
 	checkersPath := "generated/checkers"
@@ -562,7 +562,7 @@ func (h *HTTPHandler) getServicesFromParser() ([]domain.Service, error) {
 		services = append(services, service)
 	}
 
-	h.logger.Info("Converted services from parser", 
+	h.logger.Info("Converted services from parser",
 		logger.Int("total_services", len(services)))
 
 	return services, nil
@@ -578,7 +578,7 @@ func (h *HTTPHandler) getServiceHost(serviceName string) string {
 			}
 		}
 	}
-	
+
 	// Значение по умолчанию
 	return "localhost"
 }
@@ -593,7 +593,7 @@ func (h *HTTPHandler) getServicePort(serviceName string) int {
 			}
 		}
 	}
-	
+
 	// Значение по умолчанию для gRPC
 	return 50051
 }
@@ -608,7 +608,7 @@ func (h *HTTPHandler) getMethodTimeout(serviceName, methodName string) string {
 			}
 		}
 	}
-	
+
 	// Значение по умолчанию
 	return "30s"
 }
@@ -637,57 +637,132 @@ func (h *HTTPHandler) isMethodEnabled(serviceName, methodName string) bool {
 			}
 		}
 	}
-	
+
 	// По умолчанию все методы включены
 	return true
 }
 
 // CLI API обработчики
 
-// handleGenerate обрабатывает запрос на генерацию кода
+// handleGenerate обрабатывает запрос на генерацию кода или конфигурации
 func (h *HTTPHandler) handleGenerate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	var req api.GenerateRequest
+	var req map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.logger.Error("Failed to decode generate request", logger.Error(err))
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
-	h.logger.Info("Processing generate request", 
-		logger.String("input", req.Input),
-		logger.String("output", req.Output),
-		logger.String("template", req.Template),
-		logger.String("language", req.Language))
-
-	// Валидация запроса
-	if req.Input == "" {
-		http.Error(w, "Input is required", http.StatusBadRequest)
+	// Проверяем действие
+	action, ok := req["action"].(string)
+	if !ok {
+		http.Error(w, "Action is required", http.StatusBadRequest)
 		return
 	}
 
+	switch action {
+	case "generate_config":
+		h.handleGenerateConfigAction(w, r, req)
+	case "generate_code":
+		h.handleGenerateCodeAction(w, r, req)
+	default:
+		http.Error(w, "Unknown action: "+action, http.StatusBadRequest)
+	}
+}
+
+// handleGenerateConfigAction обрабатывает генерацию конфигурации
+func (h *HTTPHandler) handleGenerateConfigAction(w http.ResponseWriter, r *http.Request, req map[string]interface{}) {
+	protoContent, ok := req["proto_content"].(string)
+	if !ok {
+		http.Error(w, "proto_content is required", http.StatusBadRequest)
+		return
+	}
+
+	// Извлекаем опции
+	var opts *service.ConfigOptions
+	if options, ok := req["options"].(map[string]interface{}); ok {
+		opts = &service.ConfigOptions{}
+		if v, ok := options["target_host"].(string); ok {
+			opts.TargetHost = v
+		}
+		if v, ok := options["target_port"].(float64); ok {
+			opts.TargetPort = int(v)
+		}
+		if v, ok := options["check_interval"].(float64); ok {
+			opts.CheckInterval = int(v)
+		}
+		if v, ok := options["timeout"].(float64); ok {
+			opts.Timeout = int(v)
+		}
+		if v, ok := options["tenant_id"].(string); ok {
+			opts.TenantID = v
+		}
+	}
+
+	configYaml, checkConfig, err := h.forgeService.GenerateConfig(r.Context(), protoContent, opts)
+	if err != nil {
+		h.logger.Error("GenerateConfig failed", logger.Error(err))
+		http.Error(w, fmt.Sprintf("Generation failed: %s", err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	resp := map[string]interface{}{
+		"success":     true,
+		"message":     "Configuration generated successfully",
+		"config_yaml": configYaml,
+		"check_config": map[string]interface{}{
+			"name":     checkConfig.Name,
+			"type":     checkConfig.Type,
+			"target":   checkConfig.Target,
+			"interval": checkConfig.Interval,
+			"timeout":  checkConfig.Timeout,
+			"config":   checkConfig.Config,
+		},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleGenerateCodeAction обрабатывает генерацию кода
+func (h *HTTPHandler) handleGenerateCodeAction(w http.ResponseWriter, r *http.Request, req map[string]interface{}) {
+	input, ok := req["input"].(string)
+	if !ok {
+		http.Error(w, "input is required", http.StatusBadRequest)
+		return
+	}
+
+	output, _ := req["output"].(string)
+	template, _ := req["template"].(string)
+	language, _ := req["language"].(string)
+
+	h.logger.Info("Processing generate code request",
+		logger.String("input", input),
+		logger.String("output", output),
+		logger.String("template", template),
+		logger.String("language", language))
+
 	// Генерация кода
-	outputPath := req.Output
+	outputPath := output
 	if outputPath == "" {
 		outputPath = "generated"
 	}
 
-	// Используем существующий код генератор
 	codeOptions := &service.CodeOptions{
-		Language:  req.Language,
-		Template:  req.Template,
+		Language:  language,
+		Template:  template,
 		Framework: "default",
 	}
-	
+
 	if codeOptions.Language == "" {
 		codeOptions.Language = "go"
 	}
-	
-	filename, content, _, err := h.forgeService.GenerateCode(r.Context(), req.Input, codeOptions)
+
+	filename, content, _, err := h.forgeService.GenerateCode(r.Context(), input, codeOptions)
 	if err != nil {
 		h.logger.Error("Failed to generate code", logger.Error(err))
 		http.Error(w, fmt.Sprintf("Generation failed: %s", err.Error()), http.StatusInternalServerError)
@@ -717,6 +792,8 @@ func (h *HTTPHandler) handleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := api.GenerateResponse{
+		Success:        true,
+		Message:        "Code generated successfully",
 		GeneratedFiles: len(files),
 		OutputPath:     outputPath,
 		GenerationTime: time.Now(),
@@ -813,10 +890,10 @@ func (h *HTTPHandler) handleParseProtoAPI(w http.ResponseWriter, r *http.Request
 	}
 
 	resp := map[string]interface{}{
-		"success":     true,
+		"success":      true,
 		"service_info": serviceInfo,
-		"is_valid":    isValid,
-		"warnings":    warnings,
+		"is_valid":     isValid,
+		"warnings":     warnings,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -836,7 +913,7 @@ func (h *HTTPHandler) handleValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.logger.Info("Processing validate request", 
+	h.logger.Info("Processing validate request",
 		logger.String("input", req.Input),
 		logger.String("proto_path", req.ProtoPath),
 		logger.Bool("lint", req.Lint),
@@ -911,7 +988,7 @@ func (h *HTTPHandler) handleInteractive(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	h.logger.Info("Processing interactive request", 
+	h.logger.Info("Processing interactive request",
 		logger.String("proto_file", req.ProtoFile),
 		logger.String("template", req.Template))
 
@@ -920,7 +997,7 @@ func (h *HTTPHandler) handleInteractive(w http.ResponseWriter, r *http.Request) 
 	if h.interactiveConfig.Services == nil {
 		h.interactiveConfig.Services = make(map[string]*domain.ServiceConfig)
 	}
-	
+
 	// Обновляем глобальные настройки
 	if req.Template != "" {
 		// Сохраняем template в одном из сервисов как временное решение
@@ -967,7 +1044,7 @@ func (h *HTTPHandler) handleTemplates(w http.ResponseWriter, r *http.Request) {
 	templateType := query.Get("type")
 	language := query.Get("language")
 
-	h.logger.Info("Processing templates request", 
+	h.logger.Info("Processing templates request",
 		logger.String("type", templateType),
 		logger.String("language", language))
 
@@ -1018,13 +1095,13 @@ func (h *HTTPHandler) handleTemplates(w http.ResponseWriter, r *http.Request) {
 // getGeneratedFiles получает список сгенерированных файлов
 func (h *HTTPHandler) getGeneratedFiles(path string) ([]string, error) {
 	var files []string
-	
+
 	// Рекурсивно обходим директорию
 	err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		
+
 		if !info.IsDir() {
 			// Получаем относительный путь
 			relPath, err := filepath.Rel(path, filePath)
@@ -1033,9 +1110,9 @@ func (h *HTTPHandler) getGeneratedFiles(path string) ([]string, error) {
 			}
 			files = append(files, relPath)
 		}
-		
+
 		return nil
 	})
-	
+
 	return files, err
 }

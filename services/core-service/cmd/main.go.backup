@@ -1,0 +1,226 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+	"time"
+
+	"UptimePingPlatform/pkg/config"
+	"UptimePingPlatform/pkg/database"
+	"UptimePingPlatform/pkg/health"
+	"UptimePingPlatform/pkg/logger"
+	"UptimePingPlatform/pkg/metrics"
+	pkg_rabbitmq "UptimePingPlatform/pkg/rabbitmq"
+	pkg_redis "UptimePingPlatform/pkg/redis"
+	corev1 "UptimePingPlatform/proto/api/core/v1"
+	grpcHandler "UptimePingPlatform/services/core-service/internal/handler/grpc"
+	"UptimePingPlatform/services/core-service/internal/repository"
+	"UptimePingPlatform/services/core-service/internal/repository/postgres"
+	coreservice "UptimePingPlatform/services/core-service/internal/service"
+	"UptimePingPlatform/services/core-service/internal/service/checker"
+	"google.golang.org/grpc"
+)
+
+func main() {
+	// Load configuration
+	cfg, err := config.LoadConfigWithAutoPath("dev")
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Initialize logger
+	appLogger, err := logger.NewLogger(cfg.Environment, cfg.Logger.Level, "core-service", false)
+	if err != nil {
+		log.Fatalf("Failed to initialize logger: %v", err)
+	}
+	defer appLogger.Sync()
+
+	appLogger.Info("Starting Core Service...")
+
+	// Initialize database connection
+	db, err := database.Connect(context.Background(), &database.Config{
+		Host:          cfg.Database.Host,
+		Port:          cfg.Database.Port,
+		User:          cfg.Database.User,
+		Password:      cfg.Database.Password,
+		Database:      cfg.Database.Name,
+		MaxConns:      20,
+		MinConns:      5,
+		MaxConnLife:   30 * time.Minute,
+		MaxConnIdle:   5 * time.Minute,
+		HealthCheck:   30 * time.Second,
+		MaxRetries:    3,
+		RetryInterval: time.Second,
+	})
+	if err != nil {
+		appLogger.Error("Failed to connect to database", logger.Error(err))
+	} else {
+		defer db.Close()
+	}
+
+	// Initialize Redis client
+	redisClient, err := pkg_redis.Connect(context.Background(), &pkg_redis.Config{
+		Addr:     cfg.Redis.Addr,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	if err != nil {
+		appLogger.Error("Failed to connect to Redis", logger.Error(err))
+	} else {
+		defer redisClient.Close()
+	}
+
+	// Initialize RabbitMQ connection and producer
+	rabbitConn, err := pkg_rabbitmq.Connect(context.Background(), &pkg_rabbitmq.Config{
+		URL:        cfg.RabbitMQ.URL,
+		Exchange:   cfg.RabbitMQ.Exchange,
+		RoutingKey: cfg.RabbitMQ.RoutingKey,
+		Queue:      cfg.RabbitMQ.Queue,
+	})
+	if err != nil {
+		appLogger.Error("Failed to connect to RabbitMQ", logger.Error(err))
+	} else {
+		defer rabbitConn.Close()
+	}
+
+	// Create RabbitMQ producer
+	var rabbitProducer *pkg_rabbitmq.Producer
+	if rabbitConn != nil {
+		rabbitProducer = pkg_rabbitmq.NewProducer(rabbitConn, &pkg_rabbitmq.Config{
+			URL:        cfg.RabbitMQ.URL,
+			Exchange:   cfg.RabbitMQ.Exchange,
+			RoutingKey: cfg.RabbitMQ.RoutingKey,
+			Queue:      cfg.RabbitMQ.Queue,
+		})
+		appLogger.Info("RabbitMQ producer initialized successfully")
+	} else {
+		appLogger.Warn("RabbitMQ connection failed, running without incident publishing")
+	}
+
+	// Initialize metrics
+	appMetrics := metrics.NewMetrics("core-service")
+	metricsHandler := appMetrics.GetHandler()
+
+	// Initialize health checker
+	healthChecker := health.NewSimpleHealthChecker("1.0.0")
+
+	// Start HTTP server for metrics and health
+	httpPort := 51054 // Default HTTP port
+	if envPort := os.Getenv("HTTP_SERVER_PORT"); envPort != "" {
+		if port, err := strconv.Atoi(envPort); err == nil {
+			httpPort = port
+		}
+	}
+
+	appLogger.Info(fmt.Sprintf("HTTP_SERVER_PORT env var: %s, using port: %d", os.Getenv("HTTP_SERVER_PORT"), httpPort))
+
+	httpServer := &http.Server{
+		Addr:    fmt.Sprintf(":%d", httpPort),
+		Handler: setupHTTPHandler(metricsHandler, healthChecker, appLogger),
+	}
+
+	// Initialize checker factory and check service
+	checkerFactory := checker.NewDefaultCheckerFactory(appLogger, checker.NewDefaultHTTPClient(30*time.Second))
+
+	var repository repository.CheckResultRepository
+	if db != nil {
+		repository = postgres.NewCheckResultRepository(db.Pool, appLogger)
+	}
+
+	checkService := coreservice.NewCheckService(appLogger, checkerFactory, repository, redisClient, nil, rabbitProducer)
+
+	// Start gRPC server for Core Service
+	grpcPort := cfg.Server.Port
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", grpcPort))
+	if err != nil {
+		appLogger.Error("Failed to listen for gRPC", logger.Error(err))
+		log.Fatalf("Failed to listen: %v", err)
+	}
+
+	grpcServer := grpc.NewServer()
+	appLogger.Info(fmt.Sprintf("Registering Core gRPC handler on port %d", grpcPort))
+	coreHandler := grpcHandler.NewCoreHandler(checkService, appLogger)
+	corev1.RegisterCoreServiceServer(grpcServer, coreHandler)
+
+	// Start gRPC server
+	go func() {
+		appLogger.Info(fmt.Sprintf("Starting gRPC server on port %d", grpcPort))
+		if err := grpcServer.Serve(lis); err != nil {
+			appLogger.Error("gRPC server failed", logger.Error(err))
+		}
+	}()
+	// Wait briefly to ensure gRPC server starts
+	time.Sleep(1 * time.Second)
+
+	// Start server
+	go func() {
+		appLogger.Info(fmt.Sprintf("Starting HTTP server on port %d", httpPort))
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			appLogger.Error("HTTP server failed", logger.Error(err))
+		}
+	}()
+
+	// Graceful shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	appLogger.Info("Shutting down server...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := httpServer.Shutdown(ctx); err != nil {
+		appLogger.Error("Server shutdown failed", logger.Error(err))
+	}
+
+	appLogger.Info("Server stopped")
+}
+
+func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthChecker, appLogger logger.Logger) http.Handler {
+	mux := http.NewServeMux()
+
+	// Metrics endpoint
+	mux.Handle("/metrics", metricsHandler)
+
+	// Health endpoints
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"healthy","service":"core-service"}`))
+	})
+
+	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ready","service":"core-service"}`))
+	})
+
+	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"live","service":"core-service"}`))
+	})
+
+	// Core service endpoints
+	mux.HandleFunc("/api/v1/checks/execute", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"message":"Core Service - Execute Check endpoint","status":"ok"}`))
+	})
+
+	mux.HandleFunc("/api/v1/checks/status", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"message":"Core Service - Check Status endpoint","status":"ok"}`))
+	})
+
+	mux.HandleFunc("/api/v1/checks/history", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"message":"Core Service - Check History endpoint","status":"ok"}`))
+	})
+
+	return mux
+}

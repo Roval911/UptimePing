@@ -23,7 +23,12 @@ redis:
   db: 0
 
 rabbitmq:
-  url: "amqp://uptimeping:uptimeping123@rabbitmq:5672/"
+  url: "amqp://guest:guest@rabbitmq:5672/"
+  exchange: "checks"
+  routing_key: "check.task"
+  queue: "checks.tasks"
+  dlx: "checks.dlx"
+  dlq: "checks.tasks.dlq"
 
 logger:
   level: "info"

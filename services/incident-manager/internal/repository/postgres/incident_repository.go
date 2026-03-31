@@ -138,30 +138,38 @@ func (r *IncidentRepository) Update(ctx context.Context, incident *domain.Incide
 // List получает список инцидентов с фильтрацией
 func (r *IncidentRepository) List(ctx context.Context, filter *domain.IncidentFilter) ([]*domain.Incident, error) {
 	query := `
-		SELECT id, check_id, title, description, status, severity, started_at, resolved_at, created_at, updated_at
-		FROM incidents
+		SELECT i.id, i.check_id, i.title, i.description, i.status, i.severity, i.started_at, i.resolved_at, i.created_at, i.updated_at
+		FROM incidents i
+		JOIN checks c ON i.check_id = c.id
 		WHERE 1=1
 	`
 
 	args := []interface{}{}
 	argIndex := 1
 
+	// Добавляем фильтрацию по tenant_id
+	if filter != nil && filter.TenantID != nil && *filter.TenantID != "" {
+		query += fmt.Sprintf(" AND c.tenant_id = $%d", argIndex)
+		args = append(args, *filter.TenantID)
+		argIndex++
+	}
+
 	// Добавляем фильтрацию по статусу
 	if filter != nil && filter.Status != nil {
-		query += fmt.Sprintf(" AND status = $%d", argIndex)
+		query += fmt.Sprintf(" AND i.status = $%d", argIndex)
 		args = append(args, string(*filter.Status))
 		argIndex++
 	}
 
 	// Добавляем фильтрацию по check_id
 	if filter != nil && filter.CheckID != nil && *filter.CheckID != "" {
-		query += fmt.Sprintf(" AND check_id = $%d", argIndex)
+		query += fmt.Sprintf(" AND i.check_id = $%d", argIndex)
 		args = append(args, *filter.CheckID)
 		argIndex++
 	}
 
 	// Добавляем сортировку и лимит
-	query += " ORDER BY created_at DESC"
+	query += " ORDER BY i.created_at DESC"
 	if filter != nil && filter.Limit > 0 {
 		query += fmt.Sprintf(" LIMIT $%d", argIndex)
 		args = append(args, filter.Limit)
@@ -292,4 +300,88 @@ func (r *IncidentRepository) GetStats(ctx context.Context, tenantID string) (*do
 	}
 
 	return &stats, nil
+}
+
+// GetByTenantID получает инциденты по tenant_id с фильтрацией
+func (r *IncidentRepository) GetByTenantID(ctx context.Context, tenantID string, filter *domain.IncidentFilter) ([]*domain.Incident, error) {
+	query := `
+		SELECT i.id, i.check_id, i.title, i.description, i.status, i.severity, i.started_at, i.resolved_at, i.created_at, i.updated_at
+		FROM incidents i
+		JOIN checks c ON i.check_id = c.id
+		WHERE c.tenant_id = $1
+	`
+
+	args := []interface{}{tenantID}
+	argIndex := 2
+
+	// Добавляем фильтрацию по статусу
+	if filter != nil && filter.Status != nil {
+		query += fmt.Sprintf(" AND i.status = $%d", argIndex)
+		args = append(args, string(*filter.Status))
+		argIndex++
+	}
+
+	// Добавляем фильтрацию по check_id
+	if filter != nil && filter.CheckID != nil && *filter.CheckID != "" {
+		query += fmt.Sprintf(" AND i.check_id = $%d", argIndex)
+		args = append(args, *filter.CheckID)
+		argIndex++
+	}
+
+	// Добавляем сортировку и лимит
+	query += " ORDER BY i.created_at DESC"
+	if filter != nil && filter.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT $%d", argIndex)
+		args = append(args, filter.Limit)
+		argIndex++
+	}
+	if filter != nil && filter.Offset > 0 {
+		query += fmt.Sprintf(" OFFSET $%d", argIndex)
+		args = append(args, filter.Offset)
+	}
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		r.logger.Error("Failed to list incidents by tenant_id",
+			pkglogger.String("tenant_id", tenantID),
+			pkglogger.Error(err))
+		return nil, errors.Wrap(err, errors.ErrInternal, "failed to list incidents by tenant_id")
+	}
+	defer rows.Close()
+
+	var incidents []*domain.Incident
+	for rows.Next() {
+		var incident domain.Incident
+		var status, severity string
+		var resolvedAt sql.NullTime
+
+		err := rows.Scan(
+			&incident.ID,
+			&incident.CheckID,
+			&incident.Title,
+			&incident.Description,
+			&status,
+			&severity,
+			&incident.StartedAt,
+			&resolvedAt,
+			&incident.CreatedAt,
+			&incident.UpdatedAt,
+		)
+
+		if err != nil {
+			r.logger.Error("Failed to scan incident row",
+				pkglogger.Error(err))
+			return nil, errors.Wrap(err, errors.ErrInternal, "failed to scan incident row")
+		}
+
+		incident.Status = domain.IncidentStatus(status)
+		incident.Severity = domain.IncidentSeverity(severity)
+		if resolvedAt.Valid {
+			incident.ResolvedAt = &resolvedAt.Time
+		}
+
+		incidents = append(incidents, &incident)
+	}
+
+	return incidents, nil
 }

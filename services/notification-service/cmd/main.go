@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"UptimePingPlatform/pkg/config"
+	pkg_database "UptimePingPlatform/pkg/database"
 	"UptimePingPlatform/pkg/health"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
+	pkg_rabbitmq "UptimePingPlatform/pkg/rabbitmq"
 	pkg_redis "UptimePingPlatform/pkg/redis"
 	"UptimePingPlatform/services/notification-service/internal/handler"
 	"UptimePingPlatform/services/notification-service/internal/service"
@@ -54,6 +56,39 @@ func main() {
 		defer redisClient.Close()
 	}
 
+	// Initialize PostgreSQL connection
+	db, err := pkg_database.Connect(context.Background(), &pkg_database.Config{
+		Host:     cfg.Database.Host,
+		Port:     cfg.Database.Port,
+		User:     cfg.Database.User,
+		Password: cfg.Database.Password,
+		Database: cfg.Database.Name,
+		SSLMode:  "disable",
+		MaxConns: 20,
+		MinConns: 5,
+	})
+	if err != nil {
+		appLogger.Error("Failed to connect to PostgreSQL", logger.Error(err))
+	} else {
+		defer db.Close()
+	}
+
+	// Initialize RabbitMQ connection
+	rabbitConn, err := pkg_rabbitmq.Connect(context.Background(), &pkg_rabbitmq.Config{
+		URL:        cfg.RabbitMQ.URL,
+		Exchange:   cfg.RabbitMQ.Exchange,
+		RoutingKey: cfg.RabbitMQ.RoutingKey,
+		Queue:      cfg.RabbitMQ.Queue,
+		DLX:        cfg.RabbitMQ.DLX,
+		DLQ:        cfg.RabbitMQ.DLQ,
+	})
+	if err != nil {
+		appLogger.Error("Failed to connect to RabbitMQ", logger.Error(err))
+	} else {
+		defer rabbitConn.Close()
+		appLogger.Info("RabbitMQ connected successfully")
+	}
+
 	// Start HTTP server for metrics and health
 	httpServer := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
@@ -87,21 +122,21 @@ func main() {
 
 func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthChecker, appLogger logger.Logger) http.Handler {
 	mux := http.NewServeMux()
-	
+
 	// Metrics endpoint
 	mux.Handle("/metrics", metricsHandler)
-	
+
 	// Health endpoints
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"healthy","service":"notification-service"}`))
 	})
-	
+
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ready","service":"notification-service"}`))
 	})
-	
+
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"live","service":"notification-service"}`))
@@ -110,9 +145,9 @@ func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthCh
 	// Initialize notification service
 	notificationService := service.NewNotificationService(appLogger)
 	httpHandler := handler.NewHTTPHandler(appLogger, notificationService)
-	
+
 	// Register notification routes
 	httpHandler.RegisterRoutes(mux)
-	
+
 	return mux
 }

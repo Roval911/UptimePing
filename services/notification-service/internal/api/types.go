@@ -4,11 +4,11 @@ import "time"
 
 // CreateChannelRequest представляет запрос на создание канала уведомлений
 type CreateChannelRequest struct {
-	Name        string            `json:"name"`
-	Type        string            `json:"type"`        // email, slack, telegram, webhook, sms
-	Config      map[string]string `json:"config"`
-	Description string            `json:"description"`
-	IsActive    bool              `json:"is_active"`
+	Name        string                 `json:"name"`
+	Type        string                 `json:"type"` // email, slack, telegram, webhook, sms
+	Config      map[string]interface{} `json:"config"`
+	Description string                 `json:"description"`
+	IsActive    bool                   `json:"is_active"`
 }
 
 // Channel представляет канал уведомлений
@@ -25,8 +25,8 @@ type Channel struct {
 
 // CreateChannelResponse представляет ответ на создание канала
 type CreateChannelResponse struct {
-	Success bool    `json:"success"`
-	Message string  `json:"message"`
+	Success bool     `json:"success"`
+	Message string   `json:"message"`
 	Channel *Channel `json:"channel"`
 }
 
@@ -43,7 +43,7 @@ type DeleteChannelResponse struct {
 
 // ListChannelsRequest представляет запрос на получение списка каналов
 type ListChannelsRequest struct {
-	Type     string `json:"type"`     // фильтр по типу
+	Type     string `json:"type"`      // фильтр по типу
 	IsActive *bool  `json:"is_active"` // фильтр по активности
 	Page     int    `json:"page"`
 	PageSize int    `json:"page_size"`

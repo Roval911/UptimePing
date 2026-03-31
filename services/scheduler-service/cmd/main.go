@@ -2,8 +2,10 @@ package main
 
 import (
 	pkg_database "UptimePingPlatform/pkg/database"
+	pkg_rabbitmq "UptimePingPlatform/pkg/rabbitmq"
 	pkg_redis "UptimePingPlatform/pkg/redis"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -17,6 +19,7 @@ import (
 	"UptimePingPlatform/pkg/health"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
+	"UptimePingPlatform/services/scheduler-service/internal/domain"
 
 	schedulerv1 "UptimePingPlatform/proto/api/scheduler/v1"
 	grpcHandler "UptimePingPlatform/services/scheduler-service/internal/handler/grpc"
@@ -109,6 +112,21 @@ func main() {
 	// Initialize use case
 	checkUseCase := usecase.NewCheckUseCase(checkRepo, schedulerRepo, appLogger)
 
+	// Initialize RabbitMQ producer
+	var rabbitProducer *RabbitMQProducer
+	if cfg.RabbitMQ.URL != "" {
+		producer, err := NewRabbitMQProducer(cfg, appLogger)
+		if err != nil {
+			appLogger.Error("Failed to initialize RabbitMQ producer", logger.Error(err))
+		} else {
+			rabbitProducer = producer
+			defer rabbitProducer.Close()
+			appLogger.Info("RabbitMQ producer initialized successfully")
+		}
+	} else {
+		appLogger.Warn("RabbitMQ URL not configured, running without task publishing")
+	}
+
 	appLogger.Info("Starting gRPC server...")
 	grpcPort := cfg.Server.Port
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", grpcPort))
@@ -120,7 +138,7 @@ func main() {
 	grpcServer := grpc.NewServer()
 
 	appLogger.Info("Creating gRPC handler...")
-	schedulerHandler := grpcHandler.NewHandlerFixed(checkUseCase, appLogger)
+	schedulerHandler := grpcHandler.NewHandlerFixed(checkUseCase, appLogger, rabbitProducer)
 	appLogger.Info("gRPC handler created successfully")
 
 	appLogger.Info("Registering gRPC service...")
@@ -213,4 +231,93 @@ func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthCh
 	})
 
 	return mux
+}
+
+// RabbitMQ producer integration
+type RabbitMQProducer struct {
+	producer *pkg_rabbitmq.Producer
+	logger   logger.Logger
+	config   *config.Config
+}
+
+type TaskMessage struct {
+	CheckID   string                 `json:"check_id"`
+	TenantID  string                 `json:"tenant_id"`
+	TaskType  string                 `json:"task_type"`
+	Target    string                 `json:"target"`
+	Timeout   int                    `json:"timeout"`
+	Config    map[string]interface{} `json:"config,omitempty"`
+	CreatedAt string                 `json:"created_at"`
+}
+
+func NewRabbitMQProducer(cfg *config.Config, logger logger.Logger) (*RabbitMQProducer, error) {
+	conn, err := pkg_rabbitmq.Connect(context.Background(), &pkg_rabbitmq.Config{
+		URL:        cfg.RabbitMQ.URL,
+		Exchange:   cfg.RabbitMQ.Exchange,
+		RoutingKey: cfg.RabbitMQ.RoutingKey,
+		Queue:      cfg.RabbitMQ.Queue,
+		DLX:        cfg.RabbitMQ.DLX,
+		DLQ:        cfg.RabbitMQ.DLQ,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+	}
+
+	producer := pkg_rabbitmq.NewProducer(conn, &pkg_rabbitmq.Config{
+		URL:        cfg.RabbitMQ.URL,
+		Exchange:   cfg.RabbitMQ.Exchange,
+		RoutingKey: cfg.RabbitMQ.RoutingKey,
+		Queue:      cfg.RabbitMQ.Queue,
+		DLX:        cfg.RabbitMQ.DLX,
+		DLQ:        cfg.RabbitMQ.DLQ,
+	})
+
+	return &RabbitMQProducer{
+		producer: producer,
+		logger:   logger,
+		config:   cfg,
+	}, nil
+}
+
+func (p *RabbitMQProducer) PublishTask(ctx context.Context, check *domain.Check, tenantID string) error {
+	taskMessage := TaskMessage{
+		CheckID:   check.ID,
+		TenantID:  tenantID,
+		TaskType:  string(check.Type),
+		Target:    check.Target,
+		Timeout:   check.Timeout,
+		Config:    check.Config,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	payload, err := json.Marshal(taskMessage)
+	if err != nil {
+		return fmt.Errorf("failed to marshal task message: %w", err)
+	}
+
+	err = p.producer.Publish(ctx, payload,
+		pkg_rabbitmq.WithExchange(p.config.RabbitMQ.Exchange),
+		pkg_rabbitmq.WithRoutingKey("check.task"),
+	)
+	if err != nil {
+		p.logger.Error("Failed to publish task to RabbitMQ",
+			logger.String("check_id", check.ID),
+			logger.String("tenant_id", tenantID),
+			logger.Error(err),
+		)
+		return fmt.Errorf("failed to publish task: %w", err)
+	}
+
+	p.logger.Info("Task published to RabbitMQ successfully",
+		logger.String("check_id", check.ID),
+		logger.String("tenant_id", tenantID),
+	)
+
+	return nil
+}
+
+func (p *RabbitMQProducer) Close() error {
+	// Producer doesn't have explicit Close method
+	// Connection will be closed by the caller
+	return nil
 }

@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"UptimePingPlatform/pkg/config"
+	pkg_database "UptimePingPlatform/pkg/database"
 	"UptimePingPlatform/pkg/health"
 	"UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
@@ -18,9 +21,7 @@ import (
 	forgev1 "UptimePingPlatform/proto/api/forge/v1"
 	grpcHandler "UptimePingPlatform/services/forge-service/internal/handler/grpc"
 	"UptimePingPlatform/services/forge-service/internal/service"
-	"encoding/json"
 	"google.golang.org/grpc"
-	"net"
 )
 
 func main() {
@@ -56,6 +57,23 @@ func main() {
 		appLogger.Error("Failed to connect to Redis", logger.Error(err))
 	} else {
 		defer redisClient.Close()
+	}
+
+	// Initialize PostgreSQL connection
+	db, err := pkg_database.Connect(context.Background(), &pkg_database.Config{
+		Host:     cfg.Database.Host,
+		Port:     cfg.Database.Port,
+		User:     cfg.Database.User,
+		Password: cfg.Database.Password,
+		Database: cfg.Database.Name,
+		SSLMode:  "disable",
+		MaxConns: 20,
+		MinConns: 5,
+	})
+	if err != nil {
+		appLogger.Error("Failed to connect to PostgreSQL", logger.Error(err))
+	} else {
+		defer db.Close()
 	}
 
 	// Start gRPC server for Forge Service

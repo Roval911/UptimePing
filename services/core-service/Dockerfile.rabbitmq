@@ -1,0 +1,43 @@
+# Build stage
+FROM golang:1.24-alpine AS builder
+
+WORKDIR /app
+
+# Install dependencies
+RUN apk add --no-cache git ca-certificates tzdata
+
+# Copy go mod files and pkg directory
+COPY go.mod go.sum ./
+COPY ../pkg ./pkg
+
+# Fix go.mod to use local pkg
+RUN go mod edit -replace UptimePingPlatform/pkg=./pkg
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build with RabbitMQ integration
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o core-service ./cmd/main.go
+
+# Final stage
+FROM alpine:latest
+
+# Install ca-certificates for HTTPS
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /root/
+
+# Copy binary from builder stage
+COPY --from=builder /app/core-service .
+
+# Copy configuration
+COPY --from=builder /app/config ./config
+
+# Expose ports
+EXPOSE 50054 51054
+
+# Run the binary
+CMD ["./core-service"]

@@ -73,7 +73,7 @@ func (cs *CheckService) ExecuteCheck(ctx context.Context, task *domain.Task) (*d
 	}
 
 	// Сохранение результата в БД
-	if err := cs.saveResult(ctx, result); err != nil {
+	if err := cs.saveResult(ctx, result, ""); err != nil {
 		cs.logger.Error("Failed to save result to database",
 			logger.String("check_id", task.CheckID),
 			logger.Error(err),
@@ -209,7 +209,7 @@ func (cs *CheckService) ProcessTask(ctx context.Context, message []byte) error {
 	)
 
 	// Сохранение результата в БД
-	if err := cs.saveResult(ctx, result); err != nil {
+	if err := cs.saveResult(ctx, result, taskMessage.TenantID); err != nil {
 		cs.logger.Error("Failed to save result to database",
 			logger.String("check_id", task.CheckID),
 			logger.Error(err),
@@ -310,7 +310,10 @@ func (cs *CheckService) executeCheck(ctx context.Context, checker checker.Checke
 }
 
 // saveResult сохраняет результат в БД
-func (cs *CheckService) saveResult(ctx context.Context, result *domain.CheckResult) error {
+func (cs *CheckService) saveResult(ctx context.Context, result *domain.CheckResult, tenantID string) error {
+	cs.logger.Info("=== SAVE RESULT CALLED ===",
+		logger.String("tenant_id", tenantID),
+	)
 	cs.logger.Debug("Saving result to database",
 		logger.String("check_id", result.CheckID),
 	)
@@ -319,6 +322,20 @@ func (cs *CheckService) saveResult(ctx context.Context, result *domain.CheckResu
 		cs.logger.Warn("Repository is not initialized, skipping database save")
 		return nil
 	}
+
+	// Сначала убеждаемся что запись в checks существует
+	cs.logger.Info("About to call EnsureCheckExists",
+		logger.String("check_id", result.CheckID),
+		logger.String("tenant_id", tenantID),
+	)
+	if err := cs.repository.EnsureCheckExists(ctx, result.CheckID, tenantID); err != nil {
+		cs.logger.Error("Failed to ensure check exists",
+			logger.String("check_id", result.CheckID),
+			logger.Error(err),
+		)
+		// Не возвращаем ошибку, так как результат все равно нужно сохранить
+	}
+	cs.logger.Info("EnsureCheckExists completed successfully")
 
 	err := cs.repository.Save(ctx, result)
 	if err != nil {

@@ -77,6 +77,47 @@ func (r *CheckResultRepository) Save(ctx context.Context, result *domain.CheckRe
 	return nil
 }
 
+// EnsureCheckExists создает запись в таблице checks если она отсутствует
+func (r *CheckResultRepository) EnsureCheckExists(ctx context.Context, checkID, tenantID string) error {
+	r.logger.Info("Ensuring check exists",
+		logger.String("check_id", checkID),
+		logger.String("tenant_id", tenantID),
+	)
+
+	query := `
+		INSERT INTO checks (id, tenant_id, name, type, target, enabled, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (id) DO NOTHING
+	`
+
+	now := time.Now()
+	_, err := r.pool.Exec(ctx, query,
+		checkID,
+		tenantID,
+		"Auto-generated check", // Имя по умолчанию
+		"http",                 // Тип по умолчанию
+		"",                     // Target будет заполнен позже
+		true,                   // Включена по умолчанию
+		now,
+		now,
+	)
+
+	if err != nil {
+		r.logger.Error("Failed to ensure check exists",
+			logger.String("check_id", checkID),
+			logger.String("tenant_id", tenantID),
+			logger.Error(err),
+		)
+		return errors.Wrap(err, errors.ErrInternal, "failed to ensure check exists")
+	}
+
+	r.logger.Debug("Check ensured successfully",
+		logger.String("check_id", checkID),
+	)
+
+	return nil
+}
+
 // GetByID получает результат по ID
 func (r *CheckResultRepository) GetByID(ctx context.Context, id string) (*domain.CheckResult, error) {
 	r.logger.Debug("Getting check result by ID",

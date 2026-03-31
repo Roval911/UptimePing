@@ -14,6 +14,8 @@ type GenerateRequest struct {
 
 // GenerateResponse представляет ответ на генерацию кода
 type GenerateResponse struct {
+	Success        bool      `json:"success"`
+	Message        string    `json:"message"`
 	GeneratedFiles int       `json:"generated_files"`
 	OutputPath     string    `json:"output_path"`
 	GenerationTime time.Time `json:"generation_time"`

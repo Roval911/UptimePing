@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -14,14 +15,14 @@ import (
 
 // HTTPHandler обрабатывает HTTP запросы для Notification Service
 type HTTPHandler struct {
-	logger             logger.Logger
+	logger              logger.Logger
 	notificationService service.NotificationService
 }
 
 // NewHTTPHandler создает новый HTTP обработчик
 func NewHTTPHandler(logger logger.Logger, notificationService service.NotificationService) *HTTPHandler {
 	return &HTTPHandler{
-		logger:             logger,
+		logger:              logger,
 		notificationService: notificationService,
 	}
 }
@@ -31,7 +32,7 @@ func (h *HTTPHandler) RegisterRoutes(mux *http.ServeMux) {
 	// API маршруты для каналов уведомлений
 	mux.HandleFunc("/api/v1/notification/channels", h.handleChannels)
 	mux.HandleFunc("/api/v1/notification/channels/", h.handleChannelByID)
-	
+
 	// API маршруты для отправки уведомлений
 	mux.HandleFunc("/api/v1/notification/send", h.handleSendNotification)
 }
@@ -104,12 +105,18 @@ func (h *HTTPHandler) createChannel(w http.ResponseWriter, r *http.Request) {
 		channelType = service.ChannelTypeUnspecified // Используем Unspecified
 	}
 
+	// Конвертируем map[string]interface{} в map[string]string для config
+	config := make(map[string]string)
+	for k, v := range req.Config {
+		config[k] = fmt.Sprintf("%v", v)
+	}
+
 	domainChannel := &service.Channel{
-		TenantID:    getTenantIDFromContext(r.Context()), // Получаем tenant ID из контекста
-		Name:        req.Name,
-		Type:        channelType,
-		Config:      req.Config,
-		IsActive:    req.IsActive,
+		TenantID: getTenantIDFromContext(r.Context()), // Получаем tenant ID из контекста
+		Name:     req.Name,
+		Type:     channelType,
+		Config:   config,
+		IsActive: req.IsActive,
 	}
 
 	// Вызываем реальный сервис
@@ -172,7 +179,7 @@ func (h *HTTPHandler) listChannels(w http.ResponseWriter, r *http.Request) {
 	channelType := query.Get("type")
 	page, _ := strconv.Atoi(query.Get("page"))
 	pageSize, _ := strconv.Atoi(query.Get("page_size"))
-	
+
 	var isActive *bool
 	if activeStr := query.Get("is_active"); activeStr != "" {
 		if active, err := strconv.ParseBool(activeStr); err == nil {
@@ -312,7 +319,7 @@ func (h *HTTPHandler) sendNotification(w http.ResponseWriter, r *http.Request) {
 	}
 
 	domainNotification := &service.Notification{
-		TenantID:   getTenantIDFromContext(r.Context()), // Получаем tenant ID из контекста
+		TenantID:   getTenantIDFromContext(r.Context()),   // Получаем tenant ID из контекста
 		IncidentID: getIncidentIDFromContext(r.Context()), // Получаем incident ID из контекста
 		Severity:   severity,
 		Title:      req.Subject,
@@ -374,14 +381,14 @@ func splitPath(path string) []string {
 	if path == "" || path[0] != '/' {
 		return []string{}
 	}
-	
+
 	parts := []string{}
 	current := ""
 	for i, char := range path {
 		if i == 0 {
 			continue // Пропускаем первый /
 		}
-		
+
 		if char == '/' {
 			if current != "" {
 				parts = append(parts, current)
@@ -391,26 +398,17 @@ func splitPath(path string) []string {
 			current += string(char)
 		}
 	}
-	
+
 	if current != "" {
 		parts = append(parts, current)
 	}
-	
+
 	return parts
 }
 
 // generateID генерирует уникальный ID
 func generateID() string {
 	return strconv.FormatInt(time.Now().UnixNano(), 36)
-}
-
-// parseTime парсит строку времени в time.Time
-func parseTime(timeStr string) time.Time {
-	if t, err := time.Parse(time.RFC3339, timeStr); err == nil {
-		return t
-	}
-	// Если не удалось распарсить, возвращаем текущее время
-	return time.Now()
 }
 
 // getTenantIDFromContext получает tenant ID из контекста запроса
@@ -422,7 +420,7 @@ func getTenantIDFromContext(ctx context.Context) string {
 			return id
 		}
 	}
-	
+
 	// Если в контексте нет, пробуем извлечь из заголовков
 	// Это fallback для случаев, когда middleware не используется
 	return "default"
@@ -437,7 +435,7 @@ func getIncidentIDFromContext(ctx context.Context) string {
 			return id
 		}
 	}
-	
+
 	// Fallback значение для вебхуков
 	return "webhook"
 }

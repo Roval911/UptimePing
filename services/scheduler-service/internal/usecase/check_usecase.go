@@ -39,14 +39,15 @@ func NewCheckUseCase(
 
 // CreateCheck создает новую проверку
 func (uc *CheckUseCase) CreateCheck(ctx context.Context, tenantID string, check *domain.Check) (*domain.Check, error) {
-	// Валидация конфигурации проверки (без ID, так как он будет сгенерирован)
+	// Валидация конфигурации проверки
 	if err := uc.validateCheckConfigForCreate(check); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
 
-	// Генерация check_id (UUID)
-	checkID := uuid.New().String()
-	check.ID = checkID
+	// Проверяем, что ID уже сгенерирован на уровне handler
+	if check.ID == "" {
+		return nil, fmt.Errorf("check ID must be generated at handler level")
+	}
 
 	// Установка временных меток
 	now := time.Now()
@@ -69,7 +70,7 @@ func (uc *CheckUseCase) CreateCheck(ctx context.Context, tenantID string, check 
 			// Логируем ошибку, но не откатываем создание проверки
 			uc.logger.Error("Failed to add check to scheduler",
 				logger.CtxField(ctx),
-				logger.String("check_id", checkID),
+				logger.String("check_id", check.ID),
 				logger.String("tenant_id", tenantID),
 				logger.Error(err),
 			)
@@ -79,7 +80,7 @@ func (uc *CheckUseCase) CreateCheck(ctx context.Context, tenantID string, check 
 
 	uc.logger.Info("Check created successfully",
 		logger.CtxField(ctx),
-		logger.String("check_id", checkID),
+		logger.String("check_id", check.ID),
 		logger.String("tenant_id", tenantID),
 		logger.String("name", check.Name),
 		logger.String("type", string(check.Type)),

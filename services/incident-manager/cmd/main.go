@@ -15,8 +15,9 @@ import (
 	"UptimePingPlatform/pkg/health"
 	pkglogger "UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
-	pkg_redis "UptimePingPlatform/pkg/redis"
 	"UptimePingPlatform/pkg/rabbitmq"
+	pkg_redis "UptimePingPlatform/pkg/redis"
+	rabbitmqConsumer "UptimePingPlatform/services/incident-manager/internal/consumer/rabbitmq"
 	"UptimePingPlatform/services/incident-manager/internal/handler"
 	postgresRepo "UptimePingPlatform/services/incident-manager/internal/repository/postgres"
 	"UptimePingPlatform/services/incident-manager/internal/service"
@@ -59,10 +60,10 @@ func main() {
 
 	// Initialize RabbitMQ connection
 	rabbitConn, err := rabbitmq.Connect(context.Background(), &rabbitmq.Config{
-		URL:        "amqp://guest:guest@localhost:5672/",
-		Exchange:   "incidents",
-		RoutingKey: "incident.events",
-		Queue:      "incident.events",
+		URL:        cfg.RabbitMQ.URL,
+		Exchange:   cfg.RabbitMQ.Exchange,
+		RoutingKey: cfg.RabbitMQ.RoutingKey,
+		Queue:      cfg.RabbitMQ.Queue,
 	})
 	if err != nil {
 		appLogger.Error("Failed to connect to RabbitMQ", pkglogger.Error(err))
@@ -77,20 +78,20 @@ func main() {
 	pgConfig.User = cfg.Database.User
 	pgConfig.Password = cfg.Database.Password
 	pgConfig.Database = cfg.Database.Name
-	
+
 	appLogger.Info("Attempting to connect to PostgreSQL",
 		pkglogger.String("host", cfg.Database.Host),
 		pkglogger.Int("port", cfg.Database.Port),
 		pkglogger.String("database", cfg.Database.Name),
 		pkglogger.String("user", cfg.Database.User),
 	)
-	
+
 	var incidentService service.IncidentService
 
 	appLogger.Info("Attempting PostgreSQL connection with retry logic")
 	pgClient, err := database.Connect(context.Background(), pgConfig)
 	if err != nil {
-		appLogger.Error("Failed to connect to PostgreSQL after retries", 
+		appLogger.Error("Failed to connect to PostgreSQL after retries",
 			pkglogger.Error(err),
 			pkglogger.Int("max_retries", pgConfig.MaxRetries),
 			pkglogger.String("retry_interval", pgConfig.RetryInterval.String()),
@@ -105,16 +106,16 @@ func main() {
 		incidentService = service.NewInMemoryIncidentService(appLogger, *redisClient)
 	} else {
 		defer pgClient.Close()
-		
+
 		appLogger.Info("Successfully connected to PostgreSQL")
-		
+
 		// Test database connection
 		if err := pgClient.HealthCheck(context.Background()); err != nil {
 			appLogger.Error("PostgreSQL health check failed", pkglogger.Error(err))
 		} else {
 			appLogger.Info("PostgreSQL health check passed")
 		}
-		
+
 		// Initialize PostgreSQL repositories
 		repos := postgresRepo.NewRepositoryContainer(pgClient, appLogger)
 
@@ -125,6 +126,28 @@ func main() {
 			repos.IncidentEventRepo,
 		)
 		appLogger.Info("Using PostgreSQL incident service")
+	}
+
+	// Initialize consumer for check results after incidentService is created
+	if rabbitConn != nil {
+		rabbitmqConsumer, err := rabbitmqConsumer.NewIncidentConsumer(rabbitConn, incidentService, appLogger)
+		if err != nil {
+			appLogger.Error("Failed to create consumer", pkglogger.Error(err))
+		} else {
+			// Setup consumer
+			if err := rabbitmqConsumer.Setup(); err != nil {
+				appLogger.Error("Failed to setup consumer", pkglogger.Error(err))
+			} else {
+				// Start consumer in background
+				go func() {
+					if err := rabbitmqConsumer.Start(context.Background()); err != nil {
+						appLogger.Error("Consumer failed", pkglogger.Error(err))
+					}
+				}()
+				appLogger.Info("Incident consumer started successfully")
+			}
+			defer rabbitmqConsumer.Close()
+		}
 	}
 
 	// Initialize HTTP handler
@@ -163,10 +186,10 @@ func main() {
 
 func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthChecker, appLogger pkglogger.Logger, httpHandler *handler.HTTPHandler) http.Handler {
 	mux := http.NewServeMux()
-	
+
 	// Metrics endpoint
 	mux.Handle("/metrics", metricsHandler)
-	
+
 	// Health endpoints using pkg/health
 	mux.HandleFunc("/health", health.Handler(healthChecker))
 	mux.HandleFunc("/ready", health.ReadyHandler(healthChecker))
@@ -174,6 +197,6 @@ func setupHTTPHandler(metricsHandler http.Handler, healthChecker health.HealthCh
 
 	// Register incident manager routes
 	httpHandler.RegisterRoutes(mux)
-	
+
 	return mux
 }

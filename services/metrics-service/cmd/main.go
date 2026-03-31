@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"UptimePingPlatform/pkg/config"
+	pkg_database "UptimePingPlatform/pkg/database"
 	"UptimePingPlatform/pkg/health"
 	pkglogger "UptimePingPlatform/pkg/logger"
 	"UptimePingPlatform/pkg/metrics"
@@ -52,6 +53,23 @@ func main() {
 		appLogger.Error("Failed to connect to Redis", pkglogger.Error(err))
 	} else {
 		defer redisClient.Close()
+	}
+
+	// Initialize PostgreSQL connection
+	db, err := pkg_database.Connect(context.Background(), &pkg_database.Config{
+		Host:     cfg.Database.Host,
+		Port:     cfg.Database.Port,
+		User:     cfg.Database.User,
+		Password: cfg.Database.Password,
+		Database: cfg.Database.Name,
+		SSLMode:  "disable",
+		MaxConns: 20,
+		MinConns: 5,
+	})
+	if err != nil {
+		appLogger.Error("Failed to connect to PostgreSQL", pkglogger.Error(err))
+	} else {
+		defer db.Close()
 	}
 
 	// Initialize metrics collector

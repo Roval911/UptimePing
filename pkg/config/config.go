@@ -17,22 +17,22 @@ import (
 
 // Config представляет конфигурацию приложения. Структура содержит вложенные структуры для различных компонентов приложения.
 type Config struct {
-	Server       ServerConfig    `json:"server" yaml:"server"`
-	Database     DatabaseConfig  `json:"database" yaml:"database"`
-	Logger       LoggerConfig    `json:"logger" yaml:"logger"`
-	Environment  string          `json:"environment" yaml:"environment"`
-	Redis        RedisConfig     `json:"redis" yaml:"redis"`
-	JWT          JWTConfig       `json:"jwt" yaml:"jwt"`
-	RabbitMQ     RabbitMQConfig  `json:"rabbitmq" yaml:"rabbitmq"`
-	GRPC         GRPCConfig      `json:"grpc" yaml:"grpc"`
-	RateLimiting RateLimitConfig `json:"rate_limiting" yaml:"rate_limiting"`
-	Providers    ProvidersConfig `json:"providers" yaml:"providers"`
-	Forge        ForgeConfig     `json:"forge" yaml:"forge"`
-	Metrics      MetricsConfig   `json:"metrics" yaml:"metrics"`
-	Health       HealthConfig    `json:"health" yaml:"health"`
-	Services     ServicesConfig  `json:"services" yaml:"services"`
-	Recipients   RecipientsConfig `json:"recipients" yaml:"recipients"`
-	Scheduler    SchedulerConfig `json:"scheduler" yaml:"scheduler"`
+	Server          ServerConfig          `json:"server" yaml:"server"`
+	Database        DatabaseConfig        `json:"database" yaml:"database"`
+	Logger          LoggerConfig          `json:"logger" yaml:"logger"`
+	Environment     string                `json:"environment" yaml:"environment"`
+	Redis           RedisConfig           `json:"redis" yaml:"redis"`
+	JWT             JWTConfig             `json:"jwt" yaml:"jwt"`
+	RabbitMQ        RabbitMQConfig        `json:"rabbitmq" yaml:"rabbitmq"`
+	GRPC            GRPCConfig            `json:"grpc" yaml:"grpc"`
+	RateLimiting    RateLimitConfig       `json:"rate_limiting" yaml:"rate_limiting"`
+	Providers       ProvidersConfig       `json:"providers" yaml:"providers"`
+	Forge           ForgeConfig           `json:"forge" yaml:"forge"`
+	Metrics         MetricsConfig         `json:"metrics" yaml:"metrics"`
+	Health          HealthConfig          `json:"health" yaml:"health"`
+	Services        ServicesConfig        `json:"services" yaml:"services"`
+	Recipients      RecipientsConfig      `json:"recipients" yaml:"recipients"`
+	Scheduler       SchedulerConfig       `json:"scheduler" yaml:"scheduler"`
 	IncidentManager IncidentManagerConfig `json:"incident_manager" yaml:"incident_manager"`
 }
 
@@ -63,6 +63,8 @@ type RabbitMQConfig struct {
 	Exchange   string `json:"exchange" yaml:"exchange"`
 	RoutingKey string `json:"routing_key" yaml:"routing_key"`
 	Queue      string `json:"queue" yaml:"queue"`
+	DLX        string `json:"dlx" yaml:"dlx"`
+	DLQ        string `json:"dlq" yaml:"dlq"`
 }
 
 // RedisConfig представляет конфигурацию Redis
@@ -180,10 +182,12 @@ func LoadConfig(configFile string) (*Config, error) {
 			RefreshTokenDuration: "7d",
 		},
 		RabbitMQ: RabbitMQConfig{
-			URL:        "", // Будет загружено из переменных окружения
+			URL:        "amqp://guest:guest@localhost:5672/", // Значение по умолчанию
 			Exchange:   "notifications",
 			RoutingKey: "notification.events",
 			Queue:      "notifications",
+			DLX:        "notifications.dlx",
+			DLQ:        "notifications.dlq",
 		},
 		GRPC: GRPCConfig{
 			Port: 50051,
@@ -223,30 +227,30 @@ func LoadConfig(configFile string) (*Config, error) {
 		},
 		Metrics: MetricsConfig{
 			// Основные настройки
-			Enabled:        true,
-			Port:           9090,
-			Path:           "/metrics",
-			
+			Enabled: true,
+			Port:    9090,
+			Path:    "/metrics",
+
 			// Настройки сбора метрик
 			ScrapeInterval: "15s",
 			Timeout:        "10s",
 			RetryAttempts:  3,
-			
+
 			// Prometheus настройки
-			Namespace:     "uptimeping",
-			Subsystem:     "http",
-			Buckets:       []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
-			
+			Namespace: "uptimeping",
+			Subsystem: "http",
+			Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+
 			// OpenTelemetry настройки
 			TracingEnabled: true,
 			TracerName:     "uptimeping-tracer",
 			SamplingRate:   1.0,
 			ServiceName:    "", // Будет установлено в каждом сервисе
 			ServiceVersion: "1.0.0",
-			
+
 			// Дополнительные метрики
 			EnableCustomMetrics: true,
-			EnableSystemMetrics:  true,
+			EnableSystemMetrics: true,
 		},
 		Health: HealthConfig{
 			Enabled:       true,
@@ -313,7 +317,7 @@ func LoadConfig(configFile string) (*Config, error) {
 		if !strings.HasSuffix(configFile, ".yaml") && !strings.HasSuffix(configFile, ".json") {
 			configFile = configFile + ".yaml"
 		}
-		
+
 		if err := loadConfigFromFile(config, configFile); err != nil {
 			// If file doesn't exist, continue with defaults
 			if !os.IsNotExist(err) {
@@ -339,7 +343,7 @@ func LoadConfig(configFile string) (*Config, error) {
 func loadConfigFromFile(config *Config, filename string) error {
 	// Expand environment variables in the file path
 	filename = os.ExpandEnv(filename)
-	
+
 	// If filename doesn't contain a path, look in config/ directory
 	if !strings.Contains(filename, "/") {
 		filename = "config/" + filename
@@ -656,30 +660,30 @@ type ForgeConfig struct {
 // MetricsConfig представляет конфигурацию метрик
 type MetricsConfig struct {
 	// Основные настройки
-	Enabled        bool   `json:"enabled" yaml:"enabled"`
-	Port           int    `json:"port" yaml:"port"`
-	Path           string `json:"path" yaml:"path"`
-	
+	Enabled bool   `json:"enabled" yaml:"enabled"`
+	Port    int    `json:"port" yaml:"port"`
+	Path    string `json:"path" yaml:"path"`
+
 	// Настройки сбора метрик
 	ScrapeInterval string `json:"scrape_interval" yaml:"scrape_interval"`
 	Timeout        string `json:"timeout" yaml:"timeout"`
 	RetryAttempts  int    `json:"retry_attempts" yaml:"retry_attempts"`
-	
+
 	// Prometheus настройки
-	Namespace     string   `json:"namespace" yaml:"namespace"`
-	Subsystem     string   `json:"subsystem" yaml:"subsystem"`
-	Buckets       []float64 `json:"buckets" yaml:"buckets"`
-	
+	Namespace string    `json:"namespace" yaml:"namespace"`
+	Subsystem string    `json:"subsystem" yaml:"subsystem"`
+	Buckets   []float64 `json:"buckets" yaml:"buckets"`
+
 	// OpenTelemetry настройки
-	TracingEnabled bool     `json:"tracing_enabled" yaml:"tracing_enabled"`
-	TracerName     string   `json:"tracer_name" yaml:"tracer_name"`
-	SamplingRate   float64  `json:"sampling_rate" yaml:"sampling_rate"`
-	ServiceName    string   `json:"service_name" yaml:"service_name"`
-	ServiceVersion string   `json:"service_version" yaml:"service_version"`
-	
+	TracingEnabled bool    `json:"tracing_enabled" yaml:"tracing_enabled"`
+	TracerName     string  `json:"tracer_name" yaml:"tracer_name"`
+	SamplingRate   float64 `json:"sampling_rate" yaml:"sampling_rate"`
+	ServiceName    string  `json:"service_name" yaml:"service_name"`
+	ServiceVersion string  `json:"service_version" yaml:"service_version"`
+
 	// Дополнительные метрики
 	EnableCustomMetrics bool `json:"enable_custom_metrics" yaml:"enable_custom_metrics"`
-	EnableSystemMetrics  bool `json:"enable_system_metrics" yaml:"enable_system_metrics"`
+	EnableSystemMetrics bool `json:"enable_system_metrics" yaml:"enable_system_metrics"`
 }
 
 // HealthConfig представляет конфигурацию health check
@@ -706,14 +710,14 @@ type ServiceConfig struct {
 // RecipientsConfig представляет конфигурацию получателей уведомлений
 type RecipientsConfig struct {
 	// Получатели по умолчанию для каждого канала
-	DefaultEmails []string          `json:"default_emails" yaml:"default_emails"`
-	DefaultSlack  []string          `json:"default_slack" yaml:"default_slack"`
-	DefaultSMS    []string          `json:"default_sms" yaml:"default_sms"`
-	DefaultWebhooks []string        `json:"default_webhooks" yaml:"default_webhooks"`
-	
+	DefaultEmails   []string `json:"default_emails" yaml:"default_emails"`
+	DefaultSlack    []string `json:"default_slack" yaml:"default_slack"`
+	DefaultSMS      []string `json:"default_sms" yaml:"default_sms"`
+	DefaultWebhooks []string `json:"default_webhooks" yaml:"default_webhooks"`
+
 	// Получатели по tenant
 	TenantRecipients map[string]TenantRecipients `json:"tenant_recipients" yaml:"tenant_recipients"`
-	
+
 	// Получатели по серьезности
 	SeverityRecipients map[string]SeverityRecipients `json:"severity_recipients" yaml:"severity_recipients"`
 }
@@ -749,7 +753,7 @@ func GetServicePath() string {
 	if err != nil {
 		return ""
 	}
-	
+
 	// Если мы в директории cmd, поднимаемся на уровень
 	if filepath.Base(filepath.Dir(wd)) == "cmd" {
 		servicePath := filepath.Dir(filepath.Dir(wd))
@@ -759,23 +763,23 @@ func GetServicePath() string {
 		}
 		return servicePath
 	}
-	
+
 	// Если мы в директории сервиса
 	if filepath.Base(wd) == "services" {
 		return wd
 	}
-	
+
 	// Если мы в директории конкретного сервиса
 	if filepath.HasPrefix(wd, "services/") {
 		return wd
 	}
-	
+
 	// Если мы в корне проекта, проверяем подкаталоги
 	if filepath.Base(wd) == "UptimePingPlatform" {
 		// Возвращаем пустую строку, так как нужно искать в services/
 		return ""
 	}
-	
+
 	// Проверяем стек вызовов как запасной вариант
 	const depth = 10
 	for i := 1; i <= depth; i++ {
@@ -783,10 +787,10 @@ func GetServicePath() string {
 		if !ok {
 			continue
 		}
-		
+
 		// Получаем директорию
 		dir := filepath.Dir(filename)
-		
+
 		// Если мы в директории cmd, поднимаемся на уровень до сервиса
 		if filepath.Base(dir) == "cmd" {
 			servicePath := filepath.Dir(dir)
@@ -795,20 +799,20 @@ func GetServicePath() string {
 				return servicePath
 			}
 		}
-		
+
 		// Если мы в директории сервиса
 		if filepath.HasPrefix(dir, "services/") {
 			return dir
 		}
 	}
-	
+
 	return ""
 }
 
 // LoadConfigWithAutoPath загружает конфигурацию с автоматическим определением пути
 func LoadConfigWithAutoPath(env string) (*Config, error) {
 	// Пробуем несколько стратегий поиска конфигурации
-	
+
 	// Стратегия 1: Используем рабочую директорию
 	wd, err := os.Getwd()
 	if err == nil {
@@ -821,7 +825,7 @@ func LoadConfigWithAutoPath(env string) (*Config, error) {
 				return loadConfigFromPath(configPath)
 			}
 		}
-		
+
 		// Если мы в директории сервиса
 		if filepath.Base(wd) != "cmd" && filepath.Base(wd) != "pkg" {
 			configPath := filepath.Join(wd, "config", env+".yaml")
@@ -831,7 +835,7 @@ func LoadConfigWithAutoPath(env string) (*Config, error) {
 			}
 		}
 	}
-	
+
 	// Стратегия 2: Ищем в services/
 	serviceName := getServiceNameFromCaller()
 	if serviceName != "" {
@@ -841,7 +845,7 @@ func LoadConfigWithAutoPath(env string) (*Config, error) {
 			return loadConfigFromPath(configPath)
 		}
 	}
-	
+
 	// Стратегия 3: Пробуем все возможные сервисы
 	services := []string{"auth-service", "scheduler-service", "api-gateway", "core-service", "forge-service", "metrics-service", "notification-service", "incident-manager"}
 	for _, service := range services {
@@ -851,7 +855,7 @@ func LoadConfigWithAutoPath(env string) (*Config, error) {
 			return loadConfigFromPath(configPath)
 		}
 	}
-	
+
 	return nil, fmt.Errorf("config file not found in any known location")
 }
 
@@ -863,7 +867,7 @@ func getServiceNameFromCaller() string {
 		if !ok {
 			continue
 		}
-		
+
 		// Ищем services/имя-сервиса/cmd/main.go
 		parts := strings.Split(filename, string(filepath.Separator))
 		for j, part := range parts {
@@ -898,22 +902,30 @@ func loadConfigFromPath(configPath string) (*Config, error) {
 			Format: "json",
 		},
 		Environment: "dev",
+		RabbitMQ: RabbitMQConfig{
+			URL:        "amqp://guest:guest@localhost:5672/",
+			Exchange:   "notifications",
+			RoutingKey: "notification.events",
+			Queue:      "notifications",
+			DLX:        "notifications.dlx",
+			DLQ:        "notifications.dlq",
+		},
 	}
-	
+
 	// Загружаем из файла
 	if err := loadConfigFromFile(config, configPath); err != nil {
 		return nil, err
 	}
-	
+
 	// Загружаем из переменных окружения
 	if err := loadConfigFromEnv(config); err != nil {
 		return nil, err
 	}
-	
+
 	// Валидируем конфигурацию
 	if err := validateConfig(config); err != nil {
 		return nil, err
 	}
-	
+
 	return config, nil
 }
